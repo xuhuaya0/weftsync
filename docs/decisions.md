@@ -74,6 +74,80 @@
 
 ---
 
+## D6 · 凭据防护：三层机制（2026-11-04）
+
+**背景**
+用户明确：远端是**公共仓库**，任何敏感信息不得入库，且马上会提供可用的
+飞书 app_id / app_secret 用于实测。所以防护必须在凭据落地**之前**建好。
+
+**决定**（三层）
+
+1. **`.gitignore` 兜底** —— `.env` / `secrets/` / `*credential*.json` / `*secret*` /
+   `rclone.conf` / `*.pem` / `*.key` / `probe-output/` 等一律排除
+2. **`scripts/check_secrets.py`** —— 按内容特征扫描（不是猜文件名），覆盖：
+   私钥块、GitHub token、AWS key、Slack token、飞书 `t-`/`u-`/`cli_`、
+   「赋值给 secret 类变量的长字面量」、32 位小写字母数字字面量（飞书 secret 形态）
+3. **pre-commit 钩子** —— 提交前跑 `--staged`，命中即中止提交
+
+**已验证（不是「写完就算」）**
+- 自测样本 6 处真密钥全部命中，3 处占位符（`your_..._xxxx` / `fldcnXXXXXXXX` / `${VAR}`）零误报
+- 全仓库 35 个已跟踪文件扫描通过
+- **实拨提交测试**：把 `app_secret = "z9y8..."` 写进 `docs/leak-test.py` 并 `git add`，
+  执行 `git commit` → 被钩子拦下，`git log` 未产生新提交
+
+**为什么不满足于 `.gitignore`**
+`.gitignore` 只在文件未被跟踪时生效；一旦某次 `git add -f` 或路径变更导致入库，
+就再也挡不住。内容扫描是第二道闸。
+
+**已知局限**
+- 无法识别「语义上是密钥但形态不特殊」的内容（如自定义长度 token）
+- 钩子可用 `--no-verify` 绕过；因此不能替代自查
+
+---
+
+## D7 · 技术路线改为 rclone 二次开发（推翻 D2 期间的初判）
+
+**背景**
+用户直接质疑：「为什么不用 rclone？如果用的话你只需要做飞书这一个，其他类型的云盘
+大多可以复用啊」。此前我在 `PLAN.md` 第 6 节写了「rclone 成本高于收益」。
+
+**先查证**
+
+| 我的断言 | 查证结果 |
+|---|---|
+| 「rclone 无官方飞书支持」 | ✅ 属实。官方 overview 约 60 个后端逐个核对无 Feishu/Lark；仓库全文检索 `feishu` / `lark` / `open.feishu.cn` 无结果 |
+| 「多 target 非 rclone 强项」 | ❌ **错**。`union` 后端 + 多 remote 即可 |
+| 「飞书的缺陷 rclone 表达不了」（隐含） | ❌ **错** |
+
+**推翻依据（rclone Go API 文档 v1.75.2 原文）**
+
+- `fs.Features` 已内建能力声明：`DuplicateFiles`、`CaseInsensitive`、
+  `CanHaveEmptyDirectories`、`SlowModTime`、`PartialUploads`
+- `SetModTime` 是**可选接口**，不实现就自动降级
+- `Fs.Put` 注释：「for unknown-sized objects (indicated by `src.Size() == -1`)」
+  → 未知 size 是 rclone 的一等公民
+- `fs.ConfigInfo.IgnoreSize` → `--ignore-size`，size 不可比时可关闭比较
+
+**决定**
+- 产品 = **rclone fork（新增 `backend/feishu`，Go）** + 极薄封装（Python 可选）
+- 不再自研比较/重试/限流/过滤/续传 —— 这些 rclone 已有且更成熟
+- 自带约 60 个后端，直接满足 R6（可插拔）与 R7（多网盘）
+- 单文件产物，`GOOS=windows` / `GOOS=linux` 交叉编译，满足 R9
+
+**代价（诚实记录）**
+- 需要 Go 工具链
+- 仍需自己写飞书 API 层（这是唯一真正新增的工作）
+- `Size() == -1` 会让默认比较认为「总是不同」→ 必须 `--ignore-size`，
+  且该假设必须用实测 E6 验证，否则架构不成立
+
+**教训**
+我又一次在**没查证**的情况下给出了带方向的结论（上一次是凭仓库名编三个产品方向）。
+规矩：凡是「某方案不可行 / 成本高于收益」的判断，必须附**文档原文或实测**，
+否则不许写进计划。
+
+
+---
+
 ## D6 · 删除凭仓库名臆测的产品方向（2026-11-04）
 
 **背景**

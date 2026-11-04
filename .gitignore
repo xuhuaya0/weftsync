@@ -23,3 +23,57 @@ desktop.ini
 reports/
 *.pdf
 *.wfm
+
+# ============================================================
+# 凭据与敏感信息 —— 远端是公共仓库，以下一律不得入库
+# ============================================================
+# 环境变量文件
+.env
+.env.*
+!.env.example
+*.env
+
+# 本地配置（含 app_id / 目录 token / 机器名等）
+config.local.toml
+config.local.yaml
+config.local.json
+*.local.toml
+
+# 凭据目录与常见命名
+secrets/
+.secrets/
+credentials*
+*credential*.json
+*token*.json
+# 注意：不要用宽泛的 *secret*，否则会误伤 scripts/check_secrets.py
+*.secret
+*.secrets
+*_secret.json
+*_secret.yaml
+*_secret.yml
+*_secret.toml
+secret.json
+secret.yaml
+secret.yml
+secret.toml
+
+# 防误伤：扫描器与示例文件必须能被跟踪
+!scripts/check_secrets.py
+!.env.example
+
+# rclone 配置（若采用 rclone 方案，其中含 app_secret）
+rclone.conf
+rclone.conf.*
+
+# 探测/调试产物（可能含原始 API 响应与 token）
+scratch/
+probe-output/
+docs/probe/
+
+# 私钥
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
