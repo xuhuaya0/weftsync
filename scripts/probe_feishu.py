@@ -34,6 +34,7 @@ import argparse
 import json
 import mimetypes
 import os
+import re
 import secrets as pysecrets
 import sys
 import time
@@ -285,6 +286,20 @@ class Client:
         )
         return payload
 
+    def folder_meta(self, token: str) -> dict:
+        """Return {title, owner_id, url, ...} for a folder token, or {}."""
+        body = json.dumps(
+            {"request_docs": [{"doc_token": token, "doc_type": "folder"}], "with_url": True}
+        ).encode("utf-8")
+        payload = self.request(
+            "metas.batch_query", "POST", "/open-apis/drive/v1/metas/batch_query",
+            body=body, allow_fail=True,
+        )
+        if payload.get("code") != 0:
+            return {"_error": payload.get("msg", ""), "_code": payload.get("code")}
+        metas = (payload.get("data") or {}).get("metas") or []
+        return metas[0] if metas else {}
+
     def delete(self, token: str, kind: str = "file") -> dict:
         payload = self.request(
             "files.delete",
@@ -325,6 +340,15 @@ class Result:
     raw: dict = field(default_factory=dict)
 
 
+class ProbeAbort(RuntimeError):
+    """Raised when the probe cannot continue; carries partial results."""
+
+    def __init__(self, why: str, results: dict["Result"]):
+        super().__init__(why)
+        self.why = why
+        self.results = results
+
+
 def run_probe(client: Client, root_token: str, dry_run: bool) -> dict[str, Result]:
     results: dict[str, Result] = {}
 
@@ -340,10 +364,22 @@ def run_probe(client: Client, root_token: str, dry_run: bool) -> dict[str, Resul
     r_e5 = rec("E5", "When does modified_time change?")
 
     # ---- baseline: can we read at all -----------------------------------
+    meta = client.folder_meta(root_token)
+    target_title = meta.get("title") or "<unknown>"
+    print(f"target     : folder '{target_title}'")
+    if meta.get("owner_id"):
+        print(f"owner      : {meta['owner_id']}")
+    print()
+
     all_files = client.list_folder(root_token)
     fields = sorted({k for f in all_files for k in f})
+    r_e3.raw["folder_meta"] = meta
+    r_e3.raw["existing_entry_count"] = len(all_files)
     r_e3.raw["list_fields"] = fields
     r_e3.raw["sample_entry"] = all_files[0] if all_files else None
+
+    print(f"read       : OK ({len(all_files)} existing entries in target folder)")
+    print()
 
     if dry_run:
         r_e3.answer = "DRY RUN - would inspect fields: " + ", ".join(fields)
@@ -360,13 +396,13 @@ def run_probe(client: Client, root_token: str, dry_run: bool) -> dict[str, Resul
         r_e4.answer = "NO - create_folder failed"
         r_e4.evidence = f"code={exc.code} msg={exc.msg}"
         r_e4.raw = exc.raw or {}
-        raise SystemExit(_dump(results, "cannot continue without a work folder"))
+        raise ProbeAbort("cannot create a work folder", results) from None
 
     work_token = created.get("token") or ""
     if not work_token:
         r_e4.answer = "UNKNOWN - create_folder returned no token"
         r_e4.raw = created
-        raise SystemExit(_dump(results, "cannot continue without a work folder"))
+        raise ProbeAbort("cannot create a work folder", results)
 
     r_e4.answer = "YES - create_folder succeeded"
     r_e4.evidence = f"created folder '{work_name}'"
@@ -383,7 +419,7 @@ def run_probe(client: Client, root_token: str, dry_run: bool) -> dict[str, Resul
             r_e4.answer = "PARTIAL - folder ok, upload failed"
             r_e4.evidence = f"upload_all code={up1.get('code')} msg={up1.get('msg')}"
             r_e4.raw["upload_all"] = up1
-            raise SystemExit(_dump(results, "upload failed"))
+            raise ProbeAbort("upload failed", results)
         r_e4.evidence += "; upload_all succeeded"
         r_e4.raw["upload_all"] = up1
         tok1 = (up1.get("data") or {}).get("file_token") or ""
@@ -486,6 +522,10 @@ def _dump(results: dict[str, Result], why: str) -> int:
     print(f"\nABORT: {why}", file=sys.stderr)
     for r in results.values():
         print(f"  {r.key}: {r.answer}", file=sys.stderr)
+        if r.evidence:
+            print(f"      evidence: {r.evidence}", file=sys.stderr)
+        if r.raw:
+            print(f"      raw: {json.dumps(_redact(r.raw), ensure_ascii=False)[:2000]}", file=sys.stderr)
     return 4
 
 
@@ -500,6 +540,16 @@ def _redact(obj: object) -> object:
         "refresh_token",
     }
 
+    # Feishu error payloads embed identifiers inside message strings, e.g.
+    #   https://open.feishu.cn/app/cli_abc123.../auth?q=...
+    app_id_re = re.compile(r"\bcli_[A-Za-z0-9]{8,}")
+    # Signed download URLs carry credentials in the query string.
+    signed_re = re.compile(r"\?(?:[^\s\"']+)")
+
+    def scrub(text: str) -> str:
+        text = app_id_re.sub("cli_<redacted>", text)
+        return text
+
     def walk(node: object) -> object:
         if isinstance(node, dict):
             out = {}
@@ -507,16 +557,16 @@ def _redact(obj: object) -> object:
                 if k.lower() in secret_keys:
                     out[k] = "<redacted>"
                 elif k.lower() == "url" and isinstance(v, str):
-                    out[k] = v.split("?")[0]
+                    out[k] = signed_re.sub("", v)
                 else:
                     out[k] = walk(v)
             return out
         if isinstance(node, list):
             return [walk(x) for x in node]
-        if isinstance(node, str) and len(node) > 40:
-            # long opaque strings are usually tokens / signed urls
-            if node.startswith("t-") or node.startswith("u-"):
+        if isinstance(node, str):
+            if node.startswith(("t-", "u-")) and len(node) > 20:
                 return "<redacted>"
+            return scrub(node)
         return node
 
     return walk(obj)
@@ -547,8 +597,9 @@ def write_report(path: Path, results: dict[str, Result], meta: dict) -> None:
         r = results[key]
         lines.append(f"### {r.key}\n")
         if r.evidence:
+            safe_evidence = _redact({"e": r.evidence})["e"]
             lines.append("```")
-            lines.append(r.evidence)
+            lines.append(safe_evidence)
             lines.append("```\n")
         if r.raw:
             lines.append("```json")
@@ -612,8 +663,13 @@ def main(argv: list[str] | None = None) -> int:
         print("             check app_id / app_secret, and that the app exists.", file=sys.stderr)
         return 3
 
+    results: dict[str, Result] = {}
+    abort_why = ""
     try:
         results = run_probe(client, root_token, args.dry_run)
+    except ProbeAbort as exc:
+        results = exc.results
+        abort_why = exc.why
     except FeishuError as exc:
         print(f"probe failed: {exc}", file=sys.stderr)
         if exc.raw:
@@ -633,9 +689,18 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print("=== results ===")
     for key in sorted(results):
-        print(f"{key}: {results[key].answer}")
+        r = results[key]
+        print(f"{key}: {r.answer}")
+        if r.evidence:
+            print(f"    evidence: {r.evidence}")
+        if r.raw:
+            print(f"    raw: {json.dumps(_redact(r.raw), ensure_ascii=False)[:1500]}")
     print()
     print(f"report written to: {Path(args.out).resolve()}")
+
+    if abort_why:
+        print(f"\nABORTED: {abort_why}", file=sys.stderr)
+        return 4
     return 0
 
 

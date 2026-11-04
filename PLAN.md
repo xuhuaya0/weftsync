@@ -68,6 +68,22 @@
 | **E5** | `modified_time` 的更新时机：上传时写？移动/改名会变吗？ | 决定 `--ignore-size` 后 mtime 比较是否可信 | 不可信 → 需自建 token→内容指纹映射 |
 | **E6** | rclone 在 `Size()==-1` 下的**实际比较行为**，`--ignore-size` 是否真能避免每次重传 | 决定架构是否成立（**本轮最关键**） | 不成立 → 在 `List` 缓存已知 size，或改回自研 |
 
+### 3.1 M0 当前进度（2026-11-04）
+
+工具：`scripts/probe_feishu.py`（零依赖，纯标准库；写入仅限目标文件夹下的临时子目录，结束自动清理）
+
+| 检查 | 结果 | 证据 |
+|---|---|---|
+| `tenant_access_token` | ✅ 通 | `app cli_a880...100d` 成功换到 token |
+| 目标文件夹解析 | ✅ 通 | URL → token `KARRfvoYtlX9T3dOoaTcmdELnyv`，元数据查询确认是**真实文件夹**（非快捷方式），名称 `_bot_test` |
+| **读**（列目录） | ✅ 通 | `files.list` 返回 `code=0`，当前 0 个条目（空目录） |
+| **写**（建子目录） | ❌ 阻塞 | `create_folder` → `code=99991672`，缺 `drive:drive` 或 `space:folder:create` |
+| E1–E6 | ⏸ 未执行 | 全部依赖写权限 |
+
+**待用户操作**：为该应用添加 `drive:drive`（读写）scope，并在「版本管理与发布」**发布新版本**后重跑。
+
+> 注：仅勾选权限而不发布版本，token 拿到的仍是旧权限集，仍会报 99991672。
+
 ---
 
 ## 4. 核心设计难点
