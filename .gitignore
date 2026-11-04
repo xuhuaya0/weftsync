@@ -1,0 +1,25 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 本地临时文件（工作区内 scratch，勿入库）
+.scratch/
+tmp/
+*.tmp
+
+# 编辑器 / 系统
+.vscode/*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 测试与导出产物
+reports/
+*.pdf
+*.wfm
