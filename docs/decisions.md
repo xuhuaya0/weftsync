@@ -248,6 +248,100 @@ git@github.com: Permission denied (publickey).
 - rclone 的 `OpenChunkWriter` 接口正好对得上：`ChunkSize` 每次由后端返回
 - 断点续传需要持久化 `upload_id`（有效期内可继续传剩余分片）
 
+---
+
+## D11 · 不 fork rclone，把它当依赖库（2026-11-04）
+
+**背景**
+原计划是 `vendor/rclone` + fork。实际尝试克隆时发现 GitHub HTTPS 也被干扰
+（`Recv failure: Connection was reset`），5 次重试全部失败。
+
+**替代路径**
+走 Go 模块代理（`goproxy.cn`）拉取 rclone 源码：
+
+```
+go get github.com/rclone/rclone@v1.71.2
+```
+
+一次成功。rclone 的根目录只有一个 `rclone.go`：
+
+```go
+import (
+    _ "github.com/rclone/rclone/backend/all"
+    "github.com/rclone/rclone/cmd"
+    _ "github.com/rclone/rclone/cmd/all"
+    _ "github.com/rclone/rclone/lib/plugin"
+)
+func main() { cmd.Main() }
+```
+
+**决定**
+不 fork。新建独立模块 `src/go`（`module weftsync`），依赖 rclone，
+`main.go` 照抄上面结构 + 多一行引入我们自己的 `weftsync/backend/feishu`。
+
+**验证（实测）**
+- `go build` 成功
+- `weftsync version` → `rclone v1.71.2-DEV`
+- `weftsync help backends` → 列表里有 `feishu   Feishu / Lark Drive`
+- `scripts/build-go.ps1 -Target both` 交叉编译出 Windows 66.2MB + Linux 66MB
+- Linux 产物魔数 `7F 45 4C 46`（ELF）确认正确
+
+**为什么这比 fork 好**
+| 维度 | fork | 依赖库 |
+|---|---|---|
+| 跟进上游 | 要 rebase / cherry-pick | 改版本号即可 |
+| 代码量 | 整个 rclone 进仓库 | 我们只有几个文件 |
+| 上游 bug 修复 | 手动同步 | `go get -u` |
+| 构建产物体积 | 一样 | 一样（都链接了 backend/all） |
+
+**代价**
+- 无法修改 rclone 内部代码。目前的需求（写一个新后端）不需要改内部。
+- 若将来真需要改内部，可以用 Go 的 `replace` 指令指向本地 fork，不必改架构。
+
+**教训**
+「必须 fork」是我没验证的假设。实际上 rclone 的 `fs.Register` 是公开 API，
+自定义构建是官方支持的用法。**先找有没有更轻的集成方式，再决定要不要 fork。**
+
+---
+
+## D12 · E6 结论：size=-1 无害，但 mtime 语义是真坑（2026-11-04）
+
+**背景**
+原计划把「`Size() == -1` 导致每次全量重传」列为本项目最大架构风险（B3 副作用）。
+
+**验证方式**
+写了 `src/go/probes/e6_size_probe.go`，直接调用 `operations.Equal`，
+用 stub 对象构造 7 种组合。**不接网络，可重复运行。**
+
+**结果：原判断是错的。** 源码里：
+
+```go
+if ci.IgnoreSize || src.Size() < 0 || dst.Size() < 0 {
+    return false        // sizeDiffers = false，即「size 不构成差异」
+}
+```
+
+`Size() < 0` 只是**跳过** size 检查，比较继续走 mtime。
+
+**但发现了真问题：mtime 语义不一致。**
+飞书 `modified_time` 是**上传时刻**，本地 mtime 是**真实修改时间**，两者天然不同。
+在 `Precision() = 1s` 下 → 每轮都 DIFFER → 每次全量重传。
+
+而 `--checksum` 也救不了：无 hash 时源码直接 `return false`。
+
+`Precision() = ModTimeNotSupported` 同样不可取 —— 用例 D 证明它会让
+「本地改了也永不重传」。
+
+**结论**
+E6 风险**没有消除，只是换了位置**：从「size 问题」变成「mtime 问题」。
+三种应对方案已列入 `PLAN.md` 3.2，**需要用户拍板**，因为涉及
+「对远端变化失明」这个 R4（多机器）相关的取舍。
+
+**教训**
+- 把「风险」写进计划时，必须区分**已验证的事实**和**推断的后果**。
+  我写「会导致每次全量重传」时并没有读过 `sizeDiffers` 的实现。
+- 能用 stub 直接测的函数，就不要靠读代码猜。20 行 Go 换来确定性答案。
+
 
 ---
 

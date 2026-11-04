@@ -134,6 +134,74 @@
 
 > 倾向 C。1000 个文件在 5 QPS 下，方案 B 光取 size 就要 200 秒；方案 C 只在首次同步付这个成本。
 
+### 3.2 E6 实测结果：rclone 的相等判定（2026-11-04）
+
+**工具**：`src/go/probes/e6_size_probe.go` —— 直接调用 `operations.Equal`，用 stub 对象喂不同参数，不接网络。
+
+```
+go run probes/e6_size_probe.go
+```
+
+**7 个用例全部符合预期：**
+
+| 用例 | 结果 |
+|---|---|
+| A. size=-1，精度 1s，mtime 相同 | EQUAL |
+| B. size=-1，精度 1s，mtime 差 1 小时 | **DIFFER** |
+| C. size=-1，精度 1s，mtime 差 500ms | EQUAL（在窗口内） |
+| D. size=-1，`ModTimeNotSupported` | **EQUAL** |
+| E. 真实 size 不同 | DIFFER |
+| F. 真实 size 相同，mtime 相同 | EQUAL |
+| G. 真实 size 相同，mtime 差 1h，无 hash | **DIFFER** |
+
+**源码依据**（`fs/operations/operations.go`）：
+
+```go
+// sizeDiffers
+if ci.IgnoreSize || src.Size() < 0 || dst.Size() < 0 {
+    return false          // size 不构成差异
+}
+return src.Size() != dst.Size()
+```
+
+```go
+// equal 里 mtime 比较
+modifyWindow := fs.GetModifyWindow(ctx, src.Fs(), dst.Fs())
+if modifyWindow == fs.ModTimeNotSupported {
+    return true           // 直接判定相等
+}
+```
+
+`GetModifyWindow` 取「各后端 `Precision()` 与配置值的最大值」，所以**后端声明的精度决定了比较窗口**。
+
+#### 结论一：`Size() == -1` 不会导致「每次全量重传」（我此前判断错了）
+
+`Size() < 0` 只是让 size 检查被跳过，比较会继续走 mtime。原计划里写的
+「B3 副作用 → 每次全量重传」已被证伪。
+
+#### 结论二：真正的坑是 **mtime 语义不一致**，不是 size
+
+飞书的 `modified_time` 是**上传时刻**，不是文件本身的修改时间。而本地文件 mtime 是
+真实修改时间。两者天然不同 → 在 `Precision() = 1s` 下会**每轮都判定 DIFFER → 每次全量重传**。
+
+而且 `--checksum` 也救不了：飞书无 hash，`ht == hash.None` 时源码直接 `return false`。
+
+#### 结论三：`Precision() = ModTimeNotSupported` 不可取
+
+虽然它能让比较直接返回 EQUAL，但意味着**本地文件改了也永远不会重传**。用例 D 证实了这一点。
+
+#### 三种可选方案（待定）
+
+| 方案 | 做法 | 正确性 | 代价 |
+|---|---|---|---|
+| **A. 影子 mtime** | 后端本地缓存「上传时的本地 mtime」，`ModTime()` 返回缓存值，`SetModTime()` 写缓存 | 单写者正确；**对远端变化失明** | 需持久化 state |
+| **B. 真实 size + 只比 size** | `Size()` 用 Range 拿真值，配 `--size-only` | 漏掉「同尺寸内容变化」 | 需每文件一次 Range |
+| **C. 自建三方比较** | 引擎维护 (本地指纹, 远端 token, 远端 mtime)，自己判定 | 3 种情况都能分辨 | 放弃 rclone 的 sync 引擎 |
+
+> 方案 A 的「对远端变化失明」对 R2（本地→远端单向）可接受，但对 R4（多机器写同一云盘）
+> 是实质缺陷 —— 别的机器传过的新版本会被本地旧版本覆盖。
+> **这是需要你拍板的设计取舍，我不单方面决定。**
+
 ---
 
 ## 4. 核心设计难点
@@ -166,8 +234,8 @@
 > ⚠️ B3 的副作用：本地文件有真实 size、飞书返回 -1 → 默认比较会认为「总是不同」
 > → **每次全量重传**。这是 E6 必须验证的核心风险。
 
-> E3 实测补充：size **可以**用 `Range: bytes=0-0` 廉价获取（1 字节）。
-> 因此不必被迫接受「每次重传」，可在 `List`/`stat` 时按策略取 size（方案 C：本地缓存）。
+> ❌ **上面这条已被 E6 实测推翻**（见 3.2）：`Size() < 0` 只跳过 size 检查，不会每次重传。
+> 真正的风险是 mtime 语义不一致。
 
 ### 4.3 难点三：多机器同步同一云盘 = 天然写冲突
 
@@ -289,8 +357,8 @@ conflict = "update"        # ignore-existing | update | backup
 
 | 里程碑 | 内容 | 验收标准 |
 |---|---|---|
-| **M0** ✅ | 实测 E1–E5 + 上传能力 | **已完成**，结论见 3.1；E6 需 rclone 二进制，推迟到 M1 |
-| **M1** | rclone fork + 飞书后端**只读**（`NewFs` / `List` / `NewObject` / `Open`）+ 验证 E6 | `rclone lsf feishu:` 能列出授权目录；`rclone copy feishu:X ./local` 能拉回；E6 有明确答案 |
+| **M0** ✅ | 实测 E1–E6 + 上传能力 | **已完成**，结论见 3.1 / 3.2 |
+| **M1** | 搭建自定义 rclone 构建（依赖 rclone 库，不 fork）+ 飞书后端**只读** | `weftsync help backends` 含 feishu；`lsf feishu:` 能列出授权目录 |
 | **M2** | 上传（小文件） | `rclone copy ./local feishu:X` 成功，文件在飞书客户端可见 |
 | **M3** | 分片上传 + 限流 + 重试 | >20MB 能传；`--tpslimit` 生效；触发限流能自愈 |
 | **M4** | 删除 / 更新 / 移动 | `rclone sync` 行为正确；`--max-delete` 能熔断 |
