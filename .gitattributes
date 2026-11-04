@@ -1,0 +1,26 @@
+# 换行符与二进制类型
+# 仓库内统一 LF；本机 core.autocrlf=true，故用 eol=lf 覆盖
+* text=auto eol=lf
+
+# Windows 批处理才必须 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 明确二进制，避免被当文本处理
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.docx binary
+*.xlsx binary
+*.zip binary
+*.7z binary
+*.wfm binary
+*.trc binary
+*.h5 binary
+
+# Git 内部
+.gitattributes text eol=lf
+.gitignore     text eol=lf
