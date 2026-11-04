@@ -145,6 +145,50 @@
 规矩：凡是「某方案不可行 / 成本高于收益」的判断，必须附**文档原文或实测**，
 否则不许写进计划。
 
+---
+
+## D8 · GitHub SSH 走 443 备用通道（2026-11-04）
+
+**现象**
+本会话中途 `git push` 突然全部失败：
+
+```
+git@github.com: Permission denied (publickey).
+```
+
+**排查过程与证据**
+
+| 检查 | 结果 | 结论 |
+|---|---|---|
+| 本地私钥/公钥指纹 | 都是 `SHA256:pU39JoG6...`，一致 | 密钥未被改动（文件日期 2022-11-03） |
+| 私钥是否可读 | 文件头是 `OPENSSH PRIVATE KEY` 的 PEM 封装 | 未损坏 |
+| `known_hosts` 中 github 记录 | `ssh-ed25519` + `ssh-rsa`，与 GitHub 公布指纹一致 | **无中间人** |
+| DNS | `github.com` → `20.205.243.166` | 正常 |
+| 端口可达性 | 22 与 443 均 `True` | TCP 层都通 |
+| `ssh -T git@github.com`（22 端口） | ❌ `Permission denied` | 失败 |
+| `ssh -T -p 443 git@ssh.github.com` | ✅ `Hi xuhuaya0! You've successfully authenticated` | **成功** |
+| 连续 5 次 443 测试 | OK / FAIL / FAIL / OK / FAIL（2/5） | **间歇性** |
+
+**结论**
+密钥有效且就在账号里，用户也确实没动过配置。问题在 **`github.com:22` 这条链路被中间网络
+设备干扰**（TCP 能建、认证握手被破坏），且 `ssh.github.com:443` 也有约 60% 的丢包/篡改。
+典型表现是「有时成功有时失败」，而不是稳定报错 —— 一开始容易误判成凭据失效。
+
+**决定**
+- `origin` 改为 `ssh://git@ssh.github.com:443/xuhuaya0/weftsync.git`（GitHub 官方备用通道）
+- 仓库级 `core.sshCommand` 显式指定私钥路径
+  （因为本机 `HOME=C:\SPB_Data`，而密钥在 `C:\Users\Jlsemi-62\.ssh`，默认查找会落空）
+- 推送失败**自动重试**，最多 10 次
+
+**代价**
+- 443 通道仍有丢包，脚本化推送需要重试逻辑
+- 换机器/换网络时需要重新确认这条配置
+
+**教训**
+「之前能用，现在不能用」不等于「有人改了」。
+按「本地密钥 → 主机指纹 → DNS/端口 → 端口级差异 → 重复采样」的顺序排查，
+**用重复采样区分「稳定失败」和「间歇失败」**，才能定位到链路而非账号。
+
 
 ---
 

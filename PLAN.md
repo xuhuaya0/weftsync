@@ -68,21 +68,51 @@
 | **E5** | `modified_time` 的更新时机：上传时写？移动/改名会变吗？ | 决定 `--ignore-size` 后 mtime 比较是否可信 | 不可信 → 需自建 token→内容指纹映射 |
 | **E6** | rclone 在 `Size()==-1` 下的**实际比较行为**，`--ignore-size` 是否真能避免每次重传 | 决定架构是否成立（**本轮最关键**） | 不成立 → 在 `List` 缓存已知 size，或改回自研 |
 
-### 3.1 M0 当前进度（2026-11-04）
+### 3.1 M0 实测结果（2026-11-04，真实租户）
 
-工具：`scripts/probe_feishu.py`（零依赖，纯标准库；写入仅限目标文件夹下的临时子目录，结束自动清理）
+工具：`scripts/probe_feishu.py`（零依赖，纯标准库；写入仅限授权文件夹，结束自动清理）
+
+环境：应用 `cli_a880...100d`，目标文件夹 **`_bot_test`**（元数据查询确认是真实文件夹，非快捷方式）
 
 | 检查 | 结果 | 证据 |
 |---|---|---|
-| `tenant_access_token` | ✅ 通 | `app cli_a880...100d` 成功换到 token |
-| 目标文件夹解析 | ✅ 通 | URL → token `KARRfvoYtlX9T3dOoaTcmdELnyv`，元数据查询确认是**真实文件夹**（非快捷方式），名称 `_bot_test` |
-| **读**（列目录） | ✅ 通 | `files.list` 返回 `code=0`，当前 0 个条目（空目录） |
-| **写**（建子目录） | ❌ 阻塞 | `create_folder` → `code=99991672`，缺 `drive:drive` 或 `space:folder:create` |
-| E1–E6 | ⏸ 未执行 | 全部依赖写权限 |
+| `tenant_access_token` | ✅ | 成功换取 |
+| **读**（列目录） | ✅ | `files.list` → `code=0` |
+| **写**（上传/复制/移动/删除） | ✅ | `upload_all` / `copy` / `move` / `delete` 全部 `code=0` |
+| **建目录** | ❌ | `create_folder` → `99991672`，缺 `drive:drive` 或 `space:folder:create` |
 
-**待用户操作**：为该应用添加 `drive:drive`（读写）scope，并在「版本管理与发布」**发布新版本**后重跑。
+#### E1–E5 结论（E6 依赖 rclone，未做）
 
-> 注：仅勾选权限而不发布版本，token 拿到的仍是旧权限集，仍会报 99991672。
+| # | 问题 | **实测答案** | 证据 |
+|---|---|---|---|
+| **E1** | 能否原地更新内容（token 不变） | **否** | 同名重传产生**新 token**：`EzWBbgYEToFa...` → `BneYb04AZowH...` → 只能「删+传」，分享链接会变 |
+| **E2** | 同文件夹能否同名共存 | **能**（关键！） | 同名 `size-probe.txt` 传两次，列表出现 **2 条同名记录**，token 不同 |
+| **E3** | 列表有无 size / hash | **都没有** | 列表字段仅 `created_time / modified_time / name / owner_id / parent_token / token / type / url` |
+| **E3+** | 能否其他方式拿到 size | **能** | `GET` 返回 `Content-Length: 5000`；`HEAD` → 404；**`Range: bytes=0-0` → `206` + `Content-Range: bytes 0-0/5000`，只传 1 字节** |
+| **E4** | 应用是否有写权限 | **有**（文件级） | 上传/复制/移动/删除全部成功；仅缺目录创建 |
+| **E5** | `modified_time` 语义 | 重传后**会变** | `1793786158` → `1793786162` |
+
+#### 这些结论对架构的直接影响
+
+| 发现 | 影响 |
+|---|---|
+| **E2 同名共存** | rclone 必须设 `Features.DuplicateFiles = true`；**路径不再唯一**，只能靠 token 定位。`rclone dedupe` 需要能用 |
+| **E1 无原地更新** | `Update()` 返回 `fs.ErrorCantUpdate`；rclone 会「删+传」，**文件分享链接会变**，必须写进文档 |
+| **E3 size 可通过 Range 拿** | **不用被迫 `--ignore-size`**。可选方案见下 |
+| **建目录缺失** | **`Mkdir()` 无法实现** → 目录必须预先存在。需补 `space:folder:create` scope |
+| **E5 mtime 会变** | mtime 可作为变更判据，但只有秒级精度 |
+
+**size 获取策略（三选一，待 M1 定）**
+
+| 方案 | 成本 | 准确性 |
+|---|---|---|
+| A. `Size() = -1` + `--ignore-size` | 0 额外请求 | 弱（只能靠 mtime） |
+| B. 每个文件一次 `Range: 0-0` | N 次请求（受 5 QPS 限制） | 强 |
+| C. 本地 state 缓存 size，首次才查 | 首次 N 次，之后 0 | 强 + 快 |
+
+> 倾向 C。1000 个文件在 5 QPS 下，方案 B 光取 size 就要 200 秒；方案 C 只在首次同步付这个成本。
+
+**仍待用户操作**：为应用补 `space:folder:create`（最小 scope），否则无法自动建目录。
 
 ---
 

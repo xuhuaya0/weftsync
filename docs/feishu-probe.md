@@ -1,6 +1,6 @@
 # Feishu Drive probe results (M0)
 
-- Run at: 2026-11-04 17:44:39
+- Run at: 2026-11-04 17:56:10
 - API base: https://open.feishu.cn
 - App id: <redacted - local only>
 - Test folder token: <redacted - local only>
@@ -13,19 +13,69 @@
 
 | # | Question | Answer |
 |---|---|---|
-| E1 | Can an existing file be updated in place (token unchanged)? | NOT RUN |
-| E2 | Can two files with the same name coexist in one folder? | NOT RUN |
-| E3 | Does the file listing expose size / hash? | NOT RUN |
-| E4 | Does the app really have WRITE permission? | NO - create_folder failed |
-| E5 | When does modified_time change? | NOT RUN |
+| E1 | Can an existing file be updated in place (token unchanged)? | NO - re-upload created a NEW token (delete+upload only) |
+| E2 | Can two files with the same name coexist in one folder? | YES - both uploads accepted (2 entries named 'weftsync-probe-cfdb2asize-probe.txt') |
+| E3 | Does the file listing expose size / hash? | NO - listing size = None |
+| E4 | Does the app really have WRITE permission? | YES - file upload + delete |
+| E5 | When does modified_time change? | modified_time changed on re-upload |
 
 ## Evidence
 
 ### E1
 
+```
+token1=EzWBbgYEToFa token2=BneYb04AZowH
+```
+
 ### E2
 
+```
+token1=EzWBbgYE... token2=BneYb04A...
+```
+
+```json
+{
+  "second_upload": {
+    "code": 0,
+    "data": {
+      "file_token": "BneYb04AZowHGzxhOGscQeylnVf",
+      "url": "https://jingluesemi.feishu.cn/file/BneYb04AZowHGzxhOGscQeylnVf",
+      "version": "7704252905754250490"
+    },
+    "msg": "Success",
+    "_http_status": 200,
+    "_redirects": []
+  },
+  "listing_after_second_upload": [
+    {
+      "created_time": "1793786162",
+      "modified_time": "1793786162",
+      "name": "weftsync-probe-cfdb2asize-probe.txt",
+      "owner_id": "ou_62de64d442de4b66e4fbdce924a5443a",
+      "parent_token": "KARRfvoYtlX9T3dOoaTcmdELnyv",
+      "token": "BneYb04AZowHGzxhOGscQeylnVf",
+      "type": "file",
+      "url": "https://jingluesemi.feishu.cn/file/BneYb04AZowHGzxhOGscQeylnVf"
+    },
+    {
+      "created_time": "1793786158",
+      "modified_time": "1793786158",
+      "name": "weftsync-probe-cfdb2asize-probe.txt",
+      "owner_id": "ou_62de64d442de4b66e4fbdce924a5443a",
+      "parent_token": "KARRfvoYtlX9T3dOoaTcmdELnyv",
+      "token": "EzWBbgYEToFaTsx6DnQcLUZhn8b",
+      "type": "file",
+      "url": "https://jingluesemi.feishu.cn/file/EzWBbgYEToFaTsx6DnQcLUZhn8b"
+    }
+  ]
+}
+```
+
 ### E3
+
+```
+local bytes = 1360; keys = ['created_time', 'modified_time', 'name', 'owner_id', 'parent_token', 'token', 'type', 'url']; download http=200 redirects=0
+```
 
 ```json
 {
@@ -33,8 +83,8 @@
     "create_time": "1793783897",
     "doc_token": "KARRfvoYtlX9T3dOoaTcmdELnyv",
     "doc_type": "folder",
-    "latest_modify_time": "1793783927",
-    "latest_modify_user": "ou_c194ac3f1728ff52b82f9d97da9d990f",
+    "latest_modify_time": "1793786137",
+    "latest_modify_user": "ou_62de64d442de4b66e4fbdce924a5443a",
     "owner_id": "ou_c194ac3f1728ff52b82f9d97da9d990f",
     "request_doc_info": {
       "doc_token": "KARRfvoYtlX9T3dOoaTcmdELnyv",
@@ -46,38 +96,99 @@
   },
   "existing_entry_count": 0,
   "list_fields": [],
-  "sample_entry": null
+  "sample_entry": null,
+  "listing_after_upload": [
+    {
+      "created_time": "1793786158",
+      "modified_time": "1793786158",
+      "name": "weftsync-probe-cfdb2asize-probe.txt",
+      "owner_id": "ou_62de64d442de4b66e4fbdce924a5443a",
+      "parent_token": "KARRfvoYtlX9T3dOoaTcmdELnyv",
+      "token": "EzWBbgYEToFaTsx6DnQcLUZhn8b",
+      "type": "file",
+      "url": "https://jingluesemi.feishu.cn/file/EzWBbgYEToFaTsx6DnQcLUZhn8b"
+    }
+  ],
+  "download": {
+    "_raw_len": 1360,
+    "_non_json": true,
+    "_http_status": 200,
+    "_redirects": []
+  }
 }
 ```
 
 ### E4
 
 ```
-code=400 msg=Access denied. One of the following scopes is required: [drive:drive, space:folder:create].应用尚未开通所需的应用身份权限：[drive:drive, space:folder:create]，点击链接申请并开通任一权限即可：https://open.feishu.cn/app/cli_<redacted>/auth?q=drive:drive,space:folder:create&op_from=openapi&token_type=tenant
+create_folder code=400; falling back to file prefix; upload_all succeeded
 ```
 
 ```json
 {
-  "code": 99991672,
-  "msg": "Access denied. One of the following scopes is required: [drive:drive, space:folder:create].应用尚未开通所需的应用身份权限：[drive:drive, space:folder:create]，点击链接申请并开通任一权限即可：https://open.feishu.cn/app/cli_<redacted>/auth?q=drive:drive,space:folder:create&op_from=openapi&token_type=tenant",
-  "error": {
-    "log_id": "2026110417443923BB35765CF915C59269",
-    "troubleshooter": "排查建议查看(Troubleshooting suggestions): https://open.feishu.cn/search?from=openapi&log_id=2026110417443923BB35765CF915C59269&code=99991672&method_id=7085572906319724546",
-    "permission_violations": [
-      {
-        "type": "action_scope_required",
-        "subject": "drive:drive"
-      },
-      {
-        "type": "action_scope_required",
-        "subject": "space:folder:create"
-      }
-    ],
-    "message": "Refer to the documentation to fix the error: https://open.feishu.cn/document/uAjLw4CM/ugTN1YjL4UTN24CO1UjN/trouble-shooting/how-to-fix-the-99991672-error"
+  "create_folder": {
+    "code": 99991672,
+    "msg": "Access denied. One of the following scopes is required: [drive:drive, space:folder:create].应用尚未开通所需的应用身份权限：[drive:drive, space:folder:create]，点击链接申请并开通任一权限即可：https://open.feishu.cn/app/cli_<redacted>/auth?q=drive:drive,space:folder:create&op_from=openapi&token_type=tenant",
+    "error": {
+      "message": "Refer to the documentation to fix the error: https://open.feishu.cn/document/uAjLw4CM/ugTN1YjL4UTN24CO1UjN/trouble-shooting/how-to-fix-the-99991672-error",
+      "log_id": "202611041755573280D7A84CCA71DE814D",
+      "troubleshooter": "排查建议查看(Troubleshooting suggestions): https://open.feishu.cn/search?from=openapi&log_id=202611041755573280D7A84CCA71DE814D&code=99991672&method_id=7085572906319724546",
+      "permission_violations": [
+        {
+          "type": "action_scope_required",
+          "subject": "drive:drive"
+        },
+        {
+          "type": "action_scope_required",
+          "subject": "space:folder:create"
+        }
+      ]
+    },
+    "_http_status": 400,
+    "_redirects": []
   },
-  "_http_status": 400,
-  "_redirects": []
+  "upload_all": {
+    "code": 0,
+    "data": {
+      "file_token": "EzWBbgYEToFaTsx6DnQcLUZhn8b",
+      "url": "https://jingluesemi.feishu.cn/file/EzWBbgYEToFaTsx6DnQcLUZhn8b",
+      "version": "7704252887991389425"
+    },
+    "msg": "Success",
+    "_http_status": 200,
+    "_redirects": []
+  }
 }
 ```
 
 ### E5
+
+```
+before=1793786158 after=1793786162
+```
+
+```json
+{
+  "mt_before": {
+    "created_time": "1793786158",
+    "modified_time": "1793786158",
+    "name": "weftsync-probe-cfdb2asize-probe.txt",
+    "owner_id": "ou_62de64d442de4b66e4fbdce924a5443a",
+    "parent_token": "KARRfvoYtlX9T3dOoaTcmdELnyv",
+    "token": "EzWBbgYEToFaTsx6DnQcLUZhn8b",
+    "type": "file",
+    "url": "https://jingluesemi.feishu.cn/file/EzWBbgYEToFaTsx6DnQcLUZhn8b"
+  },
+  "mt_after": {
+    "created_time": "1793786162",
+    "modified_time": "1793786162",
+    "name": "weftsync-probe-cfdb2asize-probe.txt",
+    "owner_id": "ou_62de64d442de4b66e4fbdce924a5443a",
+    "parent_token": "KARRfvoYtlX9T3dOoaTcmdELnyv",
+    "token": "BneYb04AZowHGzxhOGscQeylnVf",
+    "type": "file",
+    "url": "https://jingluesemi.feishu.cn/file/BneYb04AZowHGzxhOGscQeylnVf"
+  },
+  "_note": "move/rename semantics still need a separate probe"
+}
+```

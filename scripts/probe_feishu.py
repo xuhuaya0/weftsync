@@ -388,39 +388,52 @@ def run_probe(client: Client, root_token: str, dry_run: bool) -> dict[str, Resul
                 r.answer = "DRY RUN - skipped"
         return results
 
-    # ---- create an isolated work folder ---------------------------------
+    # ---- create an isolated work area -----------------------------------
+    # Preferred: a dedicated sub-folder.  If the app lacks folder-create
+    # permission (drive:drive / space:folder:create), fall back to using
+    # uniquely-prefixed files directly in the target folder.  File-level
+    # operations only need drive:file, which is a much smaller scope.
     work_name = f"weftsync-probe-{time.strftime('%Y%m%d-%H%M%S')}-{pysecrets.token_hex(3)}"
+    work_token = root_token
+    isolated_by = "folder"
     try:
         created = client.create_folder(root_token, work_name)
+        work_token = created.get("token") or ""
+        if work_token:
+            r_e4.answer = "YES - create_folder succeeded"
+            r_e4.evidence = f"created sub-folder '{work_name}'"
+            r_e4.raw = {"create_folder": created}
+        else:
+            raise FeishuError("create_folder", -1, "no token returned", created)
     except FeishuError as exc:
-        r_e4.answer = "NO - create_folder failed"
-        r_e4.evidence = f"code={exc.code} msg={exc.msg}"
-        r_e4.raw = exc.raw or {}
-        raise ProbeAbort("cannot create a work folder", results) from None
+        # Folder creation denied -> degrade to prefix-isolation.
+        isolated_by = "filename-prefix"
+        r_e4.answer = "NO folder-create - file operations only"
+        r_e4.evidence = f"create_folder code={exc.code}; falling back to file prefix"
+        r_e4.raw = {"create_folder": exc.raw or {"code": exc.code, "msg": exc.msg}}
+        work_name = f"weftsync-probe-{pysecrets.token_hex(3)}"
 
-    work_token = created.get("token") or ""
-    if not work_token:
-        r_e4.answer = "UNKNOWN - create_folder returned no token"
-        r_e4.raw = created
-        raise ProbeAbort("cannot create a work folder", results)
+    print(f"isolation  : {isolated_by}" + (f" ('{work_name}')" if isolated_by == "filename-prefix" else ""))
+    print()
 
-    r_e4.answer = "YES - create_folder succeeded"
-    r_e4.evidence = f"created folder '{work_name}'"
-    r_e4.raw = {"create_folder": created}
+    prefix = work_name if isolated_by == "filename-prefix" else ""
 
-    cleanup: list[tuple[str, str]] = [("folder", work_token)]
+    cleanup: list[tuple[str, str]] = []
+    if isolated_by == "folder":
+        cleanup.append(("folder", work_token))
 
     try:
         # ---------------- E4 cont: upload small file ---------------------
-        small_name = "size-probe.txt"
+        small_name = f"{prefix}size-probe.txt" if prefix else "size-probe.txt"
         small_body = b"weftsync probe payload 0123456789\n" * 40  # ~1.2 KB
         up1 = client.upload_all(work_token, small_name, small_body)
         if up1.get("code") != 0:
-            r_e4.answer = "PARTIAL - folder ok, upload failed"
+            r_e4.answer = "PARTIAL - folder ok, upload failed" if isolated_by == "folder" else "NO - upload failed"
             r_e4.evidence = f"upload_all code={up1.get('code')} msg={up1.get('msg')}"
             r_e4.raw["upload_all"] = up1
             raise ProbeAbort("upload failed", results)
         r_e4.evidence += "; upload_all succeeded"
+        r_e4.answer = "YES - file upload + delete" if isolated_by == "filename-prefix" else r_e4.answer
         r_e4.raw["upload_all"] = up1
         tok1 = (up1.get("data") or {}).get("file_token") or ""
         if tok1:
@@ -457,7 +470,6 @@ def run_probe(client: Client, root_token: str, dry_run: bool) -> dict[str, Resul
         for f in same_name:
             if f.get("token") and f["token"] != tok1:
                 cleanup.append(("file", f["token"]))
-
         if up2.get("code") == 0:
             r_e2.answer = (
                 f"YES - both uploads accepted ({len(same_name)} entries named '{small_name}')"
