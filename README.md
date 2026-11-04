@@ -8,6 +8,14 @@ Workspace scaffolded with [Spec Kit](https://github.com/github/spec-kit) (GitHub
 - `.specify/` — Spec Kit templates, scripts, workflows, memory (constitution)
 - `.venv/` — local Python env (ignored by git)
 
+## Docs
+
+- [`PLAN.md`](PLAN.md) — 当前计划与待确认问题
+- [`docs/decisions.md`](docs/decisions.md) — 决策记录（为什么这么做）
+- [`docs/constitution-draft.md`](docs/constitution-draft.md) — 宪法草案（未批准）
+
+> 状态：**产品方向待确认**，尚无业务代码。
+
 ## Remote
 
 `origin` → `git@github.com:xuhuaya0/weftsync.git` (branch: `main`)
