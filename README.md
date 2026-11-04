@@ -10,11 +10,15 @@ Workspace scaffolded with [Spec Kit](https://github.com/github/spec-kit) (GitHub
 
 ## Docs
 
-- [`PLAN.md`](PLAN.md) — 当前计划与待确认问题
+- [`PLAN.md`](PLAN.md) — 需求、已核实的飞书 API 事实、架构草案、里程碑
 - [`docs/decisions.md`](docs/decisions.md) — 决策记录（为什么这么做）
 - [`docs/constitution-draft.md`](docs/constitution-draft.md) — 宪法草案（未批准）
 
-> 状态：**产品方向待确认**，尚无业务代码。
+## What it does
+
+本地文件 → 飞书云盘 的**单向同步**工具，后端可插拔（默认飞书，未来可换 SMB / 其他网盘）。
+
+> 状态：**架构讨论中，尚未写代码**。下一步是 M0 探针（实测飞书 API 能力边界）。
 
 ## Remote
 
