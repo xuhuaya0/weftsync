@@ -32,10 +32,10 @@
 | F2 | **应用身份访问个人云盘文件夹必须先人工授权**：① 应用开启「机器人」能力 ② 建群并把应用拉进群 ③ 在飞书文档里把目标文件夹**共享给该群** | 代码无法解决，必须写进部署文档；换文件夹就要再操作一次 |
 | F3 | 列目录 `GET /open-apis/drive/v1/files`，`page_size` 最大 200，**不递归**，需自己逐层递归 | 大目录树要自己遍历，注意限流 |
 | F4 | 列目录返回：`token`、`name`、`type`(doc/sheet/bitable/mindnote/file/docx/folder/shortcut)、`parent_token`、`url`、`created_time`、`modified_time`、`owner_id`<br>**没有 size，没有 content hash** | ⚠️ 增量判断只能靠 `modified_time`（秒级）；无法用 hash 校验内容 → **本设计最大约束** |
-| F5 | 上传 `POST /open-apis/drive/v1/files/upload_all`，**单文件 ≤ 20MB**；参数：`file_name`/`parent_type=explorer`/`parent_node`/`size`/`checksum`(Adler-32, 可选)；超限走分片上传 | 大文件必须实现分片流程 |
+| F5 | 上传 `upload_all` **单文件 ≤ 20MB**（**实测确认**：21MB → `1061002 params error`）；超限走分片 | 大文件必须实现分片流程 |
 | F6 | 上传限流 **5 QPS、10000 次/天**；列目录 **20 QPS** | 大批量同步必须限速 + 可续传 |
 | F7 | 容量硬限制：**目录最深 15 层**、**单层最多 1500 节点**、**单棵树最多 40 万节点** | 深/大目录会失败，需前置校验 |
-| F8 | 权限 scope：`drive:drive`（读写管理全部）/ `drive:drive:readonly` / `drive:file` / `drive:file:upload` | 最小权限：上传场景给 `drive:file:upload` |
+| F8 | 权限 scope：`drive:drive`（读写管理全部）/ `drive:drive:readonly` / `drive:file` / `drive:file:upload` / `space:folder:create` | **实测：不需要 `drive:drive`**。文件读写 + `space:folder:create` 即可覆盖全部所需操作（见 3.1） |
 | F9 | 错误码：`1061004 forbidden`、`1061045 can retry`、`1062009 size 不一致`、`1061044 parent_node 不存在`、`1062506 超目录深度`、`1062507 超单层节点数` | 需分类重试策略 |
 | F10 | 飞书云盘**只能按 token 寻址**（folder_token / file_token），没有真实路径；Wiki 不支持直接上传，须先传到文件夹再 move | 必须维护「逻辑路径 ↔ token」映射 |
 
@@ -66,7 +66,10 @@
 | **E3** | `file` 类型是否真拿不到 size？能否用 `HEAD`/download 的 `Content-Length` 补？ | 决定是否必须依赖 `--ignore-size` | 能拿到 → 省掉一个大坑 |
 | **E4** | 按 F2 授权后，应用是否真有**写权限**（不只读）？ | 决定 R2 是否成立 | 不行 → 前提崩塌，需换共享空间或 user token |
 | **E5** | `modified_time` 的更新时机：上传时写？移动/改名会变吗？ | 决定 `--ignore-size` 后 mtime 比较是否可信 | 不可信 → 需自建 token→内容指纹映射 |
-| **E6** | rclone 在 `Size()==-1` 下的**实际比较行为**，`--ignore-size` 是否真能避免每次重传 | 决定架构是否成立（**本轮最关键**） | 不成立 → 在 `List` 缓存已知 size，或改回自研 |
+| **E6** | rclone 在 `Size()==-1` 下的**实际比较行为**，`--ignore-size` 是否真能避免每次重传 | 决定架构是否成立（**本轮最关键**） | 不成立 → 在 `List` 缓存已知 size（方案 C），或改回自研 |
+
+> **E6 的前置条件已凑齐**：E3+ 证明 size 可用 1 字节 Range 请求获取，所以即使
+> rclone 默认行为不理想，也有明确的补救路径（在 `List` 里附带真实 size）。
 
 ### 3.1 M0 实测结果（2026-11-04，真实租户）
 
@@ -74,33 +77,52 @@
 
 环境：应用 `cli_a880...100d`，目标文件夹 **`_bot_test`**（元数据查询确认是真实文件夹，非快捷方式）
 
-| 检查 | 结果 | 证据 |
-|---|---|---|
-| `tenant_access_token` | ✅ | 成功换取 |
-| **读**（列目录） | ✅ | `files.list` → `code=0` |
-| **写**（上传/复制/移动/删除） | ✅ | `upload_all` / `copy` / `move` / `delete` 全部 `code=0` |
-| **建目录** | ❌ | `create_folder` → `99991672`，缺 `drive:drive` 或 `space:folder:create` |
+#### 权限矩阵（实测）
 
-#### E1–E5 结论（E6 依赖 rclone，未做）
+| 操作 | 结果 | 需要的 scope |
+|---|---|---|
+| 读（`files.list`） | ✅ | 只读类 |
+| **建目录**（`create_folder`） | ✅ | `space:folder:create` |
+| 删目录 / 删文件 | ✅ | 文件/目录管理类 |
+| 上传小文件（`upload_all`） | ✅ | 文件上传类 |
+| **分片上传**（`upload_prepare/part/finish`） | ✅ | 文件上传类 |
+| 复制 `copy` / 移动改名 `move` | ✅ | 文件管理类 |
+
+> ⚠️ **`drive:drive` 并非必需。** 起初 `create_folder` 报 `99991672` 缺
+> `[drive:drive, space:folder:create]`，用户申请 `space:folder:create` 后即通。
+> 全量 `drive:drive` 权限过大且用户侧无法获批，实测证明**最小权限方案可行**。
+
+#### E1–E5 结论
 
 | # | 问题 | **实测答案** | 证据 |
 |---|---|---|---|
-| **E1** | 能否原地更新内容（token 不变） | **否** | 同名重传产生**新 token**：`EzWBbgYEToFa...` → `BneYb04AZowH...` → 只能「删+传」，分享链接会变 |
+| **E1** | 能否原地更新内容（token 不变） | **否** | 同名重传产生**新 token**：`Acw0bHGqCov0...` → `GtflbM301o7v...` → 只能「删+传」，分享链接会变 |
 | **E2** | 同文件夹能否同名共存 | **能**（关键！） | 同名 `size-probe.txt` 传两次，列表出现 **2 条同名记录**，token 不同 |
 | **E3** | 列表有无 size / hash | **都没有** | 列表字段仅 `created_time / modified_time / name / owner_id / parent_token / token / type / url` |
-| **E3+** | 能否其他方式拿到 size | **能** | `GET` 返回 `Content-Length: 5000`；`HEAD` → 404；**`Range: bytes=0-0` → `206` + `Content-Range: bytes 0-0/5000`，只传 1 字节** |
-| **E4** | 应用是否有写权限 | **有**（文件级） | 上传/复制/移动/删除全部成功；仅缺目录创建 |
+| **E3+** | 能否其他方式拿到 size | **能** | `GET` → `Content-Length: 5000`；`HEAD` → **404 不支持**；**`Range: bytes=0-0` → `206` + `Content-Range: bytes 0-0/5000`，只传 1 字节** |
+| **E4** | 应用是否有写权限 | **有** | 上传/建目录/复制/移动/删除全部 `code=0` |
 | **E5** | `modified_time` 语义 | 重传后**会变** | `1793786158` → `1793786162` |
+
+#### 上传能力（实测）
+
+| 场景 | 结果 | 证据 |
+|---|---|---|
+| `upload_all` ≤ 20MB | ✅ | 1.2KB 文件多次成功 |
+| `upload_all` **21MB** | ❌ **拒绝** | `code=1061002  params error.` → **确认 20MB 是硬限制** |
+| **分片 25MB** | ✅ | `prepare` 返回 `block_size=4194304`(4MB)、`block_num=7`；7 个 `upload_part` 全成功；`finish` 成功 |
+| 分片结果校验 | ✅ **精确** | `Content-Range: bytes 0-0/26214400` = 25MB，与本地字节数完全一致 |
+| 分片耗时 | 25MB / 8.3 秒 | 约 3 MB/s |
 
 #### 这些结论对架构的直接影响
 
 | 发现 | 影响 |
 |---|---|
-| **E2 同名共存** | rclone 必须设 `Features.DuplicateFiles = true`；**路径不再唯一**，只能靠 token 定位。`rclone dedupe` 需要能用 |
+| **E2 同名共存** | rclone 必须设 `Features.DuplicateFiles = true`；**路径不再唯一**，只能靠 token 定位 |
 | **E1 无原地更新** | `Update()` 返回 `fs.ErrorCantUpdate`；rclone 会「删+传」，**文件分享链接会变**，必须写进文档 |
-| **E3 size 可通过 Range 拿** | **不用被迫 `--ignore-size`**。可选方案见下 |
-| **建目录缺失** | **`Mkdir()` 无法实现** → 目录必须预先存在。需补 `space:folder:create` scope |
+| **E3 size 可通过 Range 拿** | **不用被迫 `--ignore-size`**，可采用缓存策略 |
 | **E5 mtime 会变** | mtime 可作为变更判据，但只有秒级精度 |
+| **20MB 硬限制** | `Put()` 必须按大小分流；`OpenChunkWriter` 必须实现 |
+| **4MB 分片粒度** | 由服务端 `prepare` 决定，客户端不应写死 |
 
 **size 获取策略（三选一，待 M1 定）**
 
@@ -111,8 +133,6 @@
 | C. 本地 state 缓存 size，首次才查 | 首次 N 次，之后 0 | 强 + 快 |
 
 > 倾向 C。1000 个文件在 5 QPS 下，方案 B 光取 size 就要 200 秒；方案 C 只在首次同步付这个成本。
-
-**仍待用户操作**：为应用补 `space:folder:create`（最小 scope），否则无法自动建目录。
 
 ---
 
@@ -140,11 +160,14 @@
 内容变了但 mtime 没变、mtime 变了但内容没变、同秒内多次修改。
 
 **在 rclone 里的对策**：`--ignore-size` 关闭 size 比较，退回 mtime 窗口比较。
-但「本地文件 mtime」与「飞书 `modified_time`」是否在同一语义下可比，**必须靠 E5/E6 实测确认**。
-若不可比，则 `--checksum` 也走不通（飞书无 hash），只能自建 token→指纹映射。
+但「本地文件 mtime」与「飞书 `modified_time`」是否在同一语义下可比，**已由 E5 实测确认可用（重传后 mtime 会变，秒级）**。
+`--checksum` 仍走不通（飞书无 hash）。
 
 > ⚠️ B3 的副作用：本地文件有真实 size、飞书返回 -1 → 默认比较会认为「总是不同」
 > → **每次全量重传**。这是 E6 必须验证的核心风险。
+
+> E3 实测补充：size **可以**用 `Range: bytes=0-0` 廉价获取（1 字节）。
+> 因此不必被迫接受「每次重传」，可在 `List`/`stat` 时按策略取 size（方案 C：本地缓存）。
 
 ### 4.3 难点三：多机器同步同一云盘 = 天然写冲突
 
@@ -266,8 +289,8 @@ conflict = "update"        # ignore-existing | update | backup
 
 | 里程碑 | 内容 | 验收标准 |
 |---|---|---|
-| **M0** | 实测 E1–E6 | 六个答案写入 `docs/feishu-probe.md`，附原始返回 |
-| **M1** | rclone fork + 飞书后端**只读**（`NewFs` / `List` / `NewObject` / `Open`） | `rclone lsf feishu:` 能列出授权目录；`rclone copy feishu:X ./local` 能拉回 |
+| **M0** ✅ | 实测 E1–E5 + 上传能力 | **已完成**，结论见 3.1；E6 需 rclone 二进制，推迟到 M1 |
+| **M1** | rclone fork + 飞书后端**只读**（`NewFs` / `List` / `NewObject` / `Open`）+ 验证 E6 | `rclone lsf feishu:` 能列出授权目录；`rclone copy feishu:X ./local` 能拉回；E6 有明确答案 |
 | **M2** | 上传（小文件） | `rclone copy ./local feishu:X` 成功，文件在飞书客户端可见 |
 | **M3** | 分片上传 + 限流 + 重试 | >20MB 能传；`--tpslimit` 生效；触发限流能自愈 |
 | **M4** | 删除 / 更新 / 移动 | `rclone sync` 行为正确；`--max-delete` 能熔断 |

@@ -189,6 +189,65 @@ git@github.com: Permission denied (publickey).
 按「本地密钥 → 主机指纹 → DNS/端口 → 端口级差异 → 重复采样」的顺序排查，
 **用重复采样区分「稳定失败」和「间歇失败」**，才能定位到链路而非账号。
 
+---
+
+## D9 · 最小权限方案：不需要 drive:drive（2026-11-04）
+
+**背景**
+最初 `create_folder` 报错，提示需要 `[drive:drive, space:folder:create]` 之一。
+我当时的建议是「加 `drive:drive`」。用户反馈 **`drive:drive` 无法获批**，
+只申请到了 `space:folder:create`。
+
+**实测结果（申请后重跑）**
+
+全部所需操作均通过，`drive:drive` 不在其中：
+
+| 操作 | 结果 |
+|---|---|
+| `files.list` | ✅ |
+| `create_folder` | ✅（`space:folder:create` 生效后） |
+| `delete`（文件/目录） | ✅ |
+| `upload_all` | ✅ |
+| 分片 `prepare/part/finish` | ✅ |
+| `copy` / `move` | ✅ |
+
+**决定**
+采用**最小权限**方案：文件读写类 scope + `space:folder:create`。
+不申请 `drive:drive`。
+
+**教训**
+- 遇到「缺 scope」报错时，报错里列的是**任一可用**的候选，不是全部必需。
+  我一开始把 `drive:drive` 当成首选推荐，实际它是最重的那个选项。
+  **应该先看哪个 scope 语义最窄，而不是列表里第一个。**
+- 用户侧「无法获批」不是障碍，而是约束条件 —— 应该当成需求的一部分去满足。
+
+---
+
+## D10 · 分片上传与 20MB 边界（2026-11-04）
+
+**决定**
+`Put()` 按大小分流：≤20MB 走 `upload_all`，>20MB 走分片。
+
+**实测依据**
+
+| 场景 | 结果 |
+|---|---|
+| `upload_all` 21MB | `code=1061002 params error.` → **20MB 是硬限制** |
+| 分片 25MB | ✅ 成功 |
+| `prepare` 返回 | `block_size=4194304`（4MB）、`block_num=7` |
+| 结果校验 | `Content-Range: bytes 0-0/26214400` = 25MB，与本地字节数**完全一致** |
+| 耗时 | 25MB / 8.3 秒 ≈ 3 MB/s |
+
+**关键约束**
+- **分片粒度由服务端 `prepare` 决定**（4MB），客户端不得写死 ——
+  文档未承诺固定值，未来可能变化。
+- `checksum`（Adler-32）是**可选**参数；实测不传也能成功。
+  注意 Python 里 `adler32` 在 `zlib` 而非 `hashlib`（我踩过一次）。
+
+**影响**
+- rclone 的 `OpenChunkWriter` 接口正好对得上：`ChunkSize` 每次由后端返回
+- 断点续传需要持久化 `upload_id`（有效期内可继续传剩余分片）
+
 
 ---
 
