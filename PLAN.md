@@ -23,6 +23,9 @@
 | **R12** | **定时同步**（不是手动触发为主） | 用户 2026-11-05 确认 |
 | **R13** | **需要前端图形界面做配置** | 用户 2026-11-05 确认 |
 | **R14** | UI 形态 = **本地网页 + 系统托盘** | 用户 2026-11-05 确认 |
+| **R15** | 删除处理支持 FFS 的 `Permanent` / `Versioning` 两档（`Recycle bin` 云盘不可用） | 2026-11-05 对照 FFS 手册确定 |
+| **R16** | 比较策略支持 `size` 与 `state+size`（`content` 因飞书无 hash、下载太贵而排除） | 同上 |
+| **R17** | 同步前提供 **预览**（对标 FFS 的 Preview synchronization） | 同上，需在 UI 中实现 |
 
 > ⚠️ R11–R14 是 2026-11-05 才补上的，此前 §5「架构草案」与 §7「里程碑」
 > 都是按「纯 CLI 工具」写的，**需要据此重做**。
@@ -364,40 +367,167 @@ weftsync/
 | **include/exclude 过滤** | 「Include/exclude specific files」 |
 | 配置可**保存/加载** | 「Save/load configuration」 |
 
-> 以下细节我**无法核实**（手册页面是 JS 渲染，GitHub 源码索引不可用），
-> 凭记忆描述，仅作设计参考，不作为事实依据：
-> FreeFileSync 有 Two Way / Mirror / Update / Custom 四种变体，
-> Custom 可按键方向逐项定制动作，且每个 pair 可用 local settings 覆盖全局设置。
+**以下全部来自官方手册实读**（2026-11-05 用浏览器实际打开
+`freefilesync.org/manual.php?topic=...` 逐页读取，并截图了同步设置对话框原图）。
 
-**本项目的采用方式**（用户 2026-11-05：`A/B/C/D 四种做法都要有`）
+#### FFS 同步设置对话框的真实结构（截图确认）
 
-不再让用户在 A/B/C 里三选一 —— 四种行为都能表达，靠**变体 + 开关**组合：
+三个页签：**Comparison (F6) · Filter (F7) · Synchronization (F8)**
 
-| 变体 | 行为 | 对应需求 |
+Synchronization 页内容：
+
+| 区块 | 实际选项 |
+|---|---|
+| **Select a variant** | `Two way ↔` · `Mirror →` · `Update >` · `Custom <>` |
+| 勾选项 | **Use database file to detect changes** |
+| 按钮 | **Detect moved files** |
+| 右侧矩阵 | Create / Update / Delete 三项，各带 `→`(绿) 与 `←`(蓝) 两个方向箭头 |
+| **Delete and overwrite** | `Recycle bin` · `Permanent` · `Versioning`（单选框） |
+| 其他 | Send email notification（含严重级别图标）、Change log folder、Add notes |
+
+> ⚠️ **修正我之前的错误说法**：不是「四种变体」，而是**三种基本变体
+> （Two way / Mirror / Update）+ 一个 Custom**。手册原文：
+> "Three basic variants are available"，Custom 用于 "handle special synchronization scenarios"。
+
+#### 三种基本变体的确切语义（手册原文）
+
+| 变体 | 语义 |
+|---|---|
+| **Two way** | 两侧都是工作文件，变更（创建/更新/删除）**双向流动**。首次同步后生成 `sync.ffs_db` 数据库，用于「把当前文件系统状态与上次同步比较」来决定同步方向。 |
+| **Mirror** | 左=源、右=目标。**在目标上创建和删除**，直到目标成为源的精确副本。 |
+| **Update** | **只增不减**。源侧删除的文件**不会**在备份侧删除；备份侧删除的文件**也不会**被重新复制回来。（手册例子：相机腾空间后不影响备份；备份里删掉不想要的照片也不会被重新拷回） |
+
+#### `Custom` 的真实机制
+
+手册原文：Custom 规则可以基于
+
+1. **比较后确定的分类**（left/right only、left/right newer），或
+2. **检测到的变更**（create / update / delete）—— 前提是勾选 "Use database file to detect changes"
+
+也就是说 Custom 有两种定制维度：**按文件状态分类**，或**按操作方向矩阵**（界面右上那个 Create/Update/Delete × ←/→ 矩阵）。
+
+#### 删除处理（Delete and overwrite）—— 这才是 FFS 的"回收"机制
+
+**三档：**
+
+| 选项 | 行为 |
+|---|---|
+| **Recycle bin** | 移到系统回收站。手册明确：**"only available for local drives"** |
+| **Permanent** | 直接删除 |
+| **Versioning** | 移到指定文件夹，**可保留多版本** |
+
+**Versioning 的三种命名约定**（手册原文，附例）：
+
+| 约定 | 行为 | 例（`Folder\File.txt`） |
 |---|---|---|
-| `update` | 只增不减：本地删 → **云端保留** | 原选项 A（当备份用） |
-| `mirror` | 镜像：本地删 → **云端删** | 原选项 B |
-| `mirror` + `recycle` | 本地删 → **云端移到回收目录** | 原选项 C |
-| `two-way` | 双向（R5） | 待评估 |
-| `custom` | 按方向逐项定制（见下表） | 原选项 D（最灵活） |
+| `Replace` | 移到目标文件夹，**覆盖**旧版本 | `Revisions\Folder\File.txt` |
+| `Time stamp [File]` | 保留目录结构，**文件名后加时间戳** | `Revisions\Folder\File.txt 2020-12-11 111111.txt` |
+| `Time stamp [Folder]` | 放进**时间戳子目录**，文件名不变 → 可手工反向还原 | `Revisions\2020-12-11 111111\Folder\File.txt` |
 
-**`custom` 的细分动作**（四类场景各自可选）
+还可用宏控制粒度，例如目录路径加 `%date%` → 每天一份。
 
-| 场景 | 可选动作 |
+> 注意：这一档管的是 **"delete and overwrite"**，即**被覆盖的旧文件也走同样处理**，不只是被删除的。
+
+#### 比较设置的真实选项（Comparison 页签）
+
+| 变体 | 判等方式 | 手册给出的适用场景 |
+|---|---|---|
+| **Compare by File Time and Size** | mtime **且** size 都相同 → equal | 与备份位置同步。分类：left only / right only / left newer / right newer / **equal** / **conflict（same date, different size）** |
+| **Compare by File Content** | 内容逐字节相同 → equal | 一致性检查。**"can serve as a fallback when modification times are not reliable"**（举的例子：某些手机、老式 FTP 服务器不保留 mtime） |
+| **Compare by File size** | size 相同 → equal | **"only be used when file modification times are not available or reliable"** |
+
+> **这条对我们最关键**：飞书正是"mtime 不可靠"的场景。FFS 给的两个答案是
+> **比内容** 或 **比大小**。飞书无 hash，比内容要下载全文 → 太贵；所以现实中
+> **比大小** 是可行底线。这也验证了我之前判定的"方案 B"。
+> 而勾选 `Use database file to detect changes` 后，还能额外识别**双向变更**，
+> 这正是我设计的"影子 mtime + token 追踪"要解决的问题。
+
+#### Expert Settings 里与一致性相关的全局项（GlobalSettings.xml）
+
+| 项 | 默认 | 含义 |
+|---|---|---|
+| `FileTimeTolerance` | **2 秒** | 修改时间差在 2 秒内视为相等（FAT 只有 2 秒精度） |
+| `LockDirectoriesDuringSync` | true | 用锁文件 `sync.ffs_lock` **串行化多个实例**。手册明确其**主要用途是多用户并发写同一网络共享文件夹** |
+| `VerifyCopiedFiles` | false | 复制后二进制比对，耗时翻倍 |
+| `RunWithBackgroundPriority` | false | 降低文件访问优先级 |
+
+> `LockDirectoriesDuringSync` 正是 R4（多机器写同一云盘）的 FFS 解法 ——
+> 但它是**文件锁**，飞书云盘不支持原子锁，**无法照搬**。这是我们要自己解决的部分。
+> `FileTimeTolerance = 2s` 也值得借鉴：我们比较 mtime 时应有容差，避免浮点/时区抖动。
+
+#### 定时与批处理
+
+| 事实 | 说明 |
 |---|---|
-| 本地有 / 云端无 | 上传到云端 ／ 删除本地 ／ 不动 |
-| 云端有 / 本地无 | 下载到本地 ／ 删除云端 ／ 移到回收 ／ 不动 |
-| 两侧都有但内容不同 | 覆盖云端 ／ 覆盖本地 ／ 保留较新 ／ 不动 |
-| **冲突**（同名多条或 token 不匹配） | `report`（默认）／ `keep-both` ／ `overwrite` |
+| 批处理作业 = 一个 **`.ffs_batch` 配置文件** | Menu → File → Save as a batch job |
+| **FFS 自身没有内置调度器** | 依赖操作系统的计划任务：Windows Task Scheduler / cron / Automator |
+| 无人值守相关选项 | `Run minimized`、`Auto-Close`、`Ignore errors`、`Cancel at first error` |
+| 托盘 | FFS 有**通知区域（托盘）图标**，双击可随时显示进度 |
+| 日志 | 可配置日志目录（默认在 `%AppData%\FreeFileSync\Logs`） |
 
-**删除保护（独立于变体的安全阀，全局与 pair 都可设）**
+> 我们 R11/R12 要求"常驻后台 + 定时"，与 FFS 的"外部调度 + 单次运行"不同。
+> 因为常驻进程更容易做（UI 同进程、状态可共享、无需每次冷启动），所以
+> **自建调度器**，而不是照搬 FFS 依赖 Task Scheduler。
 
-| 参数 | 作用 |
-|---|---|
-| `max_delete` | 一次同步最多删 N 个，超过即中止 |
-| `recycle` | 删除前先移到回收目录（默认开） |
-| `recycle_dir` | 回收目录位置，默认 `<云端根>/_weftsync_trash/<日期>/` |
-| `require_confirm` | 删除数 > 阈值时在 UI 里要求人工确认 |
+#### FFS 没有 `max_delete`
+
+已确认：FFS 的安全机制是
+
+1. **先比较 → 预览 → 人工确认 → 才同步**（有人工关卡）
+2. **Delete and overwrite** 三档（Recycle bin / Permanent / Versioning）
+3. **锁文件**防并发
+
+**没有"删除数量超过阈值就中止"这种熔断。**
+
+> 这是**我加的**，不是照搬 FFS。理由是：我们定时自动跑，**没有 FFS 那道人工确认关卡**，
+> 所以需要程序化的替代品。这条差异必须在文档里讲清楚，不能说是"跟 FFS 一样"。
+
+#### 本项目的采用方式
+
+保留四种行为，但**术语对齐 FFS**：
+
+| 我们的配置 | 对应 FFS | 语义 |
+|---|---|---|
+| `variant = "update"` | Update | 只增不减，云端保删除的文件 |
+| `variant = "mirror"` + `deletion = "permanent"` | Mirror + Permanent | 镜像，真删 |
+| `variant = "mirror"` + `deletion = "versioning"` | Mirror + Versioning | 镜像，删前移走 |
+| `variant = "two-way"` | Two way | 双向（R5，待评估） |
+| `variant = "custom"` | Custom | 按分类或按操作矩阵定制 |
+
+**删除处理配置**（用 FFS 的术语，不用我自造的 `recycle`）：
+
+```toml
+[defaults.sync]
+deletion          = "versioning"        # permanent | versioning
+versioning_dir    = "_weftsync_trash"   # 云端相对路径
+versioning_naming = "timestamp-folder"  # replace | timestamp-file | timestamp-folder
+```
+
+> **为什么不用 FFS 的 `Recycle bin` 档**：手册明确它只支持本地盘。
+> 飞书云盘若要"可恢复"，只能用 Versioning 的"移到文件夹"方式模拟。
+> （飞书自身是否有回收站，见 §10 B11，待实测。）
+
+**比较策略**（补充 FFS 的第 4 种：数据库辅助）
+
+```toml
+[defaults.compare]
+strategy = "state+size"     # size | content | state+size
+time_tolerance_sec = 2      # 借鉴 FFS 的 FileTimeTolerance
+```
+
+| 策略 | 行为 | 飞书可行性 |
+|---|---|---|
+| `size` | 只比 size（Range 拿真值） | ✅ 可行，每文件 1 次 1 字节请求（可缓存） |
+| `content` | 下载比对 | ❌ 太贵，不实现 |
+| **`state+size`（默认）** | 用本地 state 库记 (本地指纹, 远端 token, 远端 size)，三方比对 | ✅ 推荐，等价于 FFS 的 "Use database file to detect changes" |
+
+**保留自造的 `max_delete`**（标注为 FFS 没有的额外安全阀）
+
+```toml
+[defaults.sync]
+max_delete  = 50       # 一次同步最多删 N 个，超过整轮中止
+max_delete_size = "1GB"  # 或按总量
+```
 
 **配置层级（2026-11-05 用户确认需要「整体停掉一组」）**
 
@@ -409,7 +539,7 @@ job 可整体启停、整体定时、整体看日志。UI 呈现为一个 job �
 [job]
 name     = "nightly-backup"
 enabled  = true            # ← 整体启停
-schedule = "0 2 * * *"     # 整个 job 的定时
+schedule = "0 2 * * *"     # 整个 job 的定时（5 段 cron 或简单间隔，见 B2）
 variant  = "mirror"        # 可被单个 pair 覆盖
 
 [[pair]]
@@ -430,7 +560,7 @@ root = "D:/photos"
 backend = "feishu"
 root    = "backup/photos"
 [pair.sync]
-variant = "update"         # 这个 pair 不删云端
+variant  = "update"        # 这个 pair 不删云端
 ```
 
 三层覆盖顺序：**全局默认 → job → pair**。
@@ -438,6 +568,19 @@ variant = "update"         # 这个 pair 不删云端
 另有一个全局文件 `config.toml` 存跨 job 的默认值（凭据引用、排除规则、调度默认间隔等）。
 
 凭据**不写在这些文件里**，只从环境变量 / 系统凭据存储读取（见 §10 B4）。
+
+#### UI 页面对照（据 FFS 截图规划我们的本地网页）
+
+| FFS 的界面元素 | 我们的网页对应 |
+|---|---|
+| 页签 Comparison / Filter / Synchronization | 同样的三段式设置页 |
+| 变体四个按钮（带箭头示意图） | 同样做成带方向示意图的选择卡 |
+| Create/Update/Delete × ←/→ 矩阵 | Custom 模式下的可编辑矩阵 |
+| Delete and overwrite（三档单选） | 同样三档，其中 Recycle bin 标注「云盘不可用」 |
+| 主窗口 pair 列表 + 比较结果树 | job 详情页：pair 列表 + 变更预览树 |
+| 预览（Preview） | **同步前预览**，与 FFS 一致 |
+| 日志目录 | 内置日志页 + 可导出 |
+| 邮件通知 + 严重级别 | 见 B10，待定通知渠道 |
 
 多网盘（R7）：写多段 `[[pair]]` 指向同一 `local.root`；或用 rclone 的 `union` 后端。
 
@@ -518,8 +661,10 @@ variant = "update"         # 这个 pair 不删云端
 | B8 | 是否需要「立即同步」按钮、是否需要在 UI 里看进度 | 同上 |
 | B9 | Q2/Q3（云盘类型、原生文档） | 决定后端能力边界 |
 | B10 | 失败处理：网络断了、token 失效、磁盘满，用户希望怎么被通知 | 决定告警通道 |
-| **B11** | **飞书云盘自身是否有回收站？API 的 `delete` 是否进回收站？保留多久？** | 若有，`recycle` 功能可能冗余；实测即可回答 |
-| **B12** | `max_delete` 默认值、`recycle` 默认开关 | 安全默认值需用户认可 |
+| **B11** | **飞书云盘自身是否有回收站？API 的 `delete` 是否进回收站？保留多久？** | 若有，`deletion=versioning` 的必要性下降；实测即可回答 |
+| **B12** | `max_delete` 默认值（现写 50）、`max_delete_size` 是否也需要 | 安全默认值需用户认可 || **B13** | `deletion` 默认档：`permanent` 还是 `versioning` | 影响云端空间占用与请求量 |
+| **B14** | 通知渠道：FFS 只有邮件，你需要邮件 / 托盘气泡 / Webhook 哪种 | 决定 B10 的实现 || **B13** | `deletion` 默认档位：`permanent` 还是 `versioning` | 影响云端空间占用与请求量 |
+| **B14** | 通知渠道：FFS 只有邮件，你需要邮件/托盘气泡/Webhook 哪种 | 决定 B10 的实现 |
 
 > 每确认一项，就从「待确认」移到「已确认」，并同步更新 §1 的需求编号。
 
@@ -535,10 +680,13 @@ variant = "update"         # 这个 pair 不删云端
 | **pair（文件夹对）** | 一组「本地目录 ↔ 云端目录」的映射关系。一个 job 里可以有多个 pair。 |
 | **job（作业）** | 一组 pair + 一套同步设置 + 一个调度计划。可整体启停。对应一个配置文件。 |
 | **variant（变体）** | 同步策略：`update`（只增不减）/ `mirror`（镜像，会删）/ `two-way`（双向）/ `custom`（逐项定制）。 |
-| **max_delete（删除熔断）** | **一次同步里最多允许删几个文件**。执行前先统计待删数量，超阈值则**整轮中止，一个都不删**。作用是防止本地路径配错导致云端被清空。<br>例：`max_delete = 50`，本轮要删 4997 个 → 中止并报错。<br>注意：是整轮总数，不是每目录；触发后是不删，不是删一部分。 |
-| **recycle（回收）** | **删除前先移动到回收目录**而不是直接删。<br>默认位置 `<云端根>/_weftsync_trash/<YYYYMMDD-HHMMSS>/<原相对路径>`。<br>代价：每个文件多一次 `move` 请求（5 QPS 下 100 个文件约多 20 秒）、额外占用空间、需要清理策略。 |
-| **recycle_dir** | 回收目录的位置，可配置。 |
-| **shadow mtime（影子 mtime）** | 本地记录「上次同步时该文件的本地修改时间」，而非使用云端返回的上传时刻。用于绕开飞书 mtime 语义不一致的问题（见 §3.2）。 |
+| **max_delete（删除熔断）** | **一次同步里最多允许删几个文件**。执行前先统计待删数量，超阈值则**整轮中止，一个都不删**。作用是防止本地路径配错导致云端被清空。<br>⚠️ **这不是 FreeFileSync 的功能**，是我为"无人值守自动同步"加的安全阀（FFS 靠"先预览再人工确认"）。<br>例：`max_delete = 50`，本轮要删 4997 个 → 中止并报错。<br>注意：是整轮总数，不是每目录；触发后是不删，不是删一部分。 |
+| **deletion（删除处理）** | 对标 FFS 的 `Delete and overwrite`。三档：`permanent`（真删）/ `versioning`（先移到指定文件夹）/ `recycle-bin`（移到系统回收站，**仅本地盘可用，云盘不支持**）。 |
+| **versioning（版本保留）** | FFS 的删除处理方式之一：把被删除/被覆盖的文件移到指定目录并保留。三种命名约定：`replace`（覆盖旧版本）/ `timestamp-file`（文件名加时间戳，保留目录结构）/ `timestamp-folder`（放进时间戳子目录，**可手工反向还原**）。 |
+| **versioning_dir** | versioning 的目标目录。 |
+| **compare strategy（比较策略）** | 对标 FFS 的 Comparison variant：`size`（只比大小）/ `content`（比内容，飞书不可行）/ **`state+size`（默认，用本地 state 库三方比对）**。 |
+| **time_tolerance_sec** | mtime 比较容差，对标 FFS 的 `FileTimeTolerance`（默认 2 秒）。 |
+| **shadow mtime（影子 mtime）** | 本地记录「上次同步时该文件的本地修改时间」，而非使用云端返回的上传时刻。用于绕开飞书 mtime 语义不一致的问题（见 §3.2）。等价于 FFS 的 `Use database file to detect changes` 里数据库的作用。 |
 | **state（状态库）** | 记录每个已同步文件的本地指纹与云端 token，用于增量判断和冲突检测。 |
 | **conflict（冲突）** | 同一路径在本地与云端出现不一致，且无法安全判定谁更新。三种检测信号见 §3.2 末。<br>默认策略 `report`：只报告，不做任何修改。 |
 | **report（默认冲突策略）** | 发现冲突时输出冲突表并中止，**不修改任何文件**，退出码非 0。 |

@@ -391,6 +391,54 @@ E6 证明真正的问题是 mtime 语义不一致（飞书 `modified_time` = 上
 - 若将来 rclone 上传了从别处复制来的文件（token 非本机产生），
   state 中缺少对应记录 → 会报告为冲突。这是可接受的保守行为。
 
+---
+
+## D14 · 术语与设计对齐 FreeFileSync（2026-11-05）
+
+**背景**
+用户要求："参考 FreeFileSync"，并明确指出我用术语却没解释。
+我先试图用 `fetch_webpage` 抓 `manual.php?page=...`，**全部只返回导航栏**；
+后来发现真实 URL 是 `manual.php?topic=...`，且页面内容需要浏览器渲染。
+用内置浏览器打开后读到了全部正文，并截图了同步设置对话框原图。
+
+**我此前凭记忆说错的（已纠正）**
+
+| 我之前的说法 | 实际（手册原文 + 截图） |
+|---|---|
+| 「四种变体 Two Way / Mirror / Update / Custom」 | **三种基本变体**（Two way / Mirror / Update）**+ Custom**。原文："Three basic variants are available" |
+| 「删除保护是 Recycle Bin / Versioning，没有 max_delete」 | 对一半：选项叫 **Delete and overwrite**，三档 `Recycle bin` / `Permanent` / `Versioning`。而且管的是**删除+覆盖**两类 |
+| 不知道 Versioning 的细节 | 有**三种命名约定**：`Replace` / `Time stamp [File]` / `Time stamp [Folder]`，还可用 `%date%` 宏控制粒度 |
+| 没提比较策略 | **三种比较变体**：File Time and Size / File Content / File size。其中后两者手册明确用于 **"modification times are not available or reliable"** |
+
+**核实到的关键事实**
+
+| 事实 | 对本项目的意义 |
+|---|---|
+| `Use database file to detect changes`（`sync.ffs_db`）| **验证了我们的影子 mtime 设计**。FFS 也是用数据库记录上次同步状态来判定变更与方向 |
+| `Recycle bin` **"only available for local drives"** | 飞书云盘**不能用这一档**，只能用 Versioning 模拟 |
+| `FileTimeTolerance` 默认 **2 秒** | 我们比较 mtime 也该有容差 |
+| `LockDirectoriesDuringSync`（`sync.ffs_lock`）**主要用途是多用户并发写同一网络文件夹** | 正是 R4 的 FFS 解法，但它是**文件锁**；飞书无原子锁，**无法照搬** → 我方的 token 冲突检测才是替代方案 |
+| **FFS 没有内置调度器**，批处理靠 `Windows Task Scheduler` / `cron` | 我们 R11/R12 要常驻 + 定时，与 FFS 不同 → **自建调度器** |
+| FFS 有**通知区域（托盘）图标**，双击出进度 | 与用户选定的「本地网页 + 系统托盘」一致 |
+| 有**邮件通知 + 严重级别** | 对应 B14 通知渠道待定 |
+
+**决定**
+1. **术语全面改用 FFS 用词**：`deletion`（`permanent`/`versioning`）、`versioning_naming`、
+   `compare strategy`、`time_tolerance_sec`、`variant`（`two-way`/`mirror`/`update`/`custom`）。
+   弃用我自造的 `recycle` / `recycle_dir`。
+2. **`max_delete` 保留，但明确标注它是 FFS 没有的额外安全阀**。
+   理由：FFS 靠「先预览再人工确认」，我们定时无人值守，没有那道关卡。
+3. **比较策略默认 `state+size`**，不含 `content`（飞书无 hash，下载比对太贵）。
+4. **UI 结构照 FFS 三段式**：Comparison / Filter / Synchronization 三个页签，
+   变体带方向示意图，Custom 用 Create/Update/Delete × ←/→ 矩阵。
+
+**教训**
+- 用户说「你实在不行打开截图看呢，不要让我判断」是对的。
+  **能自己查证的，就不要让用户替我的记忆背书。**
+- `fetch_webpage` 抓不到内容时，换内置浏览器渲染页面 + 截图，是可行的第二条路。
+- 我对竞品的记忆有实质性错误（变体数量、删除档位名称、Versioning 细节）。
+  **凡引用外部产品行为，必须实读文档，不能凭印象。**
+
 
 ---
 
