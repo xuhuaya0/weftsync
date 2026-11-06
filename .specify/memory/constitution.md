@@ -1,50 +1,187 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+# weftsync Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. 简单优先（SIMPLICITY FIRST）
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+不实现当前不需要的功能（YAGNI）。
+能用标准库解决的不引第三方依赖；能一个模块解决的不拆三个。
+不为「将来可能用到」预先抽象。
+复杂度必须有明确收益，否则选简单方案。
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+**理由**：简单系统易于理解、测试、修改；复杂度会累积利息。
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+**检查方式**：新增依赖 / 模块 / 抽象层时，必须说明「不用它具体会付出什么代价」。说不出来就不加。
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+**出处**：KISS / YAGNI（XP 实践）、UNIX 哲学「做一件事并做好」。
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+### II. 验证优先于断言（VERIFIED, NOT ASSUMED）
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+任何「已完成 / 已修复 / 已生效 / 不可行」的结论，MUST 附可复现的证据：
+命令原文与输出、测试结果、文档原文、或运行时观测值。
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+以下推断链 MUST NOT 作为结论依据：
+- 「改法看起来对」→ 宣布修好
+- 「文件已落盘」→ 宣布产物可用
+- 「代码读起来是这样」→ 宣布运行时行为如此
+- 「我记得某产品是这样」→ 当成事实引用
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+验证 MUST 触及实际链路：配置被加载、函数被调用、产物被消费。
+
+**理由**：未验证的断言引发返工，代价远高于多跑一条命令。
+外部工具与产品的行为尤其容易记错，MUST 以文档原文为准。
+
+**检查方式**：结论能否指出具体证据（命令输出 / 测试名 / 文档链接 / 源码行号）。
+指不出来的 MUST 标为「推测」，且 MUST NOT 写入文档的事实章节。
+
+**出处**：经验主义（empirical software engineering）、TDD 红-绿循环。
+
+### III. 失败要显式，不要静默（FAIL LOUD）
+
+错误 MUST 被捕获并明确报告，MUST NOT 被吞掉。
+禁止空 `catch` / `except: pass` / `_ = err` 等吞错写法。
+不确定的情况 MUST 报错，MUST NOT 猜一个默认值继续执行。
+破坏性操作前 MUST 检查前置条件，不满足则拒绝执行。
+日志 MUST 区分「成功」「跳过（及原因）」「失败」三种结果。
+
+**理由**：静默失败是最贵的缺陷 —— 它让问题在很久之后以更难诊断的形式出现。
+
+**检查方式**：每个错误处理分支是否都有可观测输出（日志 / 返回值 / 通知）。
+
+**出处**：Fail-fast（Martin Fowler）。
+
+### IV. 单一事实来源（SINGLE SOURCE OF TRUTH）
+
+同一信息 MUST 只在一处定义：配置、常量、路径、状态。
+复制粘贴的代码在第二次出现时 SHOULD 提取。
+文档里的事实 MUST 与代码 / 配置一致；不一致时 MUST 修改文档。
+状态 MUST 只有一个权威来源，MUST NOT 两处各记一份。
+
+**理由**：重复信息必然漂移，漂移后无法判断哪个是正确的。
+
+**检查方式**：同一常量 / 路径 / 规则是否在多处硬编码；文档事实能否对应到代码。
+
+**出处**：DRY（The Pragmatic Programmer）。
+
+### V. 边界与最小权限（BOUNDARY & LEAST PRIVILEGE）
+
+只操作被授权的范围，越界即拒绝。
+申请权限 MUST 取能满足需求的最小集合，MUST NOT 为图省事申请全量权限。
+凭据 MUST NOT 进入版本库，MUST NOT 在日志或报错中回显。
+对用户数据做破坏性操作前 MUST 三件齐备：显式确认、快照、可撤销路径。
+
+**理由**：权限与影响范围一旦扩散，事故半径随之扩大；凭据一旦泄露不可回收。
+
+**检查方式**：调用的 API 与文件路径是否都在声明范围内；scope 是否最小；
+破坏性操作的三条保护是否齐全。
+
+**出处**：Principle of Least Privilege（Saltzer & Schroeder, 1975）。
+
+### VI. 可复现（REPRODUCIBLE）
+
+产物 MUST 由脚本生成，MUST NOT 依赖手工步骤。
+脚本 MUST 幂等：重跑结果一致。
+构建与测试 MUST 能在干净环境里一条命令重现。
+临时产物 MUST 落在约定位置（本仓库为 `.scratch/`），并在版本库中忽略。
+
+**理由**：不可复现的产物无法审计、无法回滚、无法交给他人重做。
+
+**检查方式**：删掉产物目录后能否用仓库脚本完整重建；脚本重跑两次结果是否一致。
+
+**出处**：Reproducible builds、Infrastructure as Code。
+
+### VII. 渐进交付（INCREMENTAL DELIVERY）
+
+一次只推进一步，完成即汇报，MUST NOT 一口气做到底后一次性交付。
+大变更 MUST 拆成可独立验证的小步。
+每步 MUST 留下可检查的产物（文件 / 测试 / 命令输出）。
+计划 MUST 写在磁盘上并随进展更新，MUST NOT 只存在于对话中。
+
+**理由**：一次性大交付一旦方向错误即全部作废；小步可及时纠偏。
+
+**检查方式**：本次提交能否独立说明「做了什么、如何验证」；`PLAN.md` 是否反映最新进度。
+
+**出处**：迭代开发、持续集成、小步提交。
+
+### VIII. 改动前先理解（CHESTERTON'S FENCE）
+
+删除或修改看似无用的代码前，MUST 先弄清它为什么存在。
+不理解的代码 MUST NOT 重构。
+引用外部产品或标准的行为前 MUST 查阅原文；记忆本身不构成证据。
+
+**理由**：看似冗余的代码往往对应真实约束，移除后才发现约束时代价最高。
+
+**检查方式**：改动能否说清「原设计要解决什么问题」；外部行为引用是否附有文档或源码位置。
+
+**出处**：Chesterton's Fence。
+
+## 项目约束
+
+以下为本项目（weftsync）的具体约束，不属于通用准则。
+违反时 MUST 在 `plan.md` 的 Complexity Tracking 中说明。
+
+### 平台
+
+- Windows 为首要目标，Linux MUST 同样可用（需求 R9）。
+  跨平台差异 MUST 在设计阶段处理，MUST NOT 留到实现时补救。
+- 单文件产物优先：使用 `GOOS=windows` / `GOOS=linux` 交叉编译，避免运行时依赖。
+
+### 安全（硬性红线）
+
+- 远端仓库为公开仓库，任何凭据、token、内部地址 MUST NOT 入库（需求 R10）。
+- 凭据 MUST 只从系统凭据库 / 加密文件 / 环境变量读取；配置文件只放引用。
+- 提交前 MUST 通过密钥扫描（`scripts/check_secrets.py`，已挂 pre-commit）。
+
+### 技术栈
+
+- Go：主实现语言（依赖 rclone，跨平台单文件）。
+- Python：仅用于开发辅助脚本（探测、校验），MUST NOT 进入产物。
+- 底层同步引擎 MUST 复用 rclone，MUST NOT 重写。
+
+### 工程约定
+
+- 提交前 MUST 跑测试；测试未通过 MUST NOT 提交。
+- 破坏性操作 MUST 有撤销路径。
+- PowerShell 5.1 脚本 MUST 为纯 ASCII（GBK 解析中文会产生误导性错误）。
+- 终端输出中文的工具 SHOULD 自行写 UTF-8 文件（如 `--out` 参数），不依赖管道编码。
+
+## 开发流程
+
+```
+宪法 → spec（做什么）→ clarify（补边界）→ plan（怎么做）→ tasks（拆步骤）→ implement（写代码）
+```
+
+### 门禁
+
+| 阶段 | 门禁要求 |
+|---|---|
+| **plan** | Constitution Check：逐条对照本文件 8 条核心原则；违反 MUST 在 Complexity Tracking 中说明 |
+| **tasks** | 每个任务 MUST 有可验证的完成标准 |
+| **implement** | 测试通过 + 密钥扫描通过 + 本次改动可独立说明 |
+| **交付** | MUST 经用户确认，MUST NOT 自行宣布完成 |
+
+### 例外处理
+
+违反任一条原则均允许，但 MUST 同时写明：
+1. 违反的理由；
+2. 更简单的替代方案为何不可行。
+
+未说明理由的违反视为不合规。
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+本宪法优先于其他实践约定；发生冲突时以本文件为准。
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**修订流程**：提出理由 → 记入 `docs/decisions.md` → 修改版本号 → 经用户批准。
+
+**版本语义**：
+- MAJOR：原则增删，或语义反转；
+- MINOR：新增条款；
+- PATCH：措辞修正。
+
+**效力范围**：本仓库所有 spec、plan、代码与文档。
+
+**复查时机**：每个 feature 的 plan 阶段 MUST 至少复查一次；
+发现原则不适用时 MUST 按修订流程处理。
+
+**Version**: 1.0.0 | **Ratified**: 2026-11-06 | **Last Amended**: 2026-11-06
