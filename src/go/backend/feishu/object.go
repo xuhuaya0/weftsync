@@ -23,22 +23,40 @@ var _ fs.Object = (*Object)(nil)
 
 // ---------------------------------------------------------------- ObjectInfo
 
-func (o *Object) Fs() fs.Info                { return o.fs }
-func (o *Object) Remote() string             { return o.remote }
-func (o *Object) String() string             { return o.remote }
-func (o *Object) Storable() bool             { return true }
+func (o *Object) Fs() fs.Info                          { return o.fs }
+func (o *Object) Remote() string                       { return o.remote }
+func (o *Object) String() string                       { return o.remote }
+func (o *Object) Storable() bool                       { return true }
+
+// ModTime returns the local modification time the file had when we uploaded it,
+// as long as the remote entry still carries the token we recorded.
+//
+// This is the whole point of the state file: rclone compares the source's
+// modtime against this value, so returning the original local mtime makes an
+// unchanged file look equal and it is skipped. Returning the remote's own
+// modified_time (the upload moment) would make every file look different on
+// every run.
 func (o *Object) ModTime(ctx context.Context) time.Time {
+	if mtime, _, ok := o.fs.stateFingerprint(o.remote, o.entry.Token); ok {
+		return time.Unix(mtime, 0)
+	}
 	return time.Unix(o.entry.ModTime, 0)
 }
 
-// Size is unknown (-1).
+// Size returns the local byte count the file had when we uploaded it, when the
+// snapshot still describes this remote entry.
 //
-// Feishu's listing omits size (E3). Recovering it would cost one Range request
-// per file, which is 500 requests for a 500-file folder — research.md R6
-// explains why we accept -1 instead and let the state file drive comparisons.
-// rclone's sizeDiffers treats Size() < 0 as "not comparable" (verified with
+// Otherwise it is -1 (unknown): Feishu's listing omits size (E3). Recovering it
+// would cost one Range request per file, which is 500 requests for a 500-file
+// folder — research.md R6 explains why we accept -1 instead. rclone's
+// sizeDiffers treats Size() < 0 as "not comparable" (verified with
 // probes/e6_size_probe.go), so nothing breaks.
-func (o *Object) Size() int64 { return -1 }
+func (o *Object) Size() int64 {
+	if _, size, ok := o.fs.stateFingerprint(o.remote, o.entry.Token); ok {
+		return size
+	}
+	return -1
+}
 
 // Hash always returns "" apart from the None check: Feishu has no server-side
 // content hash (E3).
@@ -136,11 +154,24 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	}
 	newToken := newObj.(*Object).entry.Token
 
+	// Repair mode: we have no trustworthy history, so we cannot prove the token
+	// below names our own previous version. Deleting would be irreversible.
+	if !o.fs.deletionsAllowed() {
+		fs.Infof(o, "state was rebuilt; leaving the previous version of %q in place", remote)
+		o.entry = newObj.(*Object).entry
+		return nil
+	}
+
 	// Step 2: drop the previous token, but only if it still exists.
 	//
 	// FR-035: re-verify before deleting. A stale token in our entry would
 	// otherwise delete an unrelated file, and deletion is irreversible.
 	oldToken := o.entry.Token
+	if remembered, ok := o.fs.previousToken(remote); ok {
+		// The snapshot is a better witness than the listing: pickRemoteEntry may
+		// have collapsed two same-named files into whichever came first.
+		oldToken = remembered
+	}
 	if oldToken != "" && oldToken != newToken {
 		if !o.fs.tokenStillPresent(ctx, parentPath, oldToken) {
 			fs.Infof(o, "previous version (token %s) is gone; nothing to delete", oldToken)
@@ -166,9 +197,14 @@ func (o *Object) Remove(ctx context.Context) error {
 	if o.entry.Token == "" {
 		return errors.New("feishu: cannot remove an object without a token")
 	}
+	// Repair mode: no trustworthy history, so no deletion. See state.go.
+	if !o.fs.deletionsAllowed() {
+		return ErrDeletionBlocked
+	}
 	if err := o.fs.client.deleteFile(ctx, o.entry.Token); err != nil {
 		return err
 	}
 	o.fs.resolver.invalidate(o.entry.ParentToken)
+	o.fs.forgetPath(o.remote)
 	return nil
 }

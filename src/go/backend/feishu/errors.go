@@ -17,6 +17,10 @@ const (
 	CodeSizeMismatch   = 1062009  // uploaded size differs from declared size
 	CodeDepthExceeded  = 1062506  // folder depth limit exceeded
 	CodeTooManyNodes   = 1062507  // per-folder node limit exceeded
+	// CodeInternal is what files.delete returned intermittently during real
+	// runs ("unknown error"). The same delete succeeds on retry, so it is a
+	// transient condition rather than a permanent failure.
+	CodeInternal = 1061001
 )
 
 // APIError is a Feishu business-level error (HTTP 200 with code != 0, or an
@@ -37,12 +41,7 @@ func (e *APIError) Error() string {
 
 // Retryable reports whether the call may succeed if repeated.
 func (e *APIError) Retryable() bool {
-	switch e.Code {
-	case CodeRetryable, CodeSizeMismatch:
-		return true
-	default:
-		return false
-	}
+	return codeTable[e.Code].retryable
 }
 
 // MissingScopeError means the application lacks a required Drive scope.
@@ -157,6 +156,31 @@ const (
 	classInvalidArgument
 )
 
+// codeInfo says how a known business code must be handled.
+type codeInfo struct {
+	retryable bool
+	class     classification
+}
+
+// codeTable is the single place a business code gets its meaning.
+//
+// It drives three decisions that must agree: whether businessError turns the
+// code into an APIError, whether APIError.Retryable reports true, and how the
+// transport layer classifies it. Keeping three separate lists here previously
+// caused a real bug: 1061001 was marked retryable in one list but absent from
+// the constructor list, so it never became an APIError and was never retried.
+var codeTable = map[int]codeInfo{
+	CodeTokenInvalid:   {class: classTokenInvalid},
+	CodeForbidden:      {class: classPermission},
+	CodeParentNotFound: {class: classNotFound},
+	CodeParamsError:    {class: classInvalidArgument},
+	CodeDepthExceeded:  {class: classInvalidArgument},
+	CodeTooManyNodes:   {class: classInvalidArgument},
+	CodeRetryable:      {retryable: true, class: classRetryable},
+	CodeSizeMismatch:   {retryable: true, class: classRetryable},
+	CodeInternal:       {retryable: true, class: classRetryable},
+}
+
 // classify inspects err and reports how the transport layer should react.
 func classify(err error) classification {
 	if err == nil {
@@ -165,20 +189,7 @@ func classify(err error) classification {
 
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
-		switch apiErr.Code {
-		case CodeRetryable, CodeSizeMismatch:
-			return classRetryable
-		case CodeTokenInvalid:
-			return classTokenInvalid
-		case CodeForbidden:
-			return classPermission
-		case CodeParentNotFound:
-			return classNotFound
-		case CodeParamsError, CodeDepthExceeded, CodeTooManyNodes:
-			return classInvalidArgument
-		default:
-			return classOther
-		}
+		return codeTable[apiErr.Code].class
 	}
 
 	var scopeErr *MissingScopeError

@@ -26,7 +26,7 @@
 
 | # | Feature | 对应需求 | 里程碑 | 依赖 | 状态 |
 |---|---|---|---|---|---|
-| F1 | 飞书后端：只读 + 小文件上传 | R1, R2, R9, R10, R16 | M1–M2 | 无 | 🔄 主体完成（48/75 任务），**state 尚未实现** |
+| F1 | 飞书后端：只读 + 小文件上传 | R1, R2, R9, R10, R16 | M1–M2 | 无 | 🔄 61/75 任务；state 已实现并实测，剩 Linux 实机验证 |
 | F2 | 分片上传 + 限流 + 重试 | R2, R9 | M3 | F1 | ⬜ |
 | F3 | 删除 / 更新 / 移动 + 删除保护 | R3, R15, A11, A13 | M4 | F1, F2 | ⬜ |
 | F4 | 状态库 + 增量判断 + 冲突检测 | R4, R16, A5 | M4.5 | F3 | ⬜ |
@@ -85,6 +85,12 @@
 | **重复运行不产生同名重复**（连跑 2 次，条目数不变） | ✅ **SC-009** |
 | **修改文件后仍只有 1 条记录，内容已更新** | ✅ **SC-010** |
 | 新建目录树一次成功（自动建父目录，无重试） | ✅ FR-012 |
+| **第二轮零上传**（state 生效） | ✅ `new=0 replaced=0 unchanged=3` |
+| **改一个文件只传一个** | ✅ `replaced=1 unchanged=2` |
+| **mtime 不变、size 变也能识别** | ✅ `replaced=1` |
+| **删掉 state 后降级：全重传且不删除** | ✅ `replaced=3`，云端条目只增不减 **SC-011** |
+| **state 主文件损坏 → 从 `.bak` 恢复并告警** | ✅ |
+| `purge remote:path` 真正删净（含空目录） | ✅ |
 
 **实现过程中发现并修正的问题**
 1. rclone 用 `Mkdir("")` 表示「创建 Fs 的 root」→ 原实现直接返回 nil，导致 `mkdir` 静默无效
@@ -92,35 +98,45 @@
 3. rclone 把 `remote:dir/file.txt` 当作 root → 需要 `NewFs` 检测并返回父目录 + `ErrorIsFile`
 4. 并发列目录惊群：16 个 goroutine 各列一次 → 加 in-flight 合并
 5. `fs.ErrorCantUpdate` 不存在（research R8 已修正为「实现 Update，先传后删」）
+6. **缓存填充覆盖并发 invalidate**：列表请求在 `createFolder` 之前发出，回来时把陈旧快照写回缓存，
+   下一个 `resolveDir` 又报「目录不存在」→ 加入**代际计数**（请求开始时快照 `gen`，返回时 `gen` 已变则不入缓存）
+7. **`isNotFound` 后的重试自相矛盾**：失效后立即重查会 join 到同一个陈旧 inflight 请求 → 新增 `listFresh` 绕过缓存与 inflight
+8. **`Rmdir` 重复拼 `f.root`**：路径变成 `_inc_test/_inc_test`，子目录永远「directory not found」
+9. **`Rmdir` 返回 `ErrorCantRmdir` 让 `purge` 变成 exit=0 的静默 no-op** → 改为「只删空目录」（D18）
+10. **错误码三处清单不一致**：`1061001` 加进了 `Retryable()` 却不在 `businessError` 的构造清单里，
+    于是永远变成 `UncategorizedError`、永远不会重试 → 合并为单一 `codeTable` + 一致性测试（D20）
+11. **并发写 state 抢同一个 `.tmp`**：Windows 上 rename 报「文件被另一进程占用」→ 加 `stateMu` 串行化
+12. **`state.New()` 不带路径**：`Save` 报「cannot save a snapshot with no path」→ 新增 `SetPath`
 
 **尚未实现（因此本 feature 未标 ✅）**
 
 | 缺口 | 对应任务 | 影响 |
 |---|---|---|
-| **state 文件**（影子 mtime + token + CRC32） | T022–T030、T056–T058、T059 | 每轮都会重传未变化的文件（虽不产生重复，但浪费配额）；SC-011 无法验证 |
-| 下载的 `.partial` 原子落盘 | T043 | rclone 自身用临时名+rename 处理，但未在真实验证中确认 |
-| 增量相关单测 | T060–T064 | 依赖 state |
+| 下载相关单测（范围请求 / 404） | T044 | 功能已验证，缺回归测试 |
+| 上传 20MB 边界的单测 | T063 | 已手工实测，缺单测 |
 | 契约清单逐条对齐 | T068–T070 | 部分已完成 |
-| Linux 实机跑验收 | T073 | 只验证了产物生成，未在 Linux 运行 |
+| **Linux 实机跑验收** | T073 | 只验证了产物生成，未在 Linux 运行 |
 | 路线图更新 | T075 | 本次更新 |
 
-> **为什么先交付不含 state 的版本**：用户在 M1 定的验收范围是「只读 + 上传」。
-> 实测证明没有 state 也不会产生重复文件（`Update` 先传后删），
-> 只是未变化的文件会重传。这足以证明数据通道正确，state 作为 M3 的优化项跟进。
+> **state 已完成**（2026-11-06）：从「每轮全量重传」变为「第二轮零上传」，实测 7 轮见 `specs/001-feishu-read-upload/quickstart.md` §9。
+> 降级路径（state 丢失/损坏）会全量重传并产生同名副本，**weftsync 不会自动删这些副本**（D19），
+> 清理手段归入 F3。
 
 **不做（留给后续 feature）**
 - 分片上传（F2）
-- 删除/更新/移动（F3）
-- 增量判断、state（F4）
+- 移动（F3）
+- 冲突检测（F4）
 - UI、定时（F5/F6）
 
 **关键设计决策（来自 PLAN.md / decisions.md）**
 - 不 fork rclone，依赖库方式（D11）
 - `DuplicateFiles = true`（E2 实测同名可共存）
-- `Update()` 返回 `fs.ErrorCantUpdate`（E1 实测无原地更新）
+- `Update()` 先上传后删旧（E1 实测无原地更新；`fs.ErrorCantUpdate` 不存在，见 D13）
+- **增量靠「影子 mtime」**：`Object.ModTime()`/`Size()` 在 token 匹配时返回上次上传时的本地指纹（D16）
 - `Hashes()` 返回 `hash.None`（E3 实测无 hash）
 - `Precision() = 1s`（E5 实测秒级）
 - 建目录需要 `space:folder:create`（实测已获批）
+- state 的锁已实现并测过，但 F1 的 backend 不自动持有（D17）
 
 ---
 
@@ -143,6 +159,21 @@
 3. `max_delete = 50`：待删 51 个时整轮中止，**一个都不删**
 4. `mirror` / `update` / `custom` 三种变体行为符合 FFS 语义
 5. 触发熔断时发系统通知
+
+**F1 遗留进来的一项：清理同名重复副本**
+
+降级模式（state 丢失/损坏）会全量重传，云端因此出现同名重复副本（D19 有完整背景）。
+现在的问题不是「不知道要不要删」，而是**根本删不到**：
+`Fs.List` 把同名条目折叠成一条（`pickRemoteEntry`），`purge` 只看到折叠后的那一个，
+其余副本对 rclone 完全不可见。
+
+要做的：
+1. 提供一个显式入口（命令或 `--feishu-dedupe` 开关），列出云端同名重复
+2. 只删除「**state 记录的 token 之外**的同名副本」，且必须走 FR-035 的二次确认
+3. 没有 state 记录时**拒绝删除**，只报告 —— 不要用「保留最新」这类启发式
+4. 先 `--dry-run` 打印将要删的清单，确认后才执行
+
+验收：造 3 个同名副本 → 删除后只剩 1 个，且剩下的那个 token 与 state 一致。
 
 ---
 
@@ -244,4 +275,4 @@ FFS 用 `sync.ffs_db` 记录双向变更；我们的 state 结构类似，但要
 |---|---|
 | 2026-11-06 | 创建本文件。F1 开始（`speckit-specify`）。A1–A25 需求访谈完成，宪法 v1.0.0 转正，M0 实测完成 |
 | 2026-11-06 | F1 规格链完成：spec（36 FR / 11 SC）→ clarify（3 个问题）→ plan（Constitution Check 全过）→ tasks（75 项） |
-| 2026-11-06 | F1 **M1 主体实现并实测**：`backend/feishu` 只读+上传+建目录可用，48/75 任务完成。真实租户验证 SC-002/004/009/010 通过。**state 未实现**（27 项待做） |
+| 2026-11-06 | F1 **M1 主体实现并实测**：`backend/feishu` 只读+上传+建目录可用，48/75 任务完成。真实租户验证 SC-002/004/009/010 通过。**state 未实现**（27 项待做） || 2026-11-06 | F1 **state 实现并实测**：`state` 包 18 个测试全绿；接进 backend 后实测「第二轮零上传」（7 轮验证见 quickstart §9），SC-011 通过。61/75。同轮修掉 7 个真实缺陷（缓存代际、`Rmdir` 双重拼路径、`purge` 静默 no-op、错误码三处清单不一致、并发写 `.tmp`、`state.New` 无路径、`Repair` 与校验矛盾） |

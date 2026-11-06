@@ -38,7 +38,7 @@ func TestClassify(t *testing.T) {
 }
 
 func TestAPIErrorRetryable(t *testing.T) {
-	retryable := []int{CodeRetryable, CodeSizeMismatch}
+	retryable := []int{CodeRetryable, CodeSizeMismatch, CodeInternal}
 	for _, code := range retryable {
 		e := &APIError{Code: code}
 		if !e.Retryable() {
@@ -54,6 +54,52 @@ func TestAPIErrorRetryable(t *testing.T) {
 		e := &APIError{Code: code}
 		if e.Retryable() {
 			t.Errorf("code %d should NOT be retryable", code)
+		}
+	}
+}
+
+// Regression for a real bug found against the live tenant: files.delete
+// returned 1061001 intermittently, but that code was retryable in one list and
+// missing from the list that decides whether an APIError is built at all. It
+// therefore came out as an UncategorizedError and was never retried by our own
+// client, only by rclone's outer loop.
+func TestInternalCodeBecomesRetryableAPIError(t *testing.T) {
+	c := &client{ts: &tokenSource{appID: "cli_test"}}
+	err := c.businessError("files.delete", CodeInternal, "unknown error", []byte(`{}`), 200)
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error type = %T (%v), want *APIError", err, err)
+	}
+	if !apiErr.Retryable() {
+		t.Error("1061001 must be retryable: the same delete succeeds on retry")
+	}
+	if got := classify(err); got != classRetryable {
+		t.Errorf("classify = %v, want classRetryable", got)
+	}
+}
+
+// Guards the single source of truth: codeTable drives three decisions that must
+// agree, so every entry has to survive a round trip through businessError.
+func TestCodeTableIsSelfConsistent(t *testing.T) {
+	c := &client{ts: &tokenSource{appID: "cli_test"}}
+	if len(codeTable) == 0 {
+		t.Fatal("codeTable is empty")
+	}
+
+	for code, info := range codeTable {
+		err := c.businessError("test", code, "msg", []byte(`{}`), 200)
+
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) {
+			t.Errorf("code %d: businessError returned %T, want *APIError", code, err)
+			continue
+		}
+		if apiErr.Retryable() != info.retryable {
+			t.Errorf("code %d: Retryable() = %v, want %v", code, apiErr.Retryable(), info.retryable)
+		}
+		if got := classify(err); got != info.class {
+			t.Errorf("code %d: classify = %v, want %v", code, got, info.class)
 		}
 	}
 }

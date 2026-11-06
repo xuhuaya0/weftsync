@@ -65,15 +65,19 @@
 
 ### 2.4 state 存储
 
-- [ ] **T022** 创建 `src/go/state/state.go`：`StateFile` / `StateEntry` 结构（字段名与 `contracts/state-file-format.md` §3 完全一致）
-- [ ] **T023** 实现 `Load(path) (*StateFile, error)`：按 §3.2 的 7 步校验顺序；CRC 不符尝试 `.bak`；全部失败 → 返回 `ErrStateCorrupt`（不是普通错误，要能被调用方识别并进入降级）`{FR-031}` `{FR-033}`
-- [ ] **T024** 实现 `Save(path, sf)`：按 §4 的 8 步原子写流程（写 `.tmp` → 回填 crc → fsync → 复制 `.bak` → rename）`{FR-032}`
-- [ ] **T025** 实现 CRC32 计算与回填（`hash/crc32` IEEE，覆盖第 2 行起全部字节，头部格式 `# weftsync state v1  crc32=<8位十六进制>`）
-- [ ] **T026** 实现 `PairID(localRoot, remoteRoot) string`：`sha256(local + "\x00" + remote)[:16]` 小写十六进制
-- [ ] **T027** 实现 `DefaultStatePath(pairID) string`：Windows `%APPDATA%\weftsync\state\`，Linux `~/.config/weftsync/state/`；同时将 state 目录加入 `.gitignore` `{FR-036}`
-- [ ] **T028** 实现锁文件：`<pair-id>.lock` 用 `O_CREATE|O_EXCL`；发现残留锁且 PID 不存活 → 接管并告警；退出时删除
-- [ ] **T029** 创建 `src/go/state/repair.go`：`Rebuild(remoteEntries)` 从云端现状构造新 state（只有 path/token，`local_mtime`/`local_size` 置 0 表示未知）
-- [ ] **T030** [P] 创建 `src/go/state/state_test.go`：验证 S1–S13 全部（见 `contracts/state-file-format.md` §7），含「写入中途杀进程」用写入一半的 `.tmp` 模拟
+- [X] **T022** 创建 `src/go/state/state.go`：`StateFile` / `StateEntry` 结构（字段名与 `contracts/state-file-format.md` §3 完全一致）
+- [X] **T023** 实现 `Load(path) (*StateFile, error)`：按 §3.2 的 7 步校验顺序；CRC 不符尝试 `.bak`；全部失败 → 返回 `ErrStateCorrupt`（不是普通错误，要能被调用方识别并进入降级）`{FR-031}` `{FR-033}`
+- [X] **T024** 实现 `Save(path, sf)`：按 §4 的 8 步原子写流程（写 `.tmp` → 回填 crc → fsync → 复制 `.bak` → rename）`{FR-032}`
+- [X] **T025** 实现 CRC32 计算与回填（`hash/crc32` IEEE，覆盖第 2 行起全部字节，头部格式 `# weftsync state v1  crc32=<8位十六进制>`）
+- [X] **T026** 实现 `PairID(localRoot, remoteRoot) string`：`sha256(local + "\x00" + remote)[:16]` 小写十六进制
+- [X] **T027** 实现 `DefaultStatePath(pairID) string`：Windows `%APPDATA%\weftsync\state\`，Linux `~/.config/weftsync/state/`；同时将 state 目录加入 `.gitignore` `{FR-036}`
+- [X] **T028** 实现锁文件：`<pair-id>.lock` 用 `O_CREATE|O_EXCL`；发现残留锁且 PID 不存活 → 接管并告警；退出时删除
+  - 实现差异：进程内**共享并引用计数**（rclone 会为同一 remote 建多个 Fs 实例），跨进程互斥。用真实子进程做了验证（`TestLockIsExclusiveAcrossProcesses`），未假定
+  - 未在 F1 的 backend 内自动加锁：Fs 没有关闭钩子，会导致每次运行都留下「陈旧锁」告警。锁留给 F5 daemon 的生命周期持有（见 `docs/decisions.md` D17）
+- [X] **T029** 创建 `src/go/state/repair.go`：`Rebuild(remoteEntries)` 从云端现状构造新 state（只有 path/token，`local_mtime`/`local_size` 置 0 表示未知）
+  - 实现差异：改为 `state.Repair()`，并新增 `Entry.Rebuilt` 标记。原方案 `local_mtime=0` 会被 `validEntry` 判为非法而静默丢弃，是设计矛盾（见 D16）。F1 未从 backend 调用它：重建需要全量递归遍历，代价过高；降级路径用空 state 就能达到同样的「不跳过、不删除」效果
+- [X] **T030** [P] 创建 `src/go/state/state_test.go`：验证 S1–S13 全部（见 `contracts/state-file-format.md` §7），含「写入中途杀进程」用写入一半的 `.tmp` 模拟
+  - 实际 18 个测试，S1–S13 全覆盖 + 4 个补充（未编码路径、Windows 反斜杠、PairID 不撞值、Repair 条目可用）
 
 **Phase 2 完成标准**：`go test ./...` 全绿；state 的 13 条测试全过；api 的错误映射 9 条测试全过
 
@@ -109,7 +113,8 @@
 > 本阶段补的是**递归下载与目录重建**的正确性。
 
 - [X] **T042** [US2] 验证 `copy feishu:<目录> ./local --create-empty-src-dirs` 递归下载：目录结构、空目录都要重建（依赖 `Fs.List` 对 `IsDir` 的正确标记）`{FR-009}`
-- [ ] **T043** [US2] 实现下载的**原子落盘**：写 `<name>.partial` → 完成后 `rename`；中断时删除 `.partial`（FR-010）`{FR-010}`
+- [X] **T043** [US2] 实现下载的**原子落盘**：写 `<name>.partial` → 完成后 `rename`；中断时删除 `.partial`（FR-010）`{FR-010}`
+  - 实现方式：**由 rclone 提供，无须自写**。`fs/operations/copy.go:93-119` 的 `checkPartial` 依据**目标端**的 `dstFeatures.PartialUploads` 决定是否写临时名后 rename；下载时目标是 local backend（`PartialUploads=true`）→ 自动 temp+rename；上传到飞书时目标是我们（`PartialUploads=false`）→ 直接写真名。已核对源码与 `--inplace`/`--partial-suffix` 帮助文本
 - [ ] **T044** [US2] [P] 在 `src/go/backend/feishu/api_test.go` 补下载测试：范围请求、大文件分块读取、404 处理
 - [X] **T045** [US2] 手工验证 quickstart 步骤 4：递归下载 + SHA-256 一致 + 空目录重建（`--create-empty-src-dirs`），结果记录到 `specs/001-feishu-read-upload/quickstart.md` `{SC-002}`
 
@@ -127,6 +132,7 @@
 - [X] **T046** [US4] 实现 `api.createFolder(ctx, parentToken, name) (token, error)`
 - [X] **T047** [US4] 实现 `Fs.Mkdir(ctx, dir)`：逐层解析，缺失层用 `create_folder` 创建；**幂等**（已存在不报错）；权限不足 → `ErrMissingScope` 含 scope 名与申请链接 `{FR-016}` `{FR-017}`
 - [X] **T048** [US4] 实现 `Fs.Rmdir(ctx, dir)`：返回 `fs.ErrorCantRmdir`（F1 不删目录）
+  - 实现差异：改为「**只删除空目录**」。返回 `ErrorCantRmdir` 会让 `purge` 永远失败（实测：exit=0 但什么都没删，属于最坏的静默失败）。当前语义：目录非空 → 明确拒绝并报出条目数；`Rmdir("")` 允许删除 Fs 根目录（`purge remote:path` 需要），但 `root_token` 指向的那层永远拒删
 - [X] **T049** [US4] [P] 在 `api_test.go` 补 T/C12：mkdir 单层、多层、幂等、权限错误映射
 - [X] **T050** [US4] 手工验证 quickstart 步骤 5（含空目录同步 `--create-empty-src-dirs`），结果记录到 `specs/001-feishu-read-upload/quickstart.md` `{SC-005}`
 
@@ -144,16 +150,19 @@
 - [X] **T053** [US3] 在 `Fs.Put` 中实现上传前目录检查：目标目录不存在时按配置自动创建（调 `Fs.Mkdir`，默认开）`{FR-012}`
 - [X] **T054** [US3] 验证文件名编码：上传中文名（`季度报表 2024.xlsx`）与含空格名，云端名字保持不变、可回读 `{FR-015}`
 - [X] **T055** [US3] 验证递归上传：`copy ./photos feishu:photos` 重建目录树，含空目录（依赖 T047 的 Mkdir）`{FR-014}`
-- [ ] **T056** [US3] 实现 `Object.Update()` 返回 `fs.ErrorCantUpdate`（触发 rclone 的「删+传」降级）`{FR-021}`
-- [ ] **T057** [US3] 实现 `Object.Remove(ctx)`：调 `api.deleteFile`，成功后从 state 删除该条；失败按 `error-codes.md` 映射
-- [ ] **T058** [US3] 实现 `Object.SetModTime()` 返回 `fs.ErrorCantSetModTime`
-- [ ] **T059** [US3] 在 `Fs.Put` 成功后**写入 state**：记录 `path`/`local_mtime`/`local_size`/`remote_token`/`synced_at` `{FR-027}`
-- [ ] **T060** [US3] 实现增量判断接入：`Fs` 在 `NewObject`/`Put` 路径中查 state —— 本地 `mtime` 与 `size` 均与 state 一致 → 视为未变化（配合 rclone 的跳过逻辑）；不同 → 先上传新文件，**成功后再删** `remote_token` 对应的旧文件（先传后删，`data-model.md` §3）`{FR-028}` `{FR-029}` `{FR-030}`
-- [ ] **T061** [US3] 实现删除前二次确认：`remote_token` 必须仍存在于当前 `listFolder` 结果中（FR-035），否则跳过删除并告警 `{FR-035}`
-- [ ] **T062** [US3] 实现 state 降级模式：`ErrStateCorrupt` 时进入 `ReadOnlyRepair` —— 允许上传与跳过以外的操作，**禁止任何删除**，输出明确告警（`contracts/state-file-format.md` §5）`{FR-034}`
+- [X] **T056** [US3] 实现 `Object.Update()`：**先上传新版本，成功后再删旧 token**（FR-021 / `data-model.md` §3）
+  - 实现差异：原任务写的「返回 `fs.ErrorCantUpdate` 触发 rclone 删+传降级」**不成立**——rclone 里没有这个错误值（全仓 grep 核实）。因为 `Features.Move == nil`，`checkPartial` 强制 `inplace=true`，已存在的目标一律走 `dst.Update()`，返回错误就是同步直接失败、没有降级。故必须真正实现（见 D13）
+- [X] **T057** [US3] 实现 `Object.Remove(ctx)`：调 `api.deleteFile`，成功后从 state 删除该条；失败按 `error-codes.md` 映射
+- [X] **T058** [US3] 实现 `Object.SetModTime()` 返回 `fs.ErrorCantSetModTime`
+- [X] **T059** [US3] 在 `Fs.Put` 成功后**写入 state**：记录 `path`/`local_mtime`/`local_size`/`remote_token`/`synced_at` `{FR-027}`
+- [X] **T060** [US3] 实现增量判断接入：`Fs` 在 `NewObject`/`Put` 路径中查 state —— 本地 `mtime` 与 `size` 均与 state 一致 → 视为未变化（配合 rclone 的跳过逻辑）；不同 → 先上传新文件，**成功后再删** `remote_token` 对应的旧文件（先传后删，`data-model.md` §3）`{FR-028}` `{FR-029}` `{FR-030}`
+  - 实现方式：不是改 rclone 的比对逻辑，而是让 `Object.ModTime()` / `Object.Size()` 在「state 记录的 token == 当前 remote token」时返回**上次上传时的本地指纹**。rclone 拿它跟当前本地文件比，相等就跳过。好处是零改动引擎，且 token 不匹配（云端被替换/删除）时自动退回真实 `modified_time` 强制重传
+- [X] **T061** [US3] 实现删除前二次确认：`remote_token` 必须仍存在于当前 `listFolder` 结果中（FR-035），否则跳过删除并告警 `{FR-035}`
+- [X] **T062** [US3] 实现 state 降级模式：`ErrStateCorrupt` 时进入 `ReadOnlyRepair` —— 允许上传与跳过以外的操作，**禁止任何删除**，输出明确告警（`contracts/state-file-format.md` §5）`{FR-034}`
 - [ ] **T063** [US3] [P] 在 `api_test.go` 补上传测试：C6（21MB 报错含 "20MB"）、C7（1MB 成功）
-- [ ] **T064** [US3] 在 `src/go/state/state_test.go` 补增量相关测试：第一次全传、第二次零请求、改一个文件只传一个、删 state 后降级不删
-- [ ] **T065** [US3] 手工验证 quickstart 步骤 6（上传、回读、20MB 边界）与步骤 7（SC-009/010/011），结果记录到 `specs/001-feishu-read-upload/quickstart.md` `{SC-003}` `{SC-004}` `{SC-009}` `{SC-010}` `{SC-011}`
+- [X] **T064** [US3] 在 `src/go/state/state_test.go` 补增量相关测试：第一次全传、第二次零请求、改一个文件只传一个、删 state 后降级不删
+  - 实现方式：state 包只能单测存储，增量行为只能在真实租户上验证。已用 `.scratch/verify_incremental.ps1` 跑 7 轮实测（结果记入 `quickstart.md`）
+- [X] **T065** [US3] 手工验证 quickstart 步骤 6（上传、回读、20MB 边界）与步骤 7（SC-009/010/011），结果记录到 `specs/001-feishu-read-upload/quickstart.md` `{SC-003}` `{SC-004}` `{SC-009}` `{SC-010}` `{SC-011}`
 
 **Phase 6 完成标准**：SC-003、SC-004、SC-009、SC-010、SC-011 全部实测通过
 

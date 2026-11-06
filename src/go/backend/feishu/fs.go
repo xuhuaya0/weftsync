@@ -7,10 +7,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/hash"
+	"weftsync/state"
 )
 
 // Fs is the Feishu Drive backend instance.
@@ -21,6 +23,23 @@ type Fs struct {
 	client   *client
 	resolver *dirResolver
 	features *fs.Features
+
+	// st is the local snapshot that makes incremental sync possible; nil when
+	// no state_file is configured. See state.go for why it exists.
+	//
+	// rclone runs several transfers in parallel, so every access goes through
+	// stateMu: the entry map cannot be read and written at the same time, and
+	// two concurrent Save calls would fight over the same .tmp file (observed on
+	// Windows as "the file is being used by another process").
+	stateMu  sync.Mutex
+	st       *state.File
+	stPath   string
+	storable bool // false if the snapshot cannot be persisted
+
+	// repair is true when the snapshot had to be rebuilt, which forbids all
+	// deletions for this run (contracts/state-file-format.md §5).
+	repair       bool
+	repairReason string
 }
 
 // newFs builds the backend, validating credentials and the root folder.
@@ -68,6 +87,8 @@ func newFs(ctx context.Context, name, root string, opt *Options) (*Fs, error) {
 				"the chat containing that app, with edit permission",
 			rootToken, err)
 	}
+
+	f.loadState()
 
 	return f, nil
 }
@@ -224,6 +245,9 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 		RawType:     "file",
 	}
 
+	// FR-027: remember what we sent so the next run can skip it.
+	f.recordUpload(ctx, remote, src, int64(len(content)), token)
+
 	return &Object{fs: f, remote: remote, entry: entry}, nil
 }
 
@@ -276,9 +300,101 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 	return nil
 }
 
-// Rmdir is not implemented in F1; deleting directories arrives with F3.
+// Rmdir deletes a directory.
+//
+// dir is relative to the Fs root, exactly like Put's remote path — it must not
+// be prefixed with f.root again (doing so produced "_inc_test/_inc_test" and
+// every rmdir failed with "directory not found").
+//
+// Rmdir("") means "remove the Fs root folder itself", which rclone asks for
+// when purging "remote:path". That is allowed, but only when the folder is
+// already empty: Feishu deletes a folder recursively in a single call, so a
+// non-empty folder would take its contents with it and there is no trash to
+// recover from.
 func (f *Fs) Rmdir(ctx context.Context, dir string) error {
-	return fs.ErrorNotImplemented
+	dir = normalizePath(dir)
+	if !f.deletionsAllowed() {
+		return ErrDeletionBlocked
+	}
+
+	// Rmdir(""): remove the Fs root folder itself. Its token comes straight
+	// from resolveDir(""), because resolveDir works in "relative to the Fs root"
+	// coordinates and cannot express the Fs root's own parent.
+	if dir == "" {
+		if f.root == "" {
+			// The configured root_token folder is the user's drive folder, not
+			// something weftsync created. Never delete it.
+			return errors.New(
+				"feishu: refusing to delete the root folder configured as root_token")
+		}
+		token, err := f.resolver.resolveDir(ctx, "")
+		if err != nil {
+			if isNotFound(err) {
+				return fs.ErrorDirNotFound
+			}
+			return err
+		}
+		children, err := f.resolver.listFresh(ctx, token)
+		if err != nil {
+			return err
+		}
+		if len(children) > 0 {
+			return fmt.Errorf(
+				"feishu: refusing to delete folder %q: it still holds %d item(s). "+
+					"Feishu deletes folders recursively and has no trash",
+				f.root, len(children))
+		}
+		if err := f.client.deleteFolder(ctx, token); err != nil {
+			return err
+		}
+		// The whole subtree just disappeared.
+		f.resolver.invalidateAll()
+		return nil
+	}
+
+	parentPath, name := parentOf(dir)
+	parentToken, err := f.resolver.resolveDir(ctx, parentPath)
+	if err != nil {
+		if isNotFound(err) {
+			return fs.ErrorDirNotFound
+		}
+		return err
+	}
+
+	// Fresh listing: the caller may have deleted the children moments ago and a
+	// cached answer would still show them.
+	entries, err := f.resolver.listFresh(ctx, parentToken)
+	if err != nil {
+		return err
+	}
+
+	token := ""
+	for _, e := range entries {
+		if e.IsDir && e.Name == name {
+			token = e.Token
+			break
+		}
+	}
+	if token == "" {
+		return fs.ErrorDirNotFound
+	}
+
+	children, err := f.resolver.listFresh(ctx, token)
+	if err != nil {
+		return err
+	}
+	if len(children) > 0 {
+		return fmt.Errorf(
+			"feishu: refusing to delete folder %q: it still holds %d item(s). "+
+				"Feishu deletes folders recursively and has no trash",
+			dir, len(children))
+	}
+
+	if err := f.client.deleteFolder(ctx, token); err != nil {
+		return err
+	}
+	f.resolver.invalidate(parentToken)
+	return nil
 }
 
 // tokenStillPresent reports whether token is among the current children of the

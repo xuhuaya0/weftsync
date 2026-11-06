@@ -17,9 +17,17 @@
 | `1061045` | 可重试 | `ErrRetryable` | ✅ 退避 | `fserrors.RetryError` | （内部重试；超限后）「飞书接口限流，已重试 N 次仍失败，请稍后再试」 |
 | `1061002` | 参数错误 | `ErrInvalidArgument` | ❌ | `fs.ErrorInvalidArgument` | 「请求参数不被接受：`<详情>`」（**含 >20MB 情形**） |
 | `1062009` | size 不一致 | `ErrSizeMismatch` | ✅ 一次 | `fserrors.RetryError` | 「上传后大小校验不一致，已重试」 |
+| `1061001` | 内部错误（msg 为 "unknown error"） | `ErrInternal` | ✅ 退避 | `fserrors.RetryError` | （内部重试）实测：`files.delete` 间歇返回，同一条删除重试即成功。**2026-11-06 实测新增** |
 | `1062506` | 超目录深度 | `ErrDepthExceeded` | ❌ | `fs.ErrorInvalidArgument` | 「目录层级超过飞书上限（15 层）：`<路径>`」 |
 | `1062507` | 超单层节点 | `ErrTooManyNodes` | ❌ | `fs.ErrorInvalidArgument` | 「目录 `<路径>` 下条目数超过飞书上限（1500），请拆分目录」 |
 | 其他 | — | `ErrUnknown` | ❌（保守） | 原样包装 | 「飞书返回未预期的错误 code=`<n>`：`<msg>`」 |
+
+> **实现约束（`docs/decisions.md` D20）**：本表在代码里只有**一份**载体 ——
+> `src/go/backend/feishu/errors.go` 的 `codeTable`。它同时驱动三件事：
+> ①是否包装成 `APIError` ②`Retryable()` ③`classify()` 的重试分类。
+> 往表里加码时这三处自动一致，不需要改三个地方。
+> 曾有真实缺陷：`1061001` 只加进了 `Retryable()` 的清单，
+> 于是它永远变成 `UncategorizedError`、永远不会被重试。
 
 **HTTP 层错误**
 

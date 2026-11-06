@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -111,6 +112,10 @@ type dirResolver struct {
 	cache map[string][]remoteEntry // folder token -> entries
 	// inflight merges concurrent requests for the same folder.
 	inflight map[string]*listCall
+	// gen is bumped by every invalidate. A listing that started before the bump
+	// must not store its result, otherwise its stale snapshot would silently
+	// resurrect the entry that invalidate just removed.
+	gen uint64
 }
 
 // listCall tracks one in-flight listing so concurrent callers can share it.
@@ -149,13 +154,16 @@ func (r *dirResolver) listCached(ctx context.Context, token string) ([]remoteEnt
 	}
 	call := &listCall{done: make(chan struct{})}
 	r.inflight[token] = call
+	startedAt := r.gen
 	r.mu.Unlock()
 
 	entries, err := r.client.listFolder(ctx, token)
 
 	r.mu.Lock()
 	delete(r.inflight, token)
-	if err == nil {
+	// Only cache when nothing was invalidated while we were waiting: our result
+	// predates that write and would hide it.
+	if err == nil && r.gen == startedAt {
 		r.cache[token] = entries
 	}
 	call.entries, call.err = entries, err
@@ -165,10 +173,27 @@ func (r *dirResolver) listCached(ctx context.Context, token string) ([]remoteEnt
 	return entries, err
 }
 
+// listFresh bypasses both the cache and any in-flight request.
+//
+// Used to confirm a "not found" result: the earlier listing may predate a
+// concurrent createFolder, and joining its in-flight call would repeat the same
+// stale answer.
+func (r *dirResolver) listFresh(ctx context.Context, token string) ([]remoteEntry, error) {
+	entries, err := r.client.listFolder(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	r.cache[token] = entries
+	r.mu.Unlock()
+	return entries, nil
+}
+
 // invalidate drops one folder from the cache (after a write mutates it).
 func (r *dirResolver) invalidate(token string) {
 	r.mu.Lock()
 	delete(r.cache, token)
+	r.gen++
 	r.mu.Unlock()
 }
 
@@ -176,6 +201,7 @@ func (r *dirResolver) invalidate(token string) {
 func (r *dirResolver) invalidateAll() {
 	r.mu.Lock()
 	r.cache = make(map[string][]remoteEntry)
+	r.gen++
 	r.mu.Unlock()
 }
 
@@ -185,24 +211,49 @@ func (r *dirResolver) invalidateAll() {
 // An empty path means "the Fs root", which still has to be walked when the
 // remote was created below root_token (rclone passes e.g. root="a/b" when the
 // user runs `mkdir remote:a/b`).
+//
+// A "not found" answer is re-checked once against a fresh listing. rclone
+// uploads several files in parallel, so a folder created a moment ago by
+// another goroutine may be missing from a listing that was already in flight.
 func (r *dirResolver) resolveDir(ctx context.Context, rel string) (string, error) {
-	return r.walk(ctx, joinPath(r.rootPath, rel))
+	full := joinPath(r.rootPath, rel)
+
+	token, err := r.walk(ctx, full)
+	if err == nil {
+		return token, nil
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != CodeParentNotFound {
+		return "", err
+	}
+	return r.walkWith(ctx, full, r.listFresh)
 }
 
 // walk starts at rootToken and follows each segment of full.
 //
 // full is relative to rootToken and must already be normalised.
 func (r *dirResolver) walk(ctx context.Context, full string) (string, error) {
+	return r.walkWith(ctx, full, r.listCached)
+}
+
+// walkWith is walk with a pluggable lister, so a miss can be confirmed against
+// an uncached listing.
+func (r *dirResolver) walkWith(
+	ctx context.Context,
+	full string,
+	list func(context.Context, string) ([]remoteEntry, error),
+) (string, error) {
 	if full == "" {
 		return r.rootToken, nil
 	}
 
 	current := r.rootToken
+	walked := ""
 	for _, segment := range strings.Split(full, "/") {
 		if segment == "" {
 			continue
 		}
-		entries, err := r.listCached(ctx, current)
+		entries, err := list(ctx, current)
 		if err != nil {
 			return "", err
 		}
@@ -215,14 +266,24 @@ func (r *dirResolver) walk(ctx context.Context, full string) (string, error) {
 		}
 		if found == "" {
 			return "", &APIError{
-				Code:  CodeParentNotFound,
-				Msg:   fmt.Sprintf("folder %q not found under %q", segment, full),
+				Code: CodeParentNotFound,
+				Msg: fmt.Sprintf("folder %q not found inside %q",
+					segment, orRoot(walked)),
 				Where: "resolveDir",
 			}
 		}
 		current = found
+		walked = joinPath(walked, segment)
 	}
 	return current, nil
+}
+
+// orRoot renders an empty path readably in error messages.
+func orRoot(p string) string {
+	if p == "" {
+		return "the remote root"
+	}
+	return p
 }
 
 // resolveEntry looks up a single path and reports the matching entry.

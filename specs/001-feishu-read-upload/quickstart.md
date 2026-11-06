@@ -315,3 +315,35 @@ ls ~/.config/weftsync/state/
 | □ | 缺 scope 错误含 scope 名与链接 | US1 / SC-006 |
 | □ | `go test ./...` 全绿 | 单元 |
 | □ | Linux 跑通上述全部 | SC-007 |
+
+---
+
+## 9. 增量同步实测记录（2026-11-06，真实租户）
+
+**环境**：Windows，`weftsync.exe` 由 `src/go` 构建，三个文件（`a.txt` / `b.txt` / `sub/c.txt`）+ 一个空目录 `empty/`，
+`--feishu-state-file .scratch/inc/state/aaaaaaaabbbbbbbb.state.json`。
+
+| 轮次 | 操作 | `new` | `replaced` | `unchanged` 跳过 | 重复告警 | 结论 |
+|---|---|---|---|---|---|---|
+| 1 | 首次同步 | 3 | 0 | 0 | 0 | ✅ 全传 |
+| 2 | 什么都不改 | 0 | **0** | **3** | 0 | ✅ **零上传，增量生效** |
+| 3 | 改 `a.txt`（mtime 变化） | 0 | 1 | 2 | 0 | ✅ 只传一个 |
+| 4 | 改 `b.txt`（**mtime 不变**，size 变） | 0 | 1 | 2 | 1 | ✅ size 兜住了 mtime 被保留的改动 |
+| 5 | 删掉 state 文件 | 0 | 3 | 0 | 2 | ✅ 降级为全重传、**不删除**，重复副本由此产生 |
+| 6 | 把 state 写成垃圾 | 0 | 1 | 2 | 3 | ✅ 主文件坏 → 从 `.bak` 恢复并告警 |
+| 7 | 恢复正常 | 0 | **0** | **3** | 3 | ✅ 回到增量 |
+
+**SC-011 结论**：删除 state 后重跑，云端条目**只增不减**（run 5 里 `replaced=3` 全是新增 + 删旧，
+但因为降级禁止删除，旧副本全部保留）。这符合 `contracts/state-file-format.md` §5 的约定：
+**宁可多传（可清理）也不误删（不可恢复）**。
+
+**run 5 暴露的真实缺口**：降级重传会产生同名重复副本，而 `Fs.List` 会把同名条目折叠成一条
+（`pickRemoteEntry`），因此 `purge` 只能删掉折叠后的那一个，**其余副本 rclone 看不到、删不掉**。
+`weftsync` 不会自动删它们（无法证明是自己传的，删错不可恢复）。
+清理手段与实现方案归入 F3，见 `docs/roadmap.md`。
+
+**FR-010（下载原子落盘）判定**：不需要自己实现。rclone 的 `fs/operations/copy.go:93-119`
+`checkPartial` 依据**目标端**的 `dstFeatures.PartialUploads` 决定是否「写临时名 → rename」：
+下载时目标是 local backend（`PartialUploads=true`）→ 自动 temp+rename；
+上传到飞书时目标是我们（`PartialUploads=false`）→ 直接写真名（飞书没有 rename API）。
+`--inplace` 默认 false，`--partial-suffix` 默认 `.partial`。

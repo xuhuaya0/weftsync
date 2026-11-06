@@ -207,27 +207,27 @@ func (c *client) once(ctx context.Context, r request) (*result, error) {
 }
 
 // businessError maps a Feishu code to a typed error.
+//
+// Only codes listed in codeTable are turned into APIError. Everything else
+// keeps its Feishu log id in an UncategorizedError, because guessing how to
+// handle an unknown code could silently retry a permanent failure.
 func (c *client) businessError(where string, code int, msg string, raw []byte, status int) error {
-	switch code {
-	case CodeMissingScope:
+	if code == CodeMissingScope {
 		return &MissingScopeError{
 			Scopes: scopesFromMessage(msg),
 			AppID:  c.ts.appID,
 			Where:  where,
 			RawMsg: msg,
 		}
-	case CodeTokenInvalid:
+	}
+	if _, known := codeTable[code]; known {
 		return &APIError{Code: code, Msg: msg, Where: where}
-	case CodeForbidden, CodeParentNotFound, CodeRetryable,
-		CodeParamsError, CodeSizeMismatch, CodeDepthExceeded, CodeTooManyNodes:
-		return &APIError{Code: code, Msg: msg, Where: where}
-	default:
-		return &UncategorizedError{
-			Code:  code,
-			Msg:   msg,
-			Where: where,
-			LogID: logIDFromBody(raw),
-		}
+	}
+	return &UncategorizedError{
+		Code:  code,
+		Msg:   msg,
+		Where: where,
+		LogID: logIDFromBody(raw),
 	}
 }
 

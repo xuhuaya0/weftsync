@@ -83,3 +83,10 @@ docs/probe/
 *.pfx
 id_rsa*
 id_ed25519*
+
+# incremental sync state (holds cloud tokens; machine-local data)
+# default location is %APPDATA%\weftsync\state\, never commit it
+*.state.json
+*.state.json.bak
+*.state.json.tmp
+*.state.lock
