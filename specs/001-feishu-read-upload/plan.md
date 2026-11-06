@@ -14,7 +14,7 @@
 技术要点：
 - 以**依赖库**方式使用 rclone（不 fork），本仓库只提供 `main.go` + `backend/feishu`
 - `Size()` 返回 -1、`Hashes()` 返回 none（飞书能力所限，实测确认）
-- `Update()` 返回 `fs.ErrorCantUpdate`，让 rclone 降级为「删+传」，配合 state 精确指定删哪一份
+- `Update()` 实现为「先上传新内容、再删除旧 token」。rclone 因 `Features.Move == nil` 强制 inplace，目标存在时必然调 `Update`；若返回错误则同步直接失败（不存在自动降级）
 - 增量判断完全由自建 state 负责（`mtime + size + token`），不依赖 rclone 默认比较
 - state 用 CRC32 校验 + 原子写 + `.bak`，损坏时降级为「只传不删」
 
@@ -75,7 +75,7 @@
 | **V** | **边界与最小权限** | 只申请 `space:folder:create` + 文件类 scope，**不申请 `drive:drive`**（实测证明不需要）；凭据只从环境变量读；写操作限定在指定 folder_token 下；删除前二次确认 token 存在 | ✅ 通过 |
 | **VI** | **可复现** | 构建脚本 `scripts/build-go.ps1`（已存在，`-Target both`）；无手工步骤；测试可用 `go test ./...` 一条命令跑；state 目录含在 `.gitignore` | ✅ 通过 |
 | **VII** | **渐进交付** | F1 只做只读+上传+最小 state；分片（F2）、完整删除策略（F3）、冲突检测（F4）明确排除；`docs/roadmap.md` 记录 F1–F10 与依赖关系 | ✅ 通过 |
-| **VIII** | **改动前先理解** | 复用 rclone 的 `operations.Equal` / `ErrorCantUpdate` 降级机制前，已读源码确认行为（E6 探针 + `operations.go`）；不修改 rclone 内部代码 | ✅ 通过 |
+| **VIII** | **改动前先理解** | 复用 rclone 的 `operations.Equal` / `operations.Copy` 行为前，已读源码确认（E6 探针 + `operations.go` + `copy.go`）；发现 `fs.ErrorCantUpdate` 不存在并已修正设计（research R8）；不修改 rclone 内部代码 | ✅ 通过 |
 
 **项目约束对照**
 
@@ -190,7 +190,7 @@ src/go/
 | V 最小权限 | ✅ 契约中明确「不申请 drive:drive」 |
 | VI 可复现 | ✅ quickstart 步骤全部为命令，无手工操作 |
 | VII 渐进交付 | ✅ 实现顺序按可验证里程碑切分（读到写再到增量） |
-| VIII 改动前理解 | ✅ R8 说明了为何用 `ErrorCantUpdate` 而非自己实现删+传 |
+| VIII 改动前理解 | ✅ R8 记录了正确实现 `Update` 而非返回错误的源码依据 |
 
 **复检结论：仍然 PASS。**
 

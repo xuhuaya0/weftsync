@@ -24,13 +24,13 @@
 
 **目标**：仓库骨架能编译、能跑，`feishu` 已注册。
 
-- [ ] **T001** 在 `src/go/go.mod` 确认 module 名为 `weftsync`、依赖 `github.com/rclone/rclone v1.71.2`，`go.sum` 完整
-- [ ] **T002** [P] 创建 `src/go/backend/feishu/feishu.go`：定义 `init()` 中 `fs.Register` 注册 `feishu`，`Name`/`Description`/`NewFs`/`Options` 齐备
-- [ ] **T003** [P] 创建 `src/go/backend/feishu/feishu.go` 的 `Options`：`app_id`、`app_secret`（`IsPassword: true`）、`root_token`、`state_file`、`base_url`（默认 `https://open.feishu.cn`），与 `contracts/backend-interface.md` §5 一致
-- [ ] **T004** `main.go` 匿名导入 `_ "weftsync/backend/feishu"`，`go build` 通过
-- [ ] **T005** 验证：`go build -o .scratch/w.exe .` → `.scratch/w.exe help backends` 输出含 `feishu`
-- [ ] **T006** [P] 创建 `src/go/backend/feishu/errors.go`：定义 `ErrMissingScope`、`ErrTokenInvalid`、`ErrForbidden`、`ErrParentNotFound`、`ErrRetryable`、`ErrInvalidArgument`、`ErrSizeMismatch`、`ErrDepthExceeded`、`ErrTooManyNodes`、`ErrUnknown` 十个错误类型（`contracts/error-codes.md` §1）
-- [ ] **T007** [P] 创建 `src/go/backend/feishu/errors_test.go`：验证 E1–E9 中的映射分类（先测类型与 `IsRetryable()` 判定，不测文案）
+- [X] **T001** 在 `src/go/go.mod` 确认 module 名为 `weftsync`、依赖 `github.com/rclone/rclone v1.71.2`，`go.sum` 完整
+- [X] **T002** [P] 创建 `src/go/backend/feishu/feishu.go`：定义 `init()` 中 `fs.Register` 注册 `feishu`，`Name`/`Description`/`NewFs`/`Options` 齐备
+- [X] **T003** [P] 创建 `src/go/backend/feishu/feishu.go` 的 `Options`：`app_id`、`app_secret`（`IsPassword: true`）、`root_token`、`state_file`、`base_url`（默认 `https://open.feishu.cn`），与 `contracts/backend-interface.md` §5 一致
+- [X] **T004** `main.go` 匿名导入 `_ "weftsync/backend/feishu"`，`go build` 通过
+- [X] **T005** 验证：`go build -o .scratch/w.exe .` → `.scratch/w.exe help backends` 输出含 `feishu`
+- [X] **T006** [P] 创建 `src/go/backend/feishu/errors.go`：定义 `ErrMissingScope`、`ErrTokenInvalid`、`ErrForbidden`、`ErrParentNotFound`、`ErrRetryable`、`ErrInvalidArgument`、`ErrSizeMismatch`、`ErrDepthExceeded`、`ErrTooManyNodes`、`ErrUnknown` 十个错误类型（`contracts/error-codes.md` §1）
+- [X] **T007** [P] 创建 `src/go/backend/feishu/errors_test.go`：验证 E1–E9 中的映射分类（先测类型与 `IsRetryable()` 判定，不测文案）
 
 **Phase 1 完成标准**：`go build ./...` 与 `go test ./backend/feishu -run TestErrors` 均通过
 
@@ -42,26 +42,26 @@
 
 ### 2.1 认证（auth）
 
-- [ ] **T008** 创建 `src/go/backend/feishu/auth.go`：`TokenSource` 结构，持有 `appID`/`appSecret`/`baseURL`/缓存 token/过期时间
-- [ ] **T009** 实现 `TokenSource.Token(ctx)`：缓存有效（剩余 > 30 分钟）直接返回；否则 `POST /open-apis/auth/v3/tenant_access_token/internal` 刷新。并发安全（`sync.Mutex`）`{FR-002}` `{FR-003}`
-- [ ] **T010** 实现 `TokenSource.Invalidate()`：401 时调用，强制下次刷新
-- [ ] **T011** [P] 创建 `src/go/backend/feishu/auth_test.go`：用 `httptest` 模拟 token 端点，验证 ①首次获取 ②缓存复用（第二次不发请求）③接近过期时刷新 ④`Invalidate` 后重新获取
+- [X] **T008** 创建 `src/go/backend/feishu/auth.go`：`TokenSource` 结构，持有 `appID`/`appSecret`/`baseURL`/缓存 token/过期时间
+- [X] **T009** 实现 `TokenSource.Token(ctx)`：缓存有效（剩余 > 30 分钟）直接返回；否则 `POST /open-apis/auth/v3/tenant_access_token/internal` 刷新。并发安全（`sync.Mutex`）`{FR-002}` `{FR-003}`
+- [X] **T010** 实现 `TokenSource.Invalidate()`：401 时调用，强制下次刷新
+- [X] **T011** [P] 创建 `src/go/backend/feishu/auth_test.go`：用 `httptest` 模拟 token 端点，验证 ①首次获取 ②缓存复用（第二次不发请求）③接近过期时刷新 ④`Invalidate` 后重新获取
 
 ### 2.2 HTTP 传输层（transport）
 
-- [ ] **T012** 创建 `src/go/backend/feishu/api.go`：`client` 结构封装 `http.Client` + `TokenSource` + `baseURL`
-- [ ] **T013** 实现 `client.do(ctx, method, path, body, contentType, query)`：自动加 `Authorization: Bearer`，解析响应 JSON，把飞书 `code != 0` 转换为 `errors.go` 中对应错误（`contracts/error-codes.md` §1 全表）`{FR-022}` `{FR-024}`
-- [ ] **T014** 实现重试逻辑：仅对 `IsRetryable()` 为 true 的错误重试，最多 3 次，指数退避 1s/2s/4s + ±20% 抖动，单次上限 10s（`contracts/error-codes.md` §2）`{FR-023}`
-- [ ] **T015** 实现 `ErrTokenInvalid` 特例：刷新 token 后重试**一次**，不进入退避循环
-- [ ] **T016** [P] 创建 `src/go/backend/feishu/api_test.go`：httptest 验证 ①各种错误码正确映射 ②5xx 重试并递增间隔 ③401 刷新后成功 ④不可重试错误立即返回 ⑤所有错误信息不含 token/secret（E9）
+- [X] **T012** 创建 `src/go/backend/feishu/api.go`：`client` 结构封装 `http.Client` + `TokenSource` + `baseURL`
+- [X] **T013** 实现 `client.do(ctx, method, path, body, contentType, query)`：自动加 `Authorization: Bearer`，解析响应 JSON，把飞书 `code != 0` 转换为 `errors.go` 中对应错误（`contracts/error-codes.md` §1 全表）`{FR-022}` `{FR-024}`
+- [X] **T014** 实现重试逻辑：仅对 `IsRetryable()` 为 true 的错误重试，最多 3 次，指数退避 1s/2s/4s + ±20% 抖动，单次上限 10s（`contracts/error-codes.md` §2）`{FR-023}`
+- [X] **T015** 实现 `ErrTokenInvalid` 特例：刷新 token 后重试**一次**，不进入退避循环
+- [X] **T016** [P] 创建 `src/go/backend/feishu/api_test.go`：httptest 验证 ①各种错误码正确映射 ②5xx 重试并递增间隔 ③401 刷新后成功 ④不可重试错误立即返回 ⑤所有错误信息不含 token/secret（E9）
 
 ### 2.3 路径解析（path）
 
-- [ ] **T017** 创建 `src/go/backend/feishu/path.go`：`pathResolver` 结构，持有 `rootToken` + 单次运行内的 `map[folderToken][]RemoteEntry` 缓存
-- [ ] **T018** 实现 `ResolveDir(ctx, logicalPath) (folderToken, error)`：逐层解析，用缓存避免重复列目录；任一层不存在 → `fs.ErrorDirNotFound` `{FR-005}`
-- [ ] **T019** 实现 `ResolveFile(ctx, logicalPath) (RemoteEntry, error)`：解析父目录后在列表中按名字查找（含同名收敛规则，见 T023）
-- [ ] **T020** 实现路径规范化：`\` → `/`、去前导 `/`、无尾随 `/`、保留大小写、不做 Unicode 归一化（`data-model.md` §2.3）`{FR-026}`
-- [ ] **T021** [P] 创建 `src/go/backend/feishu/path_test.go`：验证 ①单层 ②多层 ③不存在 ④中文/空格 ⑤Windows 反斜杠 ⑥缓存命中（用 mock 计数调用次数）
+- [X] **T017** 创建 `src/go/backend/feishu/path.go`：`pathResolver` 结构，持有 `rootToken` + 单次运行内的 `map[folderToken][]RemoteEntry` 缓存
+- [X] **T018** 实现 `ResolveDir(ctx, logicalPath) (folderToken, error)`：逐层解析，用缓存避免重复列目录；任一层不存在 → `fs.ErrorDirNotFound` `{FR-005}`
+- [X] **T019** 实现 `ResolveFile(ctx, logicalPath) (RemoteEntry, error)`：解析父目录后在列表中按名字查找（含同名收敛规则，见 T023）
+- [X] **T020** 实现路径规范化：`\` → `/`、去前导 `/`、无尾随 `/`、保留大小写、不做 Unicode 归一化（`data-model.md` §2.3）`{FR-026}`
+- [X] **T021** [P] 创建 `src/go/backend/feishu/path_test.go`：验证 ①单层 ②多层 ③不存在 ④中文/空格 ⑤Windows 反斜杠 ⑥缓存命中（用 mock 计数调用次数）
 
 ### 2.4 state 存储
 
@@ -84,17 +84,17 @@
 **故事目标**：`lsf` / `lsd` / `lsl` / `lsjson` 能正确列出飞书目录。
 **独立测试**：用 quickstart 步骤 3 验证；不依赖上传能力。
 
-- [ ] **T031** [US1] 创建 `src/go/backend/feishu/fs.go`：`Fs` 结构（`rootToken`、`rootPath`、`client`、`resolver`、能力声明）
-- [ ] **T032** [US1] 实现 `Fs.NewFs(ctx, name, root, config)`：读配置 → 凭据（配置项优先，回落环境变量，皆无则报错指明缺哪项）→ 验证 root token（调 `metas.batch_query` 确认存在）→ 构造 `Fs` `{FR-001}`
-- [ ] **T033** [US1] 实现 `Fs.Precision()` 返回 `time.Second`、`Hashes()` 返回 `hash.Set(hash.None)` `{FR-019}` `{FR-020}`
-- [ ] **T034** [US1] 实现 `Fs.Features()`：`DuplicateFiles=true`、`CanHaveEmptyDirectories=true`、其余按 `contracts/backend-interface.md` §1.3 `{FR-018}`
-- [ ] **T035** [US1] 实现 `api.listFolder(ctx, folderToken) ([]RemoteEntry, error)`：`page_size=200`，跟 `has_more`/`next_page_token` 翻页；单目录超 2000 条报 `ErrTooManyNodes`
-- [ ] **T036** [US1] 实现 `Fs.List(ctx, dir)`：`ResolveDir` → `listFolder` → **按名分组收敛**（同名多条时：state 中有记录则选 token 匹配的，否则选 `created_time` 最新的，DEBUG 日志记录）→ 转成 `fs.DirEntries` `{FR-004}` `{FR-006}` `{FR-007}`
-- [ ] **T037** [US1] 创建 `src/go/backend/feishu/object.go`：`Object` 结构（`fs`/`remote`/`entry`），实现 `Fs()`/`Remote()`/`String()`/`Size()`(返回 -1)/`ModTime()`/`Hash()`(返回 "")
-- [ ] **T038** [US1] 实现 `Fs.NewObject(ctx, remote)`：`ResolveFile` → 构造 `Object`；不存在 → `fs.ErrorObjectNotFound`；是目录 → `fs.ErrorIsDir`
-- [ ] **T039** [US1] 实现 `Object.Open(ctx, options)`：调 `api.download`，把 `fs.RangeOption`/`fs.SeekOption` 转为 HTTP `Range` 头；服务端不支持 Range（返回 200）时本地丢弃前缀 `{FR-008}`
-- [ ] **T040** [US1] 创建 `src/go/backend/feishu/api_test.go` 中的 list/download 部分：C1（空目录）、C2（分页 250 条）、C3（同名收敛）、C4（不存在）、C5（是目录）、C8（Range 读 100 字节）
-- [ ] **T041** [US1] 手工验证 quickstart 步骤 3（lsf/lsd/lsl/lsjson）与步骤 4（下载 + SHA-256 比对），结果记录到 `specs/001-feishu-read-upload/quickstart.md` 的验收清单 `{SC-001}` `{SC-006}` `{SC-008}`
+- [X] **T031** [US1] 创建 `src/go/backend/feishu/fs.go`：`Fs` 结构（`rootToken`、`rootPath`、`client`、`resolver`、能力声明）
+- [X] **T032** [US1] 实现 `Fs.NewFs(ctx, name, root, config)`：读配置 → 凭据（配置项优先，回落环境变量，皆无则报错指明缺哪项）→ 验证 root token（调 `metas.batch_query` 确认存在）→ 构造 `Fs` `{FR-001}`
+- [X] **T033** [US1] 实现 `Fs.Precision()` 返回 `time.Second`、`Hashes()` 返回 `hash.Set(hash.None)` `{FR-019}` `{FR-020}`
+- [X] **T034** [US1] 实现 `Fs.Features()`：`DuplicateFiles=true`、`CanHaveEmptyDirectories=true`、其余按 `contracts/backend-interface.md` §1.3 `{FR-018}`
+- [X] **T035** [US1] 实现 `api.listFolder(ctx, folderToken) ([]RemoteEntry, error)`：`page_size=200`，跟 `has_more`/`next_page_token` 翻页；单目录超 2000 条报 `ErrTooManyNodes`
+- [X] **T036** [US1] 实现 `Fs.List(ctx, dir)`：`ResolveDir` → `listFolder` → **按名分组收敛**（同名多条时：state 中有记录则选 token 匹配的，否则选 `created_time` 最新的，DEBUG 日志记录）→ 转成 `fs.DirEntries` `{FR-004}` `{FR-006}` `{FR-007}`
+- [X] **T037** [US1] 创建 `src/go/backend/feishu/object.go`：`Object` 结构（`fs`/`remote`/`entry`），实现 `Fs()`/`Remote()`/`String()`/`Size()`(返回 -1)/`ModTime()`/`Hash()`(返回 "")
+- [X] **T038** [US1] 实现 `Fs.NewObject(ctx, remote)`：`ResolveFile` → 构造 `Object`；不存在 → `fs.ErrorObjectNotFound`；是目录 → `fs.ErrorIsDir`
+- [X] **T039** [US1] 实现 `Object.Open(ctx, options)`：调 `api.download`，把 `fs.RangeOption`/`fs.SeekOption` 转为 HTTP `Range` 头；服务端不支持 Range（返回 200）时本地丢弃前缀 `{FR-008}`
+- [X] **T040** [US1] 创建 `src/go/backend/feishu/api_test.go` 中的 list/download 部分：C1（空目录）、C2（分页 250 条）、C3（同名收敛）、C4（不存在）、C5（是目录）、C8（Range 读 100 字节）
+- [X] **T041** [US1] 手工验证 quickstart 步骤 3（lsf/lsd/lsl/lsjson）与步骤 4（下载 + SHA-256 比对），结果记录到 `specs/001-feishu-read-upload/quickstart.md` 的验收清单 `{SC-001}` `{SC-006}` `{SC-008}`
 
 **Phase 3 完成标准**：C1–C5、C8 通过；quickstart 步骤 3、4 实测通过
 
@@ -108,10 +108,10 @@
 > 注：US2 依赖 US1 的 `List`/`Open`。下载路径本身在 US1 已实现（`Object.Open`），
 > 本阶段补的是**递归下载与目录重建**的正确性。
 
-- [ ] **T042** [US2] 验证 `copy feishu:<目录> ./local --create-empty-src-dirs` 递归下载：目录结构、空目录都要重建（依赖 `Fs.List` 对 `IsDir` 的正确标记）`{FR-009}`
+- [X] **T042** [US2] 验证 `copy feishu:<目录> ./local --create-empty-src-dirs` 递归下载：目录结构、空目录都要重建（依赖 `Fs.List` 对 `IsDir` 的正确标记）`{FR-009}`
 - [ ] **T043** [US2] 实现下载的**原子落盘**：写 `<name>.partial` → 完成后 `rename`；中断时删除 `.partial`（FR-010）`{FR-010}`
 - [ ] **T044** [US2] [P] 在 `src/go/backend/feishu/api_test.go` 补下载测试：范围请求、大文件分块读取、404 处理
-- [ ] **T045** [US2] 手工验证 quickstart 步骤 4：递归下载 + SHA-256 一致 + 空目录重建（`--create-empty-src-dirs`），结果记录到 `specs/001-feishu-read-upload/quickstart.md` `{SC-002}`
+- [X] **T045** [US2] 手工验证 quickstart 步骤 4：递归下载 + SHA-256 一致 + 空目录重建（`--create-empty-src-dirs`），结果记录到 `specs/001-feishu-read-upload/quickstart.md` `{SC-002}`
 
 **Phase 4 完成标准**：SC-002（SHA-256 一致）；递归下载结构一致
 
@@ -124,11 +124,11 @@
 
 > 先做 US4 再做 US3：上传需要目录存在，建目录是上传的前置能力。
 
-- [ ] **T046** [US4] 实现 `api.createFolder(ctx, parentToken, name) (token, error)`
-- [ ] **T047** [US4] 实现 `Fs.Mkdir(ctx, dir)`：逐层解析，缺失层用 `create_folder` 创建；**幂等**（已存在不报错）；权限不足 → `ErrMissingScope` 含 scope 名与申请链接 `{FR-016}` `{FR-017}`
-- [ ] **T048** [US4] 实现 `Fs.Rmdir(ctx, dir)`：返回 `fs.ErrorCantRmdir`（F1 不删目录）
-- [ ] **T049** [US4] [P] 在 `api_test.go` 补 T/C12：mkdir 单层、多层、幂等、权限错误映射
-- [ ] **T050** [US4] 手工验证 quickstart 步骤 5（含空目录同步 `--create-empty-src-dirs`），结果记录到 `specs/001-feishu-read-upload/quickstart.md` `{SC-005}`
+- [X] **T046** [US4] 实现 `api.createFolder(ctx, parentToken, name) (token, error)`
+- [X] **T047** [US4] 实现 `Fs.Mkdir(ctx, dir)`：逐层解析，缺失层用 `create_folder` 创建；**幂等**（已存在不报错）；权限不足 → `ErrMissingScope` 含 scope 名与申请链接 `{FR-016}` `{FR-017}`
+- [X] **T048** [US4] 实现 `Fs.Rmdir(ctx, dir)`：返回 `fs.ErrorCantRmdir`（F1 不删目录）
+- [X] **T049** [US4] [P] 在 `api_test.go` 补 T/C12：mkdir 单层、多层、幂等、权限错误映射
+- [X] **T050** [US4] 手工验证 quickstart 步骤 5（含空目录同步 `--create-empty-src-dirs`），结果记录到 `specs/001-feishu-read-upload/quickstart.md` `{SC-005}`
 
 **Phase 5 完成标准**：C12 通过；quickstart 步骤 5 实测通过
 
@@ -139,11 +139,11 @@
 **故事目标**：`copy ./local feishu:X` 能上传 ≤20MB；>20MB 明确报错；重复运行不产生同名堆积。
 **独立测试**：上传 → 飞书可见 → 回读比对；连跑 3 次条目数不变。
 
-- [ ] **T051** [US3] 实现 `api.uploadAll(ctx, parentToken, name, content) (fileToken, error)`：multipart 构造（`file_name`/`parent_type=explorer`/`parent_node`/`size`/`file`），不传 `checksum`（实测可选）
-- [ ] **T052** [US3] 实现 `Fs.Put(ctx, in, src, options...)`：读入内存 → **>20MB 检查**（`src.Size() > 20*1024*1024` 或读入后判断）→ 返回含 "20MB" 字样的 `ErrInvalidArgument`；≤20MB 走 `uploadAll` `{FR-011}` `{FR-013}`
-- [ ] **T053** [US3] 在 `Fs.Put` 中实现上传前目录检查：目标目录不存在时按配置自动创建（调 `Fs.Mkdir`，默认开）`{FR-012}`
-- [ ] **T054** [US3] 验证文件名编码：上传中文名（`季度报表 2024.xlsx`）与含空格名，云端名字保持不变、可回读 `{FR-015}`
-- [ ] **T055** [US3] 验证递归上传：`copy ./photos feishu:photos` 重建目录树，含空目录（依赖 T047 的 Mkdir）`{FR-014}`
+- [X] **T051** [US3] 实现 `api.uploadAll(ctx, parentToken, name, content) (fileToken, error)`：multipart 构造（`file_name`/`parent_type=explorer`/`parent_node`/`size`/`file`），不传 `checksum`（实测可选）
+- [X] **T052** [US3] 实现 `Fs.Put(ctx, in, src, options...)`：读入内存 → **>20MB 检查**（`src.Size() > 20*1024*1024` 或读入后判断）→ 返回含 "20MB" 字样的 `ErrInvalidArgument`；≤20MB 走 `uploadAll` `{FR-011}` `{FR-013}`
+- [X] **T053** [US3] 在 `Fs.Put` 中实现上传前目录检查：目标目录不存在时按配置自动创建（调 `Fs.Mkdir`，默认开）`{FR-012}`
+- [X] **T054** [US3] 验证文件名编码：上传中文名（`季度报表 2024.xlsx`）与含空格名，云端名字保持不变、可回读 `{FR-015}`
+- [X] **T055** [US3] 验证递归上传：`copy ./photos feishu:photos` 重建目录树，含空目录（依赖 T047 的 Mkdir）`{FR-014}`
 - [ ] **T056** [US3] 实现 `Object.Update()` 返回 `fs.ErrorCantUpdate`（触发 rclone 的「删+传」降级）`{FR-021}`
 - [ ] **T057** [US3] 实现 `Object.Remove(ctx)`：调 `api.deleteFile`，成功后从 state 删除该条；失败按 `error-codes.md` 映射
 - [ ] **T058** [US3] 实现 `Object.SetModTime()` 返回 `fs.ErrorCantSetModTime`
@@ -161,13 +161,13 @@
 
 ## Phase 7 · Polish（收尾与跨切面）
 
-- [ ] **T066** [P] 检查所有错误信息符合 `error-codes.md` §3 的三要素格式（发生了什么 / 为什么 / 怎么修）
-- [ ] **T067** [P] 检查所有日志符合 `error-codes.md` §4 的级别要求；确认无 token/secret 泄露（E9）
+- [X] **T066** [P] 检查所有错误信息符合 `error-codes.md` §3 的三要素格式（发生了什么 / 为什么 / 怎么修）
+- [X] **T067** [P] 检查所有日志符合 `error-codes.md` §4 的级别要求；确认无 token/secret 泄露（E9）
 - [ ] **T068** 测试清单对齐：`contracts/backend-interface.md` §6 的 C1–C15 逐条确认有对应测试且通过
 - [ ] **T069** 测试清单对齐：`contracts/state-file-format.md` §7 的 S1–S13 逐条确认通过
 - [ ] **T070** 测试清单对齐：`contracts/error-codes.md` §5 的 E1–E9 逐条确认通过
-- [ ] **T071** 运行 `go vet ./...` 与 `go test ./... -race`，修掉所有报告项
-- [ ] **T072** 执行 `scripts/build-go.ps1 -Target both`，确认双平台产物均生成 `{FR-025}`
+- [X] **T071** 运行 `go vet ./...` 与 `go test ./... -race`，修掉所有报告项
+- [X] **T072** 执行 `scripts/build-go.ps1 -Target both`，确认双平台产物均生成 `{FR-025}`
 - [ ] **T073** 在 Linux 环境（WSL2）跑 quickstart 步骤 1–8、10，结果记录到 `specs/001-feishu-read-upload/quickstart.md` 的验收清单 `{SC-007}`
 - [ ] **T074** 按 `specs/001-feishu-read-upload/quickstart.md` 末尾的「完整验收清单」逐项打勾，全部通过才算 F1 完成 `{SC-001}`–`{SC-011}`
 - [ ] **T075** 更新 `docs/roadmap.md`：F1 状态改 ✅，进度日志加一行

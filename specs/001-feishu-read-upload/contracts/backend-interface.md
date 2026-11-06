@@ -77,10 +77,14 @@ type Object interface {
 | `ModTime()` | 返回条目的 `modified_time` | 秒级；**语义是上传时刻** |
 | `Hash(ty)` | 返回 `""` | 无哈希 |
 | `Open(...)` | 调 `files/{token}/download`，支持 `Range` / `Seek` 选项 | 飞书支持 206 Partial Content（E3+ 实测） |
-| **`Update(...)`** | **返回 `fs.ErrorCantUpdate`** | E1 实测：无原地更新。rclone 会自动降级为「删+传」（research R8） |
+| **`Update(...)`** | **先上传新内容，再删除旧 token** | E1 实测无原地更新。rclone 因 `Features.Move == nil` 强制 inplace，目标存在时必然调 `Update`（research R8 有源码依据）。删除前用 `tokenStillPresent` 二次确认 |
 | `Remove()` | 调 `DELETE /files/{token}` | B11 实测：不可逆，无回收站 |
 | `SetModTime()` | **返回 `fs.ErrorCantSetModTime`** | 飞书不允许改 mtime |
 | `Storable()` | `true` | — |
+
+> ⚠️ **rclone 没有 `fs.ErrorCantUpdate`**。实现时若需要一个「无法更新」的错误，
+> 用 `fs.ErrorNotImplemented`。但本后端应当真正实现 `Update`，否则更新已存在的文件
+> 会直接失败（没有自动降级）。
 
 ### 2.2 `Open` 的 Range 支持
 

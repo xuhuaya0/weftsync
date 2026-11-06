@@ -175,20 +175,56 @@ state 里也记着上次的 size，比对不依赖 `Size()`。
 ## R8. `Update()` 如何实现
 
 **Decision**
-返回 `fs.ErrorCantUpdate`，**不实现**。
+**实现 `Update()`，内部做「先传新、再删旧」**。
 
-**Rationale**
-- E1 实测：同名重传产生**新 token**，无法原地更新内容
-- 返回该错误后，rclone 的 `operations.Copy` 会自动降级为「删除旧对象 + 重新上传」
-- 这正是我们要的语义（配合 state 精确指定删哪个 token）
+**修正记录（2026-11-06）**
+本文件初版写的是「返回 `fs.ErrorCantUpdate` 让 rclone 降级为删+传」。
+实现时编译报 `undefined: fs.ErrorCantUpdate`，查证后发现：
+- rclone **没有** `fs.ErrorCantUpdate` 这个常量（`fs/fs.go` 全量核对过）
+- 也没有「Update 失败则自动删+传」的降级逻辑
 
-**与 state 机制的配合**
-rclone 的降级删除会调用 `Object.Remove()`，此时它操作的是 `List` 返回的那个
-`Object`（即我们按 state 选出的那条），所以 token 是精确的 —— 不会误删别的同名文件。
+真实的调用路径（`fs/operations/copy.go`）：
+
+```go
+// checkPartial
+if c.ci.Inplace || c.dstFeatures.Move == nil || !c.dstFeatures.PartialUploads {
+    return remoteForCopy, true, nil     // inplace = true
+}
+// updateOrPut
+if c.doUpdate && c.inplace {
+    err = c.dst.Update(ctx, inAcc, wrappedSrc, uploadOptions...)
+} else {
+    newDst, err = c.f.Put(ctx, inAcc, wrappedSrc, uploadOptions...)
+}
+```
+
+因为本后端**不实现 `Mover`**（`Features.Move == nil`），`inplace` 恒为 true，
+所以只要目标已存在，rclone 就会调用 `Update()` —— 而不会走 `Put()`。
+
+如果 `Update()` 返回错误，同步就**直接失败**，没有降级。这会让「更新一个已存在的文件」
+永远失败，正是 F1 要解决的核心场景。
+
+**实现（先传后删）**
+
+```
+1. 上传新内容  → newToken
+2. 若 oldToken 已不在当前列表中 → 跳过删除
+3. 否则删除 oldToken
+4. 把 entry 换成新的
+```
+
+顺序不可颠倒：先删后传若上传失败，云端文件就没了，而飞书无回收站（B11 实测不可逆）。
+先传后删的最坏情况是「暂时两份」，再跑一次即可修复（`data-model.md` §3）。
+
+**第二步的存在意义**
+`Update` 拿到的是 `Object`，它的 `entry.Token` 来自 `List`/`NewObject`，
+已被 `pickRemoteEntry` 收敛过，所以是**我们自己那份**的 token，不会误删别人的同名文件。
+删除前再用 `tokenStillPresent` 二次确认（FR-035），因为删除不可逆。
 
 **Alternatives considered**
-- 实现 `Update()` 内部做「删+传」：与 rclone 的降级逻辑重复，增加出错面
-- 实现 `Open` + 服务端覆盖：飞书无此接口
+- 返回错误让 rclone 处理：**不存在这样的机制**（已证伪）
+- 只 `Put` 不删旧：云端每次更新都多一份同名文件，`--ignore-existing` 又会让更新失效
+- `Remove` 后再 `Put`：删除不可逆，中途失败直接丢文件
 
 ---
 
