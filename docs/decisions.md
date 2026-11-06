@@ -705,3 +705,130 @@ state 丢失/损坏时，按 `contracts/state-file-format.md` §5 必须「不�
 同一份知识在两个地方各写一遍，**不是「冗余」，是「迟早不一致」**。
 发现自己在第二个地方补同一个常量时，就该先把它们合并。
 
+---
+
+## D21 · 分片上传串行发块，不实现 OpenChunkWriter（2026-11-06）
+
+**背景**
+F2 要解除 20MB 限制。rclone 提供了 `fs.OpenChunkWriter`（`ChunkWriterInfo` 里有
+`Concurrency` 字段）用于并发分片上传，看起来正好对口。
+
+**官方文档写得很明确**（`upload_prepare` / `upload_part` / `upload_finish` 三页都有）：
+
+> This API does not support concurrent calls, and the call frequency limit is
+> 5 QPS, 10,000 times/day. Otherwise, error code 1061045 will be returned.
+
+**决定**
+不实现 `OpenChunkWriter`，分片在 `Fs.Put` 里**串行**发块。
+
+**理由**
+1. 并发是被官方禁止的，`Concurrency` 只能填 1，实现它没有任何性能收益
+2. 实现了反而多出一堆要处理的路径：乱序提交、`LeavePartsOnError`、
+   partial commit 与 rclone 重试的交互
+3. rclone 只有在 `OpenChunkWriter != nil || OpenWriterAt != nil` 时才走
+   `multithreadCopy`；两者都为 nil 时它一律走 `Put`。这正是我们要的
+4. 内存仍然只占一个块（服务端给的 `block_size`，4MB），不是整个文件
+
+**其他两条从文档确认的事实**
+- `block_size` 是**服务端决定的**，文档明说「The platform consistently chunks files
+  into 4MB segments」，但客户端仍不得写死：`prepare` 返回值才是唯一依据
+- upload_id 与已传进度**保留 24 小时**，可续传；且**没有 abort 接口**。
+  所以中断后只能放任它自己过期，错误信息里必须把这点讲清楚，
+  否则用户会以为留下了垃圾数据要自己清
+
+**没有做的**
+- 断点续传（F2 验收第 5 条）。要做就得把 `upload_id` 持久化进 state，
+  并且能重新定位本地文件的读位置；价值低于先把主链路做稳。已在
+  `docs/roadmap.md` F2 中标为未完成
+
+---
+
+## D22 · 下载必须流式，不能复用 JSON 的那条 8MB 上限（2026-11-06）
+
+**怎么发现的**
+F2 真实验证里，20MiB / 21MiB / 60MiB 三个文件下载回来 **SHA-256 全不一致，而且三者相同**。
+不同大小的文件不可能同哈希 → 一定是都被截成了同一个长度。查文件：
+**三个都是 8388608 字节**。
+
+**根因**
+`api.go` 里 `maxResponseSize = 8 << 20`，本意是防止一个失控的列表响应吃光内存，
+但它被 `client.do` 用在**所有**响应上，包括 `files/{token}/download`。
+
+**为什么 F1 没发现**
+SC-002 要求「下载 **10MB** 文件后 SHA-256 一致」，但 F1 验收时我实际用的是一个小文件。
+10MB > 8MiB，按当时的代码必然截断。**这是把「跑通了一个例子」当成「满足需求」**，
+也正是宪法原则 II（验证优先于断言）要防的事。
+
+**决定**
+下载走独立的 `client.downloadStream`：自己做请求与重试，成功后**直接把 `resp.Body`
+交给调用方**，不缓冲、不设上限。
+
+**连带修的第二处**
+流式之后 `Open` 拿不到状态码了，而它需要知道「服务器是否真的按 Range 返回了 206」：
+- 206 → body 已经只是那一段，**不能再跳过 offset**
+- 200 → 服务器忽略了 Range，必须自己跳过 offset 并截断
+
+于是 `downloadStream` 返回 `downloadBody{Body, Partial}`。
+之前无条件跳过 offset 的写法在服务器**遵守** Range 时会把整段吃掉
+（`TestOpenHonoursRange` 实测返回 0 字节）。
+
+**后缀 Range 的特殊处理**
+`bytes=-N`（取最后 N 字节）在流式下无法定位，需要总长度。如果服务器忽略了它，
+**宁可报错也不返回前 N 字节**——返回错误的数据比返回错误更糟。
+
+---
+
+## D23 · 分片上传改变 SC-004 的语义，改契约而不是绕过（2026-11-06）
+
+F1 时 FR-013 / SC-004 写的是「拒绝 >20MB，错误信息含 20MB 字样」。
+F2 交付分片上传后，21MB 应当**成功**，这条要求自动失效。
+
+处理方式：直接改 `spec.md` 的 FR-013、SC-004 和验收场景 4，并在原处标注
+「F1 时是 X，F2 后改为 Y」以及原因。
+
+**不这样做的后果**
+如果保留旧断言，就会为了「让测试通过」而在代码里留下一个假的 20MB 错误路径，
+或者把已经过时的测试删掉却不说。两者都会让下一个读代码的人以为 20MB 是文件大小上限，
+而它其实只是**单次请求**的上限。
+
+现在真正需要告诉用户的边界是「文件超过飞书单文件上限」（code `1061043`，
+阈值由租户套餐决定），以及租户/个人空间写满（`1061101` / `1061061`）。
+
+---
+
+## D24 · `Update` 读旧 token 的时机错了，而且 `lsf` 掩盖了它（2026-11-06）
+
+**现象**
+F2 验证收尾时发现 `purge` 之后云端总会剩 2 个文件、且目录删不掉。
+用原始 API 列表（不折叠同名）一看：**每个换过内容的文件都留下了两个同名副本**。
+
+**根因**
+`Object.Update` 的顺序是：
+
+```go
+newObj := o.fs.Put(...)          // 内部 recordUpload 已把 state 改成新 token
+oldToken := o.fs.previousToken() // 读到的是新 token
+if oldToken != newToken { ... }  // 永远相等 → 永远不删
+```
+
+**为什么这么久没发现**
+因为 `Fs.List` **按设计折叠同名条目**（避免 rclone 看到两个同名对象而误删）。
+于是 `lsf` 永远只报 1 条，SC-009（连跑条目数不变）和 SC-010（改 1 文件仍 1 条）
+都是用 `lsf` 量的 —— **用一个会隐藏问题的工具去验证那个问题不存在**。
+
+这不是实现 bug 连带出的测量失误，是方法论错误：**度量工具必须能看见缺陷本身**。
+
+**决定**
+1. 修 `Update`：在 `Put` **之前**取旧 token
+2. 新增 `TestUpdateDeletesPreviousToken`，并且**验证它真的会红** ——
+   把修复临时回退后该测试立刻失败（`deleted tokens = []`）
+3. 新增 `.scratch/raw_list.py`：直接调原始 API 列条目并统计同名重复数。
+   以后凡是要断言「没有重复」，必须用它，不能用 `lsf`
+4. 真实租户重测：连续 4 次替换（含 1MB 直传与 25MB 分片两条路径）
+   → `duplicate-names=0`，且回读内容为最新版本
+
+**教训**
+一个为了容错而做的「合并」动作，会顺带把证据一起合并掉。
+凡是「我加了一层归一化/去重/折叠」，就必须同时准备一条**绕过它的观测通道**，
+否则从那一刻起，这一类缺陷对测试完全不可见。
+

@@ -1,7 +1,6 @@
 package feishu
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -23,10 +22,10 @@ var _ fs.Object = (*Object)(nil)
 
 // ---------------------------------------------------------------- ObjectInfo
 
-func (o *Object) Fs() fs.Info                          { return o.fs }
-func (o *Object) Remote() string                       { return o.remote }
-func (o *Object) String() string                       { return o.remote }
-func (o *Object) Storable() bool                       { return true }
+func (o *Object) Fs() fs.Info    { return o.fs }
+func (o *Object) Remote() string { return o.remote }
+func (o *Object) String() string { return o.remote }
+func (o *Object) Storable() bool { return true }
 
 // ModTime returns the local modification time the file had when we uploaded it,
 // as long as the remote entry still carries the token we recorded.
@@ -77,8 +76,13 @@ func (o *Object) SetModTime(ctx context.Context, t time.Time) error {
 
 // Open streams the file content, honouring a byte range when rclone asks for
 // one. Feishu answers ranged GETs with 206 + Content-Range (E3+).
+//
+// The body is passed through, not buffered: downloading a 1GB file must not need
+// 1GB of memory, and buffering through a size-capped reader is what silently
+// truncated every download above 8MB.
 func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadCloser, error) {
 	rangeHeader := ""
+	suffix := false
 	var offset, limit int64 = 0, -1
 
 	for _, option := range options {
@@ -88,6 +92,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadClo
 			if start < 0 && end >= 0 {
 				// Suffix range: last N bytes. Feishu accepts "bytes=-N".
 				rangeHeader = fmt.Sprintf("bytes=-%d", end)
+				suffix = true
 				offset, limit = 0, end
 				continue
 			}
@@ -110,22 +115,49 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadClo
 		}
 	}
 
-	res, err := o.fs.client.download(ctx, o.entry.Token, rangeHeader)
+	res, err := o.fs.client.downloadStream(ctx, o.entry.Token, rangeHeader)
 	if err != nil {
 		return nil, err
 	}
-
 	body := res.Body
-	if limit >= 0 && int64(len(body)) > limit {
-		body = body[:limit]
-	}
-	if offset > 0 && rangeHeader == "" && int64(len(body)) > offset {
-		// Server ignored the range and sent the whole file.
-		body = body[offset:]
+
+	// A server that ignores Range replies 200 with the whole file, so the window
+	// has to be cut out here. When the reply was a 206 the body already holds
+	// only the requested window and must be passed through untouched.
+	if !res.Partial && rangeHeader != "" {
+		if suffix {
+			// Taking the last N bytes needs the total size, and streaming cannot
+			// know it in advance. Returning the first N bytes instead would be
+			// silently wrong, so refuse.
+			_ = body.Close()
+			return nil, fmt.Errorf(
+				"feishu: %q: the server ignored the suffix range %q, so the last %d bytes "+
+					"cannot be located while streaming",
+				o.remote, rangeHeader, limit)
+		}
+		if offset > 0 {
+			if n, err := io.CopyN(io.Discard, body, offset); err != nil || n < offset {
+				_ = body.Close()
+				return nil, fmt.Errorf("feishu: %q: seeking to offset %d failed after %d bytes: %w",
+					o.remote, offset, n, err)
+			}
+		}
 	}
 
-	return io.NopCloser(bytes.NewReader(body)), nil
+	if limit >= 0 {
+		return &limitedReadCloser{Reader: io.LimitReader(body, limit), closer: body}, nil
+	}
+	return body, nil
 }
+
+// limitedReadCloser caps how many bytes the caller can read while still closing
+// the underlying stream.
+type limitedReadCloser struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (l *limitedReadCloser) Close() error { return l.closer.Close() }
 
 // Update replaces this object's content.
 //
@@ -133,8 +165,8 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadClo
 // token while the old file stays in the folder (E1 + E2). So "replace" must be
 // performed as two steps, and the order matters:
 //
-//	1. upload the new content  -> new token
-//	2. delete this object's old token
+//  1. upload the new content  -> new token
+//  2. delete this object's old token
 //
 // Uploading first means a failed upload leaves the old file intact. Deleting
 // first would destroy data on failure, and the API has no trash to recover
@@ -146,6 +178,21 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadClo
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
 	remote := o.remote
 	parentPath, _ := parentOf(remote)
+
+	// Resolve the token to delete BEFORE uploading.
+	//
+	// Put() records the new token in the snapshot when it succeeds, so reading
+	// "the previous token" afterwards would return the new one, make
+	// oldToken == newToken, and silently skip the deletion — leaving a duplicate
+	// behind. That is invisible in a listing because List collapses duplicate
+	// names, so this bug survived a full round of manual verification.
+	//
+	// The snapshot is the better witness than the listing: pickRemoteEntry may
+	// have collapsed two same-named files into whichever came first.
+	oldToken := o.entry.Token
+	if remembered, ok := o.fs.previousToken(remote); ok {
+		oldToken = remembered
+	}
 
 	// Step 1: upload the replacement.
 	newObj, err := o.fs.Put(ctx, in, src, options...)
@@ -166,12 +213,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	//
 	// FR-035: re-verify before deleting. A stale token in our entry would
 	// otherwise delete an unrelated file, and deletion is irreversible.
-	oldToken := o.entry.Token
-	if remembered, ok := o.fs.previousToken(remote); ok {
-		// The snapshot is a better witness than the listing: pickRemoteEntry may
-		// have collapsed two same-named files into whichever came first.
-		oldToken = remembered
-	}
 	if oldToken != "" && oldToken != newToken {
 		if !o.fs.tokenStillPresent(ctx, parentPath, oldToken) {
 			fs.Infof(o, "previous version (token %s) is gone; nothing to delete", oldToken)
@@ -182,6 +223,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 				remote, newToken, oldToken, err)
 		} else {
 			fs.Infof(o, "replaced: uploaded token %s, removed previous token %s", newToken, oldToken)
+			o.fs.resolver.invalidate(o.entry.ParentToken)
 		}
 	}
 

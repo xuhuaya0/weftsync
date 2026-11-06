@@ -115,7 +115,9 @@
 - [X] **T042** [US2] 验证 `copy feishu:<目录> ./local --create-empty-src-dirs` 递归下载：目录结构、空目录都要重建（依赖 `Fs.List` 对 `IsDir` 的正确标记）`{FR-009}`
 - [X] **T043** [US2] 实现下载的**原子落盘**：写 `<name>.partial` → 完成后 `rename`；中断时删除 `.partial`（FR-010）`{FR-010}`
   - 实现方式：**由 rclone 提供，无须自写**。`fs/operations/copy.go:93-119` 的 `checkPartial` 依据**目标端**的 `dstFeatures.PartialUploads` 决定是否写临时名后 rename；下载时目标是 local backend（`PartialUploads=true`）→ 自动 temp+rename；上传到飞书时目标是我们（`PartialUploads=false`）→ 直接写真名。已核对源码与 `--inplace`/`--partial-suffix` 帮助文本
-- [ ] **T044** [US2] [P] 在 `src/go/backend/feishu/api_test.go` 补下载测试：范围请求、大文件分块读取、404 处理
+- [X] **T044** [US2] [P] 在 `src/go/backend/feishu/api_test.go` 补下载测试：范围请求、大文件分块读取、404 处理
+  - 实现在新文件 `download_test.go`：24MiB 不被截断（回归）、Range 窗口正确、
+    服务器忽略 Range 时仍只返回窗口、错误信封转成 `APIError`
 - [X] **T045** [US2] 手工验证 quickstart 步骤 4：递归下载 + SHA-256 一致 + 空目录重建（`--create-empty-src-dirs`），结果记录到 `specs/001-feishu-read-upload/quickstart.md` `{SC-002}`
 
 **Phase 4 完成标准**：SC-002（SHA-256 一致）；递归下载结构一致
@@ -159,7 +161,10 @@
   - 实现方式：不是改 rclone 的比对逻辑，而是让 `Object.ModTime()` / `Object.Size()` 在「state 记录的 token == 当前 remote token」时返回**上次上传时的本地指纹**。rclone 拿它跟当前本地文件比，相等就跳过。好处是零改动引擎，且 token 不匹配（云端被替换/删除）时自动退回真实 `modified_time` 强制重传
 - [X] **T061** [US3] 实现删除前二次确认：`remote_token` 必须仍存在于当前 `listFolder` 结果中（FR-035），否则跳过删除并告警 `{FR-035}`
 - [X] **T062** [US3] 实现 state 降级模式：`ErrStateCorrupt` 时进入 `ReadOnlyRepair` —— 允许上传与跳过以外的操作，**禁止任何删除**，输出明确告警（`contracts/state-file-format.md` §5）`{FR-034}`
-- [ ] **T063** [US3] [P] 在 `api_test.go` 补上传测试：C6（21MB 报错含 "20MB"）、C7（1MB 成功）
+- [X] **T063** [US3] [P] 在 `api_test.go` 补上传测试：C6（21MB 报错含 "20MB"）、C7（1MB 成功）
+  - 语义变更：21MB 现在**应该成功**（F2 分片上传），不再报错。已改为
+    `upload_test.go` 的 7 个分片测试 + `download_test.go` 的 4 个下载测试；
+    `TestFileTooLargeMessage` 改为断言「不再承诺分片待支持」
 - [X] **T064** [US3] 在 `src/go/state/state_test.go` 补增量相关测试：第一次全传、第二次零请求、改一个文件只传一个、删 state 后降级不删
   - 实现方式：state 包只能单测存储，增量行为只能在真实租户上验证。已用 `.scratch/verify_incremental.ps1` 跑 7 轮实测（结果记入 `quickstart.md`）
 - [X] **T065** [US3] 手工验证 quickstart 步骤 6（上传、回读、20MB 边界）与步骤 7（SC-009/010/011），结果记录到 `specs/001-feishu-read-upload/quickstart.md` `{SC-003}` `{SC-004}` `{SC-009}` `{SC-010}` `{SC-011}`

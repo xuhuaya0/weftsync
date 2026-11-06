@@ -21,6 +21,22 @@ const (
 	// runs ("unknown error"). The same delete succeeds on retry, so it is a
 	// transient condition rather than a permanent failure.
 	CodeInternal = 1061001
+	// CodeNotFound is returned when a token no longer exists.
+	CodeNotFound = 1061003
+	// CodeUploadIDExpired means the 24-hour window of a block upload closed.
+	CodeUploadIDExpired = 1061021
+	// CodeFileSizeBeyondLimit means the file exceeds Feishu's per-file cap
+	// (the tenant plan decides the number; it is not the 20MB request cap).
+	CodeFileSizeBeyondLimit = 1061043
+	// CodeTenantQuotaExceeded / CodeUserQuotaExceeded mean the drive is full.
+	CodeTenantQuotaExceeded = 1061101
+	CodeUserQuotaExceeded   = 1061061
+	// CodeBlockMissing means upload_finish saw fewer blocks than declared.
+	CodeBlockMissing = 1062010
+	// CodeBlockNumOutOfBounds means the server rejected a block sequence number.
+	CodeBlockNumOutOfBounds = 1062011
+	// CodeMigrating is a temporary tenant-wide lock during a data migration.
+	CodeMigrating = 1064230
 )
 
 // APIError is a Feishu business-level error (HTTP 200 with code != 0, or an
@@ -49,10 +65,10 @@ func (e *APIError) Retryable() bool {
 // The message always names the scope and includes the console link, because
 // that is the only actionable information for the user (FR-022 / FR-024).
 type MissingScopeError struct {
-	Scopes  []string // scopes that would each be sufficient
-	AppID   string
-	Where   string
-	RawMsg  string
+	Scopes []string // scopes that would each be sufficient
+	AppID  string
+	Where  string
+	RawMsg string
 }
 
 func (e *MissingScopeError) Error() string {
@@ -82,10 +98,10 @@ func joinScopes(scopes []string) string {
 
 // UncategorizedError wraps an error whose cause is not yet known.
 type UncategorizedError struct {
-	Code   int
-	Msg    string
-	Where  string
-	LogID  string
+	Code    int
+	Msg     string
+	Where   string
+	LogID   string
 	Wrapped error
 }
 
@@ -99,27 +115,36 @@ func (e *UncategorizedError) Error() string {
 
 func (e *UncategorizedError) Unwrap() error { return e.Wrapped }
 
-// ErrFileTooLarge is returned by Put when the source exceeds the 20MB direct
-// upload cap (FR-013). The message must contain "20MB" (SC-004).
+// ErrFileTooLarge is returned when a source announces a size that does not
+// match what it actually produced, so the upload cannot be planned.
+//
+// Ordinary large files no longer reach this error: they go through the block
+// protocol (upload.go). This case is a source whose Size() claims <= 20MB (or is
+// negative) while the stream turns out to be bigger, which leaves no trustworthy
+// byte count for upload_prepare.
 type ErrFileTooLarge struct {
 	Name string
 	Size int64
+	// SizeUnknown marks the "announced size was wrong" case, which needs a
+	// different explanation from a plain "too big".
+	SizeUnknown bool
 }
 
 // MaxDirectUpload is the upload_all cap observed by probing (21MB was rejected
-// with code 1061002).
+// with code 1061002). Larger files use upload_prepare/upload_part/upload_finish.
 const MaxDirectUpload = 20 * 1024 * 1024
 
 func (e *ErrFileTooLarge) Error() string {
-	size := "larger than 20MB"
-	if e.Size > 0 {
-		size = fmt.Sprintf("at least %s", humanSize(e.Size))
+	if e.SizeUnknown {
+		return fmt.Sprintf(
+			"file %q is larger than the 20MB single-request limit (%s) but its declared size "+
+				"does not say so, and the chunked upload path needs an exact size before it starts. "+
+				"Refusing to guess.",
+			e.Name, humanSize(e.Size))
 	}
 	return fmt.Sprintf(
-		"file %q is %s, which exceeds the Feishu single-request upload limit of 20MB. "+
-			"Chunked upload is not implemented yet (planned for F2), "+
-			"so this file cannot be uploaded in the current version.",
-		e.Name, size)
+		"file %q (%s) exceeds the Feishu single-request upload limit of 20MB.",
+		e.Name, humanSize(e.Size))
 }
 
 func humanSize(n int64) string {
@@ -170,15 +195,23 @@ type codeInfo struct {
 // caused a real bug: 1061001 was marked retryable in one list but absent from
 // the constructor list, so it never became an APIError and was never retried.
 var codeTable = map[int]codeInfo{
-	CodeTokenInvalid:   {class: classTokenInvalid},
-	CodeForbidden:      {class: classPermission},
-	CodeParentNotFound: {class: classNotFound},
-	CodeParamsError:    {class: classInvalidArgument},
-	CodeDepthExceeded:  {class: classInvalidArgument},
-	CodeTooManyNodes:   {class: classInvalidArgument},
-	CodeRetryable:      {retryable: true, class: classRetryable},
-	CodeSizeMismatch:   {retryable: true, class: classRetryable},
-	CodeInternal:       {retryable: true, class: classRetryable},
+	CodeTokenInvalid:        {class: classTokenInvalid},
+	CodeForbidden:           {class: classPermission},
+	CodeNotFound:            {class: classNotFound},
+	CodeParentNotFound:      {class: classNotFound},
+	CodeParamsError:         {class: classInvalidArgument},
+	CodeDepthExceeded:       {class: classInvalidArgument},
+	CodeTooManyNodes:        {class: classInvalidArgument},
+	CodeFileSizeBeyondLimit: {class: classInvalidArgument},
+	CodeTenantQuotaExceeded: {class: classInvalidArgument},
+	CodeUserQuotaExceeded:   {class: classInvalidArgument},
+	CodeUploadIDExpired:     {class: classInvalidArgument},
+	CodeBlockMissing:        {class: classOther},
+	CodeBlockNumOutOfBounds: {class: classOther},
+	CodeRetryable:           {retryable: true, class: classRetryable},
+	CodeSizeMismatch:        {retryable: true, class: classRetryable},
+	CodeInternal:            {retryable: true, class: classRetryable},
+	CodeMigrating:           {retryable: true, class: classRetryable},
 }
 
 // classify inspects err and reports how the transport layer should react.

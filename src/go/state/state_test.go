@@ -431,7 +431,7 @@ func TestNormalizePathWindows(t *testing.T) {
 func TestRepairEntriesAreUsable(t *testing.T) {
 	path := tempStatePath(t)
 	f := Repair("0123456789abcdef", map[string]string{
-		"a.txt": "TOK-A",
+		"a.txt":   "TOK-A",
 		"b/c.txt": "TOK-B",
 	})
 	f.path = path

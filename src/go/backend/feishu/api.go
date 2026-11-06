@@ -59,7 +59,7 @@ type envelope struct {
 
 // request describes one API call.
 type request struct {
-	where       string      // e.g. "files.list", used in error messages
+	where       string // e.g. "files.list", used in error messages
 	method      string
 	path        string
 	query       url.Values
@@ -74,10 +74,10 @@ type request struct {
 
 // result carries either a decoded data payload, or raw bytes for downloads.
 type result struct {
-	Data     json.RawMessage
-	Body     []byte
-	Header   http.Header
-	Status   int
+	Data   json.RawMessage
+	Body   []byte
+	Header http.Header
+	Status int
 }
 
 // do executes the request with retries.
@@ -88,9 +88,9 @@ type result struct {
 //   - everything else: fail immediately
 func (c *client) do(ctx context.Context, r request) (*result, error) {
 	var (
-		lastErr       error
-		backoff       = initialBackoff
-		tokenRetried  bool
+		lastErr      error
+		backoff      = initialBackoff
+		tokenRetried bool
 	)
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {

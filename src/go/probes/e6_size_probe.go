@@ -28,12 +28,12 @@ type stubFs struct {
 	precision time.Duration
 }
 
-func (f *stubFs) Name() string               { return f.name }
-func (f *stubFs) Root() string               { return "" }
-func (f *stubFs) String() string             { return f.name }
-func (f *stubFs) Precision() time.Duration   { return f.precision }
-func (f *stubFs) Hashes() hash.Set           { return hash.Set(hash.None) }
-func (f *stubFs) Features() *fs.Features     { return &fs.Features{} }
+func (f *stubFs) Name() string             { return f.name }
+func (f *stubFs) Root() string             { return "" }
+func (f *stubFs) String() string           { return f.name }
+func (f *stubFs) Precision() time.Duration { return f.precision }
+func (f *stubFs) Hashes() hash.Set         { return hash.Set(hash.None) }
+func (f *stubFs) Features() *fs.Features   { return &fs.Features{} }
 
 var _ fs.Info = (*stubFs)(nil)
 
@@ -47,11 +47,11 @@ type stubObj struct {
 	hashValue string
 }
 
-func (o *stubObj) Fs() fs.Info     { return o.fs }
-func (o *stubObj) String() string  { return o.remote }
-func (o *stubObj) Remote() string  { return o.remote }
-func (o *stubObj) Size() int64     { return o.size }
-func (o *stubObj) Storable() bool  { return true }
+func (o *stubObj) Fs() fs.Info                           { return o.fs }
+func (o *stubObj) String() string                        { return o.remote }
+func (o *stubObj) Remote() string                        { return o.remote }
+func (o *stubObj) Size() int64                           { return o.size }
+func (o *stubObj) Storable() bool                        { return true }
 func (o *stubObj) ModTime(ctx context.Context) time.Time { return o.modTime }
 func (o *stubObj) Hash(ctx context.Context, ty hash.Type) (string, error) {
 	return o.hashValue, nil

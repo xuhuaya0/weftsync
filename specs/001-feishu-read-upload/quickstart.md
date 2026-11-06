@@ -308,9 +308,11 @@ ls ~/.config/weftsync/state/
 | □ | `mkdir` 单层/多层/幂等 | US4 |
 | □ | 上传后飞书可见、回读一致 | US3 / SC-003 |
 | □ | 19.5MB 成功 | US3 |
-| □ | 21MB 报错含 "20MB" | US3 / SC-004 |
+| □ | 21MB 成功（走分片）且回读一致 | US3 / SC-004 |
+| □ | 60MB 成功（15 块）且回读一致 | F2 |
 | □ | 连跑 3 次条目数不变 | SC-009 |
 | □ | 改 1 文件后仍 1 条 | SC-010 |
+| □ | **替换后用原始 API 列表确认无同名重复**（不能用 `lsf`，它折叠同名） | SC-009 / SC-010 |
 | □ | 删 state 后不重复上传 | SC-011 |
 | □ | 缺 scope 错误含 scope 名与链接 | US1 / SC-006 |
 | □ | `go test ./...` 全绿 | 单元 |
@@ -318,7 +320,7 @@ ls ~/.config/weftsync/state/
 
 ---
 
-## 9. 增量同步实测记录（2026-11-06，真实租户）
+## 11. 增量同步实测记录（2026-11-06，真实租户）
 
 **环境**：Windows，`weftsync.exe` 由 `src/go` 构建，三个文件（`a.txt` / `b.txt` / `sub/c.txt`）+ 一个空目录 `empty/`，
 `--feishu-state-file .scratch/inc/state/aaaaaaaabbbbbbbb.state.json`。
@@ -347,3 +349,85 @@ ls ~/.config/weftsync/state/
 下载时目标是 local backend（`PartialUploads=true`）→ 自动 temp+rename；
 上传到飞书时目标是我们（`PartialUploads=false`）→ 直接写真名（飞书没有 rename API）。
 `--inplace` 默认 false，`--partial-suffix` 默认 `.partial`。
+
+---
+
+## 12. 分片上传实测记录（2026-11-06，真实租户）
+
+三个文件一次上传：`exact20.bin` 20MiB（正好在单次请求边界）、`twentyone.bin` 21MiB、
+`sixty.bin` 60MiB。内容为确定性伪随机字节（不可压缩、可逐字节比对）。
+
+| # | 检查 | 结果 | 证据 |
+|---|---|---|---|
+| 1 | 20MiB 走单次请求 | ✅ | 无 `uploading ... block` 日志 |
+| 2 | 21MiB 走分片 | ✅ | `uploading "twentyone.bin" in 6 block(s) of 4194304 bytes` |
+| 3 | 60MiB 走分片 | ✅ | `uploading "sixty.bin" in 15 block(s) of 4194304 bytes` |
+| 4 | 分片大小取自服务端 | ✅ | 日志里的 `4194304` 是 `upload_prepare` 返回值，不是常量 |
+| 5 | 回读字节一致 | ✅ | 三个文件 SHA-256 全部 MATCH（见下） |
+| 6 | 分片文件参与增量 | ✅ | 第二次运行 `new=0 replaced=0 skipped=3` |
+| 7 | 替换分片文件不留重复 | ✅ | 60MiB → 30MiB 后 `replaced=1`，远端条目数仍为 3 |
+| 8 | 改一个分片文件后其余仍跳过 | ✅ | 改 `a.bin` 后 `replaced=1 skipped=2`，b/c 均有 `Unchanged skipping` |
+
+```
+exact20.bin      MATCH  9A6E8DABC759D2AB vs 9A6E8DABC759D2AB
+sixty.bin        MATCH  844063F621231433 vs 844063F621231433
+twentyone.bin    MATCH  DA757954AE99D915 vs DA757954AE99D915
+```
+
+### 缺陷 B（收尾时才发现）：替换时旧版本从未被删除
+
+`purge` 之后云端总是剩 2 个文件、目录删不掉。用**原始 API 列表**（不折叠同名）一看：
+每个换过内容的文件都留下了两个同名副本。
+
+根因：`Object.Update` 在 `Put` **之后**才去读旧 token，而 `Put` 内部已经把 state 改成新
+token，于是 `oldToken == newToken`，「删旧」那一步被无条件跳过。
+
+**为什么之前没发现**：`Fs.List` 按设计折叠同名条目，所以 `lsf` 永远只报 1 条。
+SC-009 / SC-010 之前的结论是用 `lsf` 量的，**用一个会隐藏问题的工具去证明问题不存在**。这两条结论已作废，见 `docs/decisions.md` D24。
+
+修复后用原始列表重测：
+
+```
+=== upload 3 files (25MB each = chunked) ===
+/_dup  items=3 files=3 dirs=0   duplicate-names=0
+=== replace the 1MB file (direct path) ===
+/_dup  items=3 files=3 dirs=0   duplicate-names=0
+=== replace the 25MB file (chunked path) ===
+/_dup  items=3 files=3 dirs=0   duplicate-names=0
+=== replace it again, twice in a row ===
+/_dup  items=3 files=3 dirs=0   duplicate-names=0
+=== download check: content must be the latest ===
+  small.bin    MATCH
+  chunked.bin  MATCH
+  other.bin    MATCH
+```
+
+回归测试 `TestUpdateDeletesPreviousToken` 已加入，并且**验证过它真的会红**：
+把修复临时回退后该测试立刻失败（`deleted tokens = []`）。
+
+### 缺陷 A（先被发现）：>8MiB 下载被静默截断
+
+第一次跑上表时三个文件的 SHA-256 **全部不一致，且彼此相同**。查下去发现下载文件都是
+**8388608 字节整**（8MiB）——`client.do` 把所有人都按 `maxResponseSize = 8MB`
+（本来是给 JSON 列表用的护栏）`LimitReader` 了一遍，而下载走的是同一条路径。
+
+后果：**任何大于 8MiB 的文件下载回来都是坏的，而且不报错**。
+
+**这条也说明 SC-002 之前判错了。** SC-002 的要求是「下载 **10MB** 文件后 SHA-256 一致」，
+但 F1 验收时我用的是一个小文件（`AA5B2942...`），10MB 那一档从来没跑过——
+而 10MB > 8MiB，按当时的代码必然被截断。**小文件通过不等于需求通过**，
+我把「有产出」当成了「满足需求」。现在 20MiB / 21MiB / 60MiB 三个文件都逐字节一致，
+SC-002 才算真的有证据。
+
+修复（见 `docs/decisions.md` D22）：下载改走独立的 `downloadStream`，
+直接返回 `resp.Body` 流式读取，不再经过 JSON 的缓冲与上限。附带修掉两件事：
+
+1. **内存**：1GB 文件不再需要 1GB 内存。
+2. **Range 语义**：`downloadStream` 现在带回「是否 206」。原先 `Open` 无条件
+   跳过 `offset` 字节，如果服务器**已经**按 Range 只返回那一段，就会把整段吃掉
+   （实测 `TestOpenHonoursRange` 返回 0 字节）。
+
+### 观测工具要求
+
+凡是要断言「云端没有重复」，**必须**用 `.scratch/raw_list.py`（直接调原始 API 并按名字统计），
+**不能**用 `weftsync lsf` —— 后者会折叠同名条目。

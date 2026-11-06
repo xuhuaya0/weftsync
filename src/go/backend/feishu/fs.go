@@ -189,50 +189,88 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	return &Object{fs: f, remote: remote, entry: *entry}, nil
 }
 
-// Put uploads a local file through the direct (single request) path.
+// Put uploads a local file, choosing the single-request path or the block path
+// by size.
 //
-// Files above 20MB are rejected with a message that says so; chunked upload is
-// F2's scope (FR-013).
+// The split point is the server's: upload_all rejects anything above 20MB with
+// code 1061002 (measured during M0), so larger files must use
+// prepare/part/finish. See upload.go.
 func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
 	remote := normalizePath(src.Remote())
 	if remote == "" {
 		return nil, errors.New("feishu: Put requires a non-empty remote path")
 	}
 
+	parentToken, name, err := f.resolvePutParent(ctx, remote)
+	if err != nil {
+		return nil, err
+	}
+
+	// The block protocol needs the total size up front, so it is only usable
+	// when the source can report one.
+	if size := src.Size(); size > MaxDirectUpload {
+		token, err := f.putChunked(ctx, in, remote, name, parentToken, size)
+		if err != nil {
+			return nil, err
+		}
+		return f.uploaded(ctx, remote, name, parentToken, token, size, src), nil
+	}
+
 	// Read at most cap+1 bytes so an oversized stream is detected without
-	// buffering the whole thing (the probe showed 21MB is rejected, so the
-	// limit is exact rather than advisory).
+	// buffering the whole thing.
 	limited := io.LimitReader(in, MaxDirectUpload+1)
 	content, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("feishu: read source %q: %w", remote, err)
 	}
 	if len(content) > MaxDirectUpload {
-		return nil, &ErrFileTooLarge{Name: remote, Size: int64(len(content))}
-	}
-
-	parentPath, name := parentOf(remote)
-	parentToken, err := f.resolver.resolveDir(ctx, parentPath)
-	if err != nil {
-		if !isNotFound(err) {
-			return nil, fmt.Errorf("feishu: upload target folder for %q: %w", remote, err)
-		}
-		// FR-012: create missing parent directories rather than failing. The
-		// first file of a new tree arrives before rclone's own mkdir pass.
-		if mkErr := f.Mkdir(ctx, parentPath); mkErr != nil {
-			return nil, fmt.Errorf("feishu: create upload target folder for %q: %w", remote, mkErr)
-		}
-		parentToken, err = f.resolver.resolveDir(ctx, parentPath)
-		if err != nil {
-			return nil, fmt.Errorf("feishu: upload target folder for %q: %w", remote, err)
-		}
+		// Reaching here means src.Size() was <= 20MB or unknown while the
+		// stream is not, so the announced size cannot be trusted.
+		return nil, &ErrFileTooLarge{Name: remote, Size: int64(len(content)), SizeUnknown: true}
 	}
 
 	token, err := f.client.uploadAll(ctx, parentToken, name, content)
 	if err != nil {
 		return nil, err
 	}
+	return f.uploaded(ctx, remote, name, parentToken, token, int64(len(content)), src), nil
+}
 
+// resolvePutParent returns the folder token and leaf name for an upload,
+// creating missing parent directories (FR-012).
+func (f *Fs) resolvePutParent(ctx context.Context, remote string) (parentToken, name string, err error) {
+	parentPath, name := parentOf(remote)
+
+	parentToken, err = f.resolver.resolveDir(ctx, parentPath)
+	if err == nil {
+		return parentToken, name, nil
+	}
+	if !isNotFound(err) {
+		return "", "", fmt.Errorf("feishu: upload target folder for %q: %w", remote, err)
+	}
+
+	// The first file of a new tree arrives before rclone's own mkdir pass.
+	if mkErr := f.Mkdir(ctx, parentPath); mkErr != nil {
+		return "", "", fmt.Errorf("feishu: create upload target folder for %q: %w", remote, mkErr)
+	}
+	parentToken, err = f.resolver.resolveDir(ctx, parentPath)
+	if err != nil {
+		return "", "", fmt.Errorf("feishu: upload target folder for %q: %w", remote, err)
+	}
+	return parentToken, name, nil
+}
+
+// uploaded builds the resulting Object and records the upload in the snapshot.
+//
+// Shared by both upload paths so the incremental logic cannot drift between
+// them: a file uploaded in blocks must be skipped next run exactly like one
+// uploaded in a single request.
+func (f *Fs) uploaded(
+	ctx context.Context,
+	remote, name, parentToken, token string,
+	size int64,
+	src fs.ObjectInfo,
+) *Object {
 	f.resolver.invalidate(parentToken)
 
 	entry := remoteEntry{
@@ -246,9 +284,9 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 	}
 
 	// FR-027: remember what we sent so the next run can skip it.
-	f.recordUpload(ctx, remote, src, int64(len(content)), token)
+	f.recordUpload(ctx, remote, src, size, token)
 
-	return &Object{fs: f, remote: remote, entry: entry}, nil
+	return &Object{fs: f, remote: remote, entry: entry}
 }
 
 // Mkdir creates a directory and all missing parents. It is idempotent.

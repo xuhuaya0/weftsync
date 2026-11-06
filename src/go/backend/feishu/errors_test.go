@@ -124,19 +124,32 @@ func TestMissingScopeMessageIsActionable(t *testing.T) {
 	}
 }
 
-// E4 / SC-004: the oversized-file message must contain "20MB".
+// The two oversized-file messages must be distinguishable, because they call for
+// different actions from the user.
+//
+// Before F2 every >20MB file ended here and the message promised chunked upload
+// "later". Chunked upload now exists, so reaching this error means the source
+// misreported its own size — a bug in the caller, not a limit the user hit.
 func TestFileTooLargeMessage(t *testing.T) {
-	e := &ErrFileTooLarge{Name: "big.bin", Size: 21 * 1024 * 1024}
-	msg := e.Error()
+	plain := (&ErrFileTooLarge{Name: "big.bin", Size: 21 * 1024 * 1024}).Error()
+	if !strings.Contains(plain, "20MB") {
+		t.Errorf("message must mention 20MB\ngot: %s", plain)
+	}
+	if !strings.Contains(plain, "big.bin") {
+		t.Errorf("message must name the file\ngot: %s", plain)
+	}
+	if strings.Contains(plain, "F2") || strings.Contains(plain, "not implemented") {
+		t.Errorf("chunked upload exists now; the message must not promise it later\ngot: %s", plain)
+	}
 
-	if !strings.Contains(msg, "20MB") {
-		t.Errorf("message must mention 20MB (SC-004)\ngot: %s", msg)
+	mismatch := (&ErrFileTooLarge{
+		Name: "big.bin", Size: 21 * 1024 * 1024, SizeUnknown: true,
+	}).Error()
+	if !strings.Contains(mismatch, "declared size") {
+		t.Errorf("the size-mismatch case must say the declared size is the problem\ngot: %s", mismatch)
 	}
-	if !strings.Contains(msg, "big.bin") {
-		t.Errorf("message must name the file\ngot: %s", msg)
-	}
-	if !strings.Contains(msg, "F2") {
-		t.Errorf("message should say when chunked upload arrives\ngot: %s", msg)
+	if mismatch == plain {
+		t.Error("the two cases must not produce the same message")
 	}
 }
 
