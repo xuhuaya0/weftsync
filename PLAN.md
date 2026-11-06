@@ -701,6 +701,7 @@ variant  = "update"        # 这个 pair 不删云端
 | A15 | 定时模式（B2） | 三种都支持：`interval`（间隔+起点，默认）/ `daily_time`（每天固定时刻）/ `cron`（高级）。防重叠 |
 | A16 | 间隔模式起点对齐 | **可勾选**：对齐起点（默认）或启动后立即开始 |
 | A17 | 进程启动方式（B3） | Windows 双击快捷方式；Linux 命令行；设置里可勾选**开机自启**（默认关）。不用系统服务 |
+| A18 | 凭据存储（B4） | **Windows → 凭据管理器**；**Linux → AES 加密文件**（密钥由 machine-id + 用户名派生） |
 
 ### 待确认（按依赖顺序）
 
@@ -708,7 +709,7 @@ variant  = "update"        # 这个 pair 不删云端
 |---|---|---|
 | B2 | 定时间隔的默认值、cron 表达式还是简单间隔 | ✅ **已答**：三种模式都支持（见下方 B2 专节） |
 | B3 | 后台进程怎么启动（开机自启 / 系统服务 / 手动开托盘） | ✅ **已答**：Windows 双击快捷方式，Linux 命令行启动；设置里可选开机自启（见下方 B3 专节） |
-| B4 | 凭据在 UI 里怎么录入、存哪（明文文件 / Windows 凭据管理器 / DPAPI） | 安全红线 R10 |
+| B4 | 凭据在 UI 里怎么录入、存哪（明文文件 / Windows 凭据管理器 / DPAPI） | ✅ **已答**：Windows 用凭据管理器，Linux 用加密文件（见下方 B4 专节） |
 | B5 | 同步范围：排除规则、空目录、符号链接 | 决定 filter 配置 |
 | B6 | 数据体量（文件数 / 总量 / 单文件最大） | 决定首次同步策略与超时处理 |
 | B7 | UI 需要展示什么：状态 / 日志 / 历史 / 冲突处理入口 / 预览 | 决定后端 API 与页面 |
@@ -803,6 +804,84 @@ UI 提供「立即运行一次」按钮（见 B8）。
 
 **退出时若有同步正在进行**，提示「正在同步，确定退出吗？」；
 退出前把 `upload_id` 等断点信息落盘，下次启动可续。
+
+---
+
+#### B4 专节：凭据存储（2026-11-06 确定）
+
+用户原话：「windows 可以 A，Linux 可以 C」
+
+**按平台分派，统一接口：**
+
+| 平台 | 方案 | 存储位置 |
+|---|---|---|
+| **Windows** | **凭据管理器**（Credential Manager / `CredWrite` Win32 API） | 系统凭据库，按当前用户加密 |
+| **Linux** | **加密文件**（AES-256-GCM，密钥由机器信息派生） | `~/.config/weftsync/credentials.enc`，权限 `0600` |
+
+**为什么 Windows 用 A**
+- 系统级加密，绑定当前用户账户
+- 用户在「控制面板 → 凭据管理器」里能看到/删除
+- 不需要我们管密钥派生
+
+**为什么 Linux 用 C**
+- Linux 没有与 Windows 凭据管理器对等的、跨发行版通用的机制
+  （`libsecret` / `gnome-keyring` 需要桌面环境且依赖复杂，无桌面的服务器上没有）
+- AES + 机器派生密钥至少避免明文落盘
+
+**Linux 密钥派生（明确写出来，避免"看起来很安全实则没用"）**
+
+```
+key = HKDF-SHA256(
+    ikm  = machine-id (来自 /etc/machine-id)  ‖  username  ‖  程序内置常量
+    salt = 随机 16 字节（存在凭据文件头部）
+    info = "weftsync-credentials-v1"
+)
+```
+
+> ⚠️ **诚实说明安全边界**：机器派生密钥的防护目标是「防止凭据文件被误同步/误提交/被别人瞥见」，
+> **不能防御**「攻击者已能以该用户身份在本机执行代码」的情况 —— 那种情况下密钥可被同等推导。
+> 如果需要更强保护，可以后续支持「启动时输入主密码」（passphrase 派生的密钥，不解密时程序不可用）。
+> 这一点会在 UI 里以提示形式说明，不做安全暗示。
+
+**凭据文件格式**
+
+```json
+{
+  "version": 1,
+  "salt": "<base64>",
+  "nonce": "<base64>",
+  "ciphertext": "<base64>",
+  "tag": "<base64>"
+}
+```
+
+明文部分只有 public metadata（salt / nonce / 版本），`ciphertext` 内是 `{app_id, app_secret}`。
+
+**统一接口（后端抽象）**
+
+```go
+type CredentialStore interface {
+    Set(key, value string) error
+    Get(key string) (string, error)
+    Delete(key string) error
+    Describe() string   // UI 里显示"存储于：Windows 凭据管理器" / "加密文件 ~/.config/..."
+}
+```
+
+实现：`creds_windows.go`（CredWrite/CredRead）、`creds_linux.go`（AES 文件）、
+必要时 `creds_none.go`（兜底：环境变量，用于容器/CI）。
+
+**UI 行为**
+
+- 「飞书凭据」区块里两个输入框（app_id / app_secret），`app_secret` 输入时隐藏字符
+- 保存后显示「已保存到 Windows 凭据管理器」/「已保存到加密文件」
+- 提供「测试连接」按钮：调用 `tenant_access_token` 接口验证凭据有效
+- 提供「删除凭据」按钮
+- **绝不在 UI 里回显已保存的 app_secret**（只能重新输入覆盖）
+
+**与仓库红线 R10 的关系**
+凭据仍然**绝不进入 git**。`.env` 只用于开发/CI；
+正式运行时由 UI 录入并存入平台凭据库，程序启动时从那里读。
 
 ---
 
