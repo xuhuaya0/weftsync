@@ -1528,7 +1528,11 @@ function syncFields(prefix, s) {
     field("删除上限",
           `<input type="number" id="${prefix}-maxdel" min="0" placeholder="${s.max_delete}" ` +
           `value="${s.max_delete_set ? s.max_delete : ""}">`,
-          s.max_delete_set ? "留空 = 继承默认值" : `继承默认值（${s.max_delete}）`);
+          s.max_delete_set ? "留空 = 继承默认值" : `继承默认值（${s.max_delete}）`) +
+    field("删除体积上限",
+          `<input type="text" id="${prefix}-maxdelsize" placeholder="不限" ` +
+          `value="${esc(s.max_delete_size || "")}">`,
+          s.max_delete_size_help);
 }
 
 function renderConfig() {
@@ -1639,6 +1643,7 @@ function collectSync(prefix) {
     conflict: val("conflict"),
     max_delete: maxdel === "" ? 0 : Number(maxdel),
     max_delete_set: maxdel !== "",
+    max_delete_size: val("maxdelsize").trim(),
   };
 }
 

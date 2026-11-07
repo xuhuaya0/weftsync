@@ -40,6 +40,28 @@ func (e *GuardError) Error() string {
 		e.Pair, e.Files, e.Dirs, e.Limit)
 }
 
+// SizeGuardError means the run was stopped because it wanted to free more bytes
+// than the pair allows.
+//
+// rclone counts the bytes it deletes but does not expose the total through any
+// read interface (StatsInfo.deletesSize is unexported and absent from
+// RemoteStats), so the only way to measure it is to let rclone's own threshold
+// do the comparing. That check runs before the destructive call, and this guard
+// uses it on the dry pass only - which is why nothing is deleted.
+type SizeGuardError struct {
+	Pair  string
+	Files int64
+	Limit int64
+}
+
+func (e *SizeGuardError) Error() string {
+	return fmt.Sprintf(
+		"pair %q wanted to delete %d file(s), more than max_delete_size allows (%s). "+
+			"NOTHING was deleted. If this is expected, raise max_delete_size for "+
+			"this pair; if it is not, check that local.root points at the intended folder",
+		e.Pair, e.Files, fs.SizeSuffix(e.Limit).ByteUnit())
+}
+
 // PassResult is what one sync pass did (or, for a dry run, would have done).
 type PassResult struct {
 	Transferred int64 `json:"transferred"`
@@ -228,9 +250,34 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	}
 
 	// Mirror: measure first, decide, then act.
-	dry, err := runPass(ctx, fdst, fsrc, opts, true, true)
+	//
+	// The byte ceiling is measured on this same pass, by leaving rclone's own
+	// threshold switched on: its check runs before the destructive call and
+	// aborts the pass, so a dry pass that trips it has still deleted nothing.
+	dryOpts := opts
+	dryOpts.maxDeleteSize = spec.MaxDeleteSize
+	dry, err := runPass(ctx, fdst, fsrc, dryOpts, true, true)
 	res.DryRun = dry
 	if err != nil {
+		// rclone reports a byte-ceiling trip as a plain "failed to delete N
+		// files" and keeps the real cause in the log, so the error says nothing
+		// about which threshold stopped it. Re-measure with the ceiling off: a
+		// pass that then counts more deletions was stopped by the ceiling, one
+		// that fails again was stopped by something real.
+		if spec.MaxDeleteSize > 0 {
+			if again, againErr := runPass(ctx, fdst, fsrc, opts, true, true); againErr == nil &&
+				again.Deleted > dry.Deleted {
+				res.DryRun = again
+				res.GuardHit = true
+				guard := &SizeGuardError{Pair: p.Name, Files: again.Deleted, Limit: spec.MaxDeleteSize}
+				if opt.DryRun {
+					res.Actual = again
+					fmt.Fprintf(w, "note: pair %q: %v\n", p.Name, guard)
+					return res, nil
+				}
+				return res, guard
+			}
+		}
 		return res, fmt.Errorf(
 			"pair %q: the pre-flight pass failed, so nothing was changed: %w", p.Name, err)
 	}
@@ -281,6 +328,9 @@ func refuseAt(configured int) int {
 type passOptions struct {
 	backupDir string
 	suffix    string
+	// maxDeleteSize is the byte ceiling rclone checks before deleting, 0 for
+	// none. It is only ever set on the dry pass; see SizeGuardError.
+	maxDeleteSize int64
 }
 
 // conflictOutcome is what handleConflicts decided.
@@ -370,6 +420,13 @@ func runPass(ctx context.Context, fdst, fsrc fs.Fs, opts passOptions, dryRun, de
 	// rclone's own gate deletes up to the limit before aborting, which is the
 	// opposite of what this project needs. Ours runs above, on the dry pass.
 	ci.MaxDelete = -1
+	// Same reason, but the byte total is only ever measured on the dry pass:
+	// rclone stops at the threshold, so leaving this on for the real pass would
+	// turn a refusal into a partial deletion.
+	ci.MaxDeleteSize = -1
+	if opts.maxDeleteSize > 0 {
+		ci.MaxDeleteSize = fs.SizeSuffix(opts.maxDeleteSize)
+	}
 
 	// accounting.Stats honours the group on the context and falls back to the
 	// global counters, so the command line keeps its old behaviour while the

@@ -251,9 +251,32 @@
 | 缺口 | 原因 |
 |---|---|
 | 熔断通知（系统托盘/消息栏） | 依赖 F5 的通知基础设施 |
-| `max_delete_size`（按体积限） | rclone 的 stats 没有暴露 `deletesSize` 的读接口 |
 | `two-way` / `custom` | 需要 F4 的冲突检测先就位 |
 | 作业文件里配 `state_file` | ✅ 已支持：`[pair.remote.options]`（只允许非敏感项，凭据会被拒绝） |
+
+**`max_delete_size`（按体积限）2026-11-08 已实现**
+
+原因里曾写着「rclone 没暴露 `deletesSize`」—— 确实没有读接口（`deletesSize` 不导出，
+也不在 `RemoteStats` 里）。做法改成借用 rclone 自己的阈值：只在**预检的那一趟**打开
+`--max-delete-size`，它的检查发生在真正删除之前，所以触发时什么也没删。
+
+判定方式不靠字符串匹配：预检报错时**关掉上限再测一次**，如果这趟能跑完且统计到的
+待删数更多，就说明拦住它的是体积上限；如果照样失败，那就是真的失败，原样报出。
+
+验收实测（local 后端，4 个 1 KiB 文件 / 只有 4 个待删）：
+
+| 配置 | 结果 |
+|---|---|
+| `max_delete_size = "1k"` | `BLOCKED`，exit 1，文案「wanted to delete 4 file(s), more than max_delete_size allows (1 KiB). **NOTHING was deleted**」，远端 4 个文件一个不少 |
+| `max_delete_size = "1M"` | 正常删除 4 个，远端 0 个，exit 0 |
+| `max_delete_size = "1 kilobyte"` | 加载阶段就被拒，错误里点名该字段 |
+
+界面：作业级与 pair 级都多了「删除体积上限」输入框，留空=不限；改 750M → 2G 经 API
+往返正确，写入 `max_delete_size = "2G"`；填 `lots` 被 400 拒，文件保持不变。
+
+**已知局限**：只有预检那一趟按体积限。真跑那一趟不设上限（否则就变成「删到上限再停」
+的局部删除，正是本项目拒绝的语义），所以「两趟之间目标端被外部改动」这种情况
+只能靠文件数上限事后发现，字节数不复查。
 
 ---
 

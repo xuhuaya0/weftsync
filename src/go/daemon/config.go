@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"weftsync/job"
@@ -66,6 +67,10 @@ type SyncView struct {
 	MaxDelete        int64  `json:"max_delete"`
 	// MaxDeleteSet is false when the value shown is the inherited default.
 	MaxDeleteSet bool `json:"max_delete_set"`
+	// MaxDeleteSize is the byte ceiling as written, e.g. "1G". Empty means none.
+	MaxDeleteSize string `json:"max_delete_size"`
+	// MaxDeleteSizeHelp is the one-line explanation the form shows.
+	MaxDeleteSizeHelp string `json:"max_delete_size_help"`
 
 	Deletions []string `json:"deletions"`
 	Namings   []string `json:"namings"`
@@ -95,7 +100,10 @@ func syncView(spec job.SyncSpec, resolved job.ResolvedSync) SyncView {
 		Conflict:         firstNonEmpty(spec.Conflict, resolved.Conflict),
 		MaxDelete:        resolved.MaxDelete,
 		MaxDeleteSet:     spec.MaxDelete != nil,
-		Deletions:        []string{job.DeletionPermanent, job.DeletionVersioning},
+		MaxDeleteSize:    resolved.MaxDeleteSizeText,
+		MaxDeleteSizeHelp: "单个 run 删除的总字节上限，例如 500M / 1G；留空=不限。" +
+			"按体积拦下时不删任何文件",
+		Deletions: []string{job.DeletionPermanent, job.DeletionVersioning},
 		Namings: []string{
 			job.NamingReplace, job.NamingTimestampFile, job.NamingTimestampDir,
 		},
@@ -195,8 +203,8 @@ func ViewConfig(e *entry, raw []byte) ConfigView {
 // explicit, inherited stays inherited — while still letting the user change
 // anything.
 //
-// out starts as prev so fields this form does not expose (max_delete_size) keep
-// their value instead of being erased by a save that knows nothing about them.
+// out starts as prev so fields this form does not expose keep their value
+// instead of being erased by a save that knows nothing about them.
 func mergeSync(prev job.SyncSpec, shown, in SyncView) job.SyncSpec {
 	out := prev
 	if in.Deletion != shown.Deletion {
@@ -218,6 +226,9 @@ func mergeSync(prev job.SyncSpec, shown, in SyncView) job.SyncSpec {
 		// An empty box means "inherit the default"; it must be able to clear a
 		// previously explicit limit.
 		out.MaxDelete = nil
+	}
+	if in.MaxDeleteSize != shown.MaxDeleteSize {
+		out.MaxDeleteSize = strings.TrimSpace(in.MaxDeleteSize)
 	}
 	return out
 }

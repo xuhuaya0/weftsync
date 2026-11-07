@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/rclone/rclone/fs"
 )
 
 // Sync variants, named after FreeFileSync's (docs/decisions.md D14).
@@ -128,7 +129,8 @@ type SyncSpec struct {
 	// "delete nothing at all", which is a legitimate choice.
 	MaxDelete *int64 `toml:"max_delete"`
 
-	// MaxDeleteSize is not implemented yet; see docs/roadmap.md F3.
+	// MaxDeleteSize caps the total bytes one run may delete, e.g. "1G". An
+	// empty string means no byte limit.
 	MaxDeleteSize string `toml:"max_delete_size"`
 }
 
@@ -284,6 +286,26 @@ func (p *Pair) EffectiveSync(c *Config) (ResolvedSync, error) {
 				"negative values are not a way to disable the guard", p.Name)
 	}
 
+	// The byte guard is the count guard's sibling: 5000 tiny files and one 40 GiB
+	// file are both "a few deletions", but only one of them is survivable.
+	// The value is parsed here so a typo is rejected when the file is saved
+	// rather than discovered by whichever pass would have deleted things.
+	size := firstNonEmpty(p.Sync.MaxDeleteSize, c.Job.Sync.MaxDeleteSize)
+	if size != "" {
+		var parsed fs.SizeSuffix
+		if err := parsed.Set(size); err != nil {
+			return out, fmt.Errorf(
+				"pair %q: max_delete_size %q is not a size (try \"500M\", \"1G\" or \"0\"): %w",
+				p.Name, size, err)
+		}
+		if parsed < 0 {
+			return out, fmt.Errorf(
+				"pair %q: max_delete_size must be >= 0 (0 refuses every deletion)", p.Name)
+		}
+		out.MaxDeleteSize = int64(parsed)
+		out.MaxDeleteSizeText = size
+	}
+
 	switch out.Conflict {
 	case ConflictReport, ConflictOverwrite, ConflictKeepBoth:
 	default:
@@ -301,6 +323,11 @@ type ResolvedSync struct {
 	VersioningNaming string
 	Conflict         string
 	MaxDelete        int64
+	// MaxDeleteSize is the byte ceiling for one run, 0 for "no ceiling".
+	MaxDeleteSize int64
+	// MaxDeleteSizeText is the same value as the user wrote it, so the
+	// configuration form can show "1G" instead of 1073741824.
+	MaxDeleteSizeText string
 }
 
 // LocalPath is the rclone path for the local side.

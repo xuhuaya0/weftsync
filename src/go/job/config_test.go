@@ -257,6 +257,87 @@ max_delete = -1
 	}
 }
 
+// max_delete_size is a size string, so the failure mode is a typo that would
+// otherwise reach the guard as zero ("no limit") and silently disarm it.
+func TestConfigMaxDeleteSize(t *testing.T) {
+	c := mustLoad(t, `
+[[pair]]
+name = "p"
+[pair.local]
+root = "/tmp/l"
+[pair.remote]
+backend = "feishu"
+root = "r"
+[pair.sync]
+max_delete_size = "1G"
+`)
+	spec, err := c.Pair[0].EffectiveSync(c)
+	if err != nil {
+		t.Fatalf("EffectiveSync: %v", err)
+	}
+	if spec.MaxDeleteSize != 1<<30 {
+		t.Errorf("MaxDeleteSize = %d, want %d", spec.MaxDeleteSize, 1<<30)
+	}
+	if spec.MaxDeleteSizeText != "1G" {
+		t.Errorf("MaxDeleteSizeText = %q, want the text the user wrote", spec.MaxDeleteSizeText)
+	}
+
+	// Unset means no ceiling, not "refuse everything".
+	c2 := mustLoad(t, `
+[[pair]]
+name = "p"
+[pair.local]
+root = "/tmp/l"
+[pair.remote]
+backend = "feishu"
+root = "r"
+`)
+	spec2, err := c2.Pair[0].EffectiveSync(c2)
+	if err != nil {
+		t.Fatalf("EffectiveSync: %v", err)
+	}
+	if spec2.MaxDeleteSize != 0 {
+		t.Errorf("unset MaxDeleteSize = %d, want 0", spec2.MaxDeleteSize)
+	}
+
+	if err := loadErr(t, `
+[[pair]]
+name = "p"
+[pair.local]
+root = "/tmp/l"
+[pair.remote]
+backend = "feishu"
+root = "r"
+[pair.sync]
+max_delete_size = "1GB of stuff"
+`); err == nil {
+		t.Fatal("a non-size max_delete_size should be rejected at load, not at the guard")
+	}
+
+	// The job-level value is a default the pair inherits.
+	c3 := mustLoad(t, `
+[job]
+name = "j"
+[job.sync]
+max_delete_size = "500M"
+
+[[pair]]
+name = "p"
+[pair.local]
+root = "/tmp/l"
+[pair.remote]
+backend = "feishu"
+root = "r"
+`)
+	spec3, err := c3.Pair[0].EffectiveSync(c3)
+	if err != nil {
+		t.Fatalf("EffectiveSync: %v", err)
+	}
+	if spec3.MaxDeleteSize != 500<<20 {
+		t.Errorf("inherited MaxDeleteSize = %d, want %d", spec3.MaxDeleteSize, 500<<20)
+	}
+}
+
 func TestConfigRemotePath(t *testing.T) {
 	cases := []struct {
 		name    string
