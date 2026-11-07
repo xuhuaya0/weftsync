@@ -30,6 +30,13 @@ type API struct {
 	// from the running process so the entry reproduces what actually works; an
 	// empty Exe turns the feature off in the UI instead of guessing.
 	Autostart autostart.Spec
+	// SplitDir overrides where split undo ledgers are written.
+	//
+	// Empty means "next to the pair's state file, or under the user config
+	// directory when the pair has none". Exposed as a daemon flag because a ledger is
+	// a small permanent file the operator may want on a different disk - and because
+	// a test must be able to keep them out of the real user profile.
+	SplitDir string
 }
 
 // Routes returns the handler for the API.
@@ -44,6 +51,11 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/api/conflict/resolve", a.handleConflictResolve)
 	mux.HandleFunc("/api/credentials", a.handleCredentials)
 	mux.HandleFunc("/api/credentials/test", a.handleCredentialTest)
+	mux.HandleFunc("/api/split/precheck", a.handleSplitPrecheck)
+	mux.HandleFunc("/api/split/plan", a.handleSplitPlan)
+	mux.HandleFunc("/api/split/execute", a.handleSplitExecute)
+	mux.HandleFunc("/api/split/snapshots", a.handleSplitSnapshots)
+	mux.HandleFunc("/api/split/undo", a.handleSplitUndo)
 	mux.HandleFunc("/api/config", a.handleConfig)
 	mux.HandleFunc("/api/autostart", a.handleAutostart)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {

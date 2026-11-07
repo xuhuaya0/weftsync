@@ -19,10 +19,11 @@ import (
 )
 
 var (
-	addr    string
-	logFile string
-	runNow  bool
-	trayOn  bool
+	addr     string
+	logFile  string
+	runNow   bool
+	trayOn   bool
+	splitDir string
 )
 
 func init() {
@@ -36,6 +37,8 @@ func init() {
 		"Run every enabled job once at startup, then follow the schedule")
 	flags.BoolVar(&trayOn, "tray", false,
 		"Show a notification area icon (Windows only; ignored elsewhere)")
+	flags.StringVar(&splitDir, "split-dir", "",
+		"Directory for split undo ledgers (default: next to the pair's state file)")
 }
 
 var commandDefinition = &cobra.Command{
@@ -96,7 +99,7 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 				return err
 			}
 
-			api := &daemon.API{D: d, Addr: addr, Autostart: autostartSpec(args)}
+			api := &daemon.API{D: d, Addr: addr, Autostart: autostartSpec(args), SplitDir: splitDir}
 			srv, ln, err := daemon.Listen(addr, api)
 			if err != nil {
 				return err

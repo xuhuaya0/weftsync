@@ -286,6 +286,10 @@ func (f *Fs) command(ctx context.Context, name string, arg []string, opt map[str
 		// The file path travels in -o path=; the positional argument would be
 		// resolved as an Fs by rclone, which cannot name a file.
 		return f.resolveCommand(ctx, arg, opt)
+	case "repath":
+		// Extra positional arguments are passed through after the remote path, so
+		// the move pairs arrive here.
+		return f.repathCommand(ctx, arg)
 	default:
 		return nil, fmt.Errorf("%w: feishu has no command %q", fs.ErrorCommandNotFound, name)
 	}
@@ -294,6 +298,21 @@ func (f *Fs) command(ctx context.Context, name string, arg []string, opt map[str
 // commandHelp documents the backend commands.
 func commandHelp() []fs.CommandHelp {
 	return []fs.CommandHelp{
+		{
+			Name:  "repath",
+			Short: "Move state entries to new paths after a directory split",
+			Long: `Rewrites the sync state after files have been moved on both sides.
+
+Arguments are alternating from/to paths: repath r: a.txt _x/a.txt b.txt _x/b.txt
+moves a.txt and b.txt. Only the state file changes: no file is uploaded, moved or
+deleted.
+
+Without this the next run would find no record for any moved file, treat it as new
+and upload it again - and because Feishu creates a new token rather than overwriting,
+that leaves a duplicate of everything the split just tidied up.
+
+Normally called by weftsync's split feature, not by hand.`,
+		},
 		{
 			Name:  "resolve",
 			Short: "Settle one conflicting path by editing the sync state",

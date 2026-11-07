@@ -151,6 +151,10 @@ type Daemon struct {
 	// history and logs back the UI's "what happened" views.
 	history *ring[RunRecord]
 	logs    *logSink
+
+	// splitting marks jobs with a split in flight. A split moves files on both
+	// sides, so two at once on one job would move the same files under each other.
+	splitting map[string]bool
 }
 
 // New builds a daemon for the given job files.

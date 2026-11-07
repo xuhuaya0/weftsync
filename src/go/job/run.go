@@ -13,6 +13,8 @@ import (
 	"github.com/rclone/rclone/fs/accounting"
 	"github.com/rclone/rclone/fs/filter"
 	rsync "github.com/rclone/rclone/fs/sync"
+
+	"weftsync/split"
 )
 
 // GuardError means the run was stopped because it wanted to delete more than the
@@ -81,6 +83,9 @@ type PairResult struct {
 	Actual    PassResult `json:"actual"`
 	GuardHit  bool       `json:"guard_hit"`
 	Conflicts []Conflict `json:"conflicts,omitempty"`
+	// OverLimit names directories holding more direct children than the backend
+	// accepts, so the run was refused before anything was uploaded.
+	OverLimit []string `json:"over_limit,omitempty"`
 }
 
 // Options tunes a run.
@@ -95,6 +100,9 @@ type Options struct {
 	// file" can name a file from the other job. Empty means global, which is what
 	// the command line wants.
 	StatsGroup string
+	// MaxNodesPerDir is the direct-child count that makes a directory over-limit.
+	// Zero means split.DefaultRefuseAt.
+	MaxNodesPerDir int
 }
 
 // Run executes every enabled pair in the job, in order.
@@ -144,6 +152,35 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	res.Variant = variant
 	res.Local = p.LocalPath()
 	res.Remote = remotePath
+
+	// Pre-flight: refuse a directory holding more direct children than the backend
+	// accepts. Feishu answers 1062507 for those, but only on the call that creates
+	// or uploads into the folder - by which time part of the run has happened. A
+	// local walk costs nothing in comparison, and it lets the run stop with a
+	// message naming the directory instead of a bare API error.
+	//
+	// A preview does not fail on this: its job is to report what a real run would
+	// do, and the answer is "be refused". The directories are listed either way so
+	// the plan panel and the error agree.
+	findings, err := split.Precheck(p.LocalPath(), split.PrecheckOptions{
+		RefuseAt: opt.MaxNodesPerDir,
+	})
+	if err != nil {
+		return res, fmt.Errorf("pair %q: pre-flight check: %w", p.Name, err)
+	}
+	if len(findings) > 0 {
+		for _, f := range findings {
+			res.OverLimit = append(res.OverLimit, f.RelPath)
+		}
+		limitErr := &split.OverLimitError{
+			Root: p.LocalPath(), Limit: refuseAt(opt.MaxNodesPerDir), Findings: findings,
+		}
+		if opt.DryRun {
+			fmt.Fprintf(w, "note: pair %q: %v\n", p.Name, limitErr)
+		} else {
+			return res, fmt.Errorf("pair %q: %w", p.Name, limitErr)
+		}
+	}
 
 	fdst, err := fs.NewFs(ctx, remotePath)
 	if err != nil {
@@ -231,6 +268,14 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 			p.Name, actual.Destructive(), spec.MaxDelete)
 	}
 	return res, nil
+}
+
+// refuseAt resolves the configured threshold.
+func refuseAt(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	return split.DefaultRefuseAt
 }
 
 type passOptions struct {

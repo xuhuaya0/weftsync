@@ -137,6 +137,7 @@
   <button role="tab" aria-selected="false" data-tab="conflicts">冲突</button>
   <button role="tab" aria-selected="false" data-tab="history">历史</button>
   <button role="tab" aria-selected="false" data-tab="log">日志</button>
+  <button role="tab" aria-selected="false" data-tab="split">拆分</button>
   <button role="tab" aria-selected="false" data-tab="settings">设置</button>
 </div>
 
@@ -215,6 +216,57 @@
         <tr><th>作业</th><th>开始</th><th>耗时</th><th>结果</th><th>上传</th><th>删除</th><th>说明</th></tr>
       </thead>
       <tbody id="history"><tr><td colspan="7" class="empty">暂无记录</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<section id="tab-split" class="tab hidden">
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <strong class="grow">目录拆分</strong>
+      <select id="sp-job"><option value="">（选择作业）</option></select>
+      <select id="sp-pair"><option value="">（含单 pair）</option></select>
+      <button id="sp-check">检查</button>
+    </div>
+
+    <div class="note" style="margin-bottom:12px">
+      飞书单层最多 <strong>1500</strong> 个直接子项，超过会报错；本工具在
+      <strong>1400</strong> 就拦下，留出余量。拆分是<strong>会移动你本地文件</strong>的操作：
+      先移动本地（可秒级回滚），再移动云端（受限速影响较慢），最后校验两侧。
+      <div style="margin-top:6px;color:var(--muted)">
+        定时任务永不自动拆分，只在同步前拦下并提示。拆分前会写一份账本，可用「撤销」移回原位。
+      </div>
+    </div>
+
+    <div id="sp-body" class="empty">选择一个作业后点「检查」</div>
+  </div>
+
+  <div class="card" id="sp-plan-card" style="display:none">
+    <div class="row" style="margin-bottom:12px">
+      <strong class="grow">拆分方案 · <span id="sp-plan-dir" class="mono"></span></strong>
+      <span id="sp-plan-total" class="sub" style="margin:0"></span>
+    </div>
+    <div class="row" style="margin-bottom:12px" id="sp-schemes"></div>
+    <div id="sp-plan-body"></div>
+    <div class="field" style="margin-top:12px">
+      <label>确认</label>
+      <input type="text" id="sp-confirm" placeholder="输入目录名以确认" style="width:200px">
+      <span class="hint" id="sp-confirm-hint"></span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="sp-execute" class="danger-btn" disabled>同意并执行拆分</button>
+      <span class="sub" id="sp-note" style="margin:0"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <strong class="grow">拆分记录（可撤销）</strong>
+      <button id="sp-refresh-snaps">刷新</button>
+    </div>
+    <table>
+      <thead><tr><th>开始时间</th><th>目录</th><th>方式</th><th>条目</th><th>状态</th><th style="width:1%"></th></tr></thead>
+      <tbody id="sp-snaps"><tr><td colspan="6" class="empty">—</td></tr></tbody>
     </table>
   </div>
 </section>
@@ -853,9 +905,315 @@ document.querySelectorAll('.tabs button').forEach(btn => {
     document.querySelectorAll('.tab').forEach(s => s.classList.add('hidden'));
     document.getElementById('tab-' + btn.dataset.tab).classList.remove('hidden');
     if (btn.dataset.tab === 'config') { syncJobPicker(); loadConfig(); }
+    if (btn.dataset.tab === 'split') { loadSplit(); }
     if (btn.dataset.tab === 'settings') { loadAutostart(); loadCredentials(); }
   });
 });
+
+// ------------------------------------------------------------------ split tab
+//
+// The page never decides anything on its own: 「检查」 reports over-limit
+// directories, choosing a scheme builds a plan, and executing needs the directory's
+// own name typed in. That last part is not decoration - the endpoint rejects a
+// request without it, because moving the user's files must not be one click away.
+let spState = { over: [], plan: null };
+
+const SCHEME_LABELS = {
+  type: "按文件类型",
+  initial: "按首字母",
+  year: "按修改年份",
+  count: "按数量均分",
+};
+
+async function loadSplit() {
+  syncSplitJobPicker();
+  await refreshSnapshots();
+}
+
+// syncSplitJobPicker keeps the job/pair selects in step with the daemon's list.
+function syncSplitJobPicker() {
+  const jobs = (snapshot && snapshot.jobs) || [];
+  const sel = document.getElementById("sp-job");
+  const want = jobs.map(j => j.name).join("\u0000");
+  if (sel.dataset.sig !== want) {
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">（选择作业）</option>' +
+      jobs.map(j => `<option value="${esc(j.name)}">${esc(j.name)}</option>`).join("");
+    sel.dataset.sig = want;
+    if (jobs.some(j => j.name === prev)) sel.value = prev;
+  }
+  syncSplitPairPicker();
+}
+
+function syncSplitPairPicker() {
+  const name = document.getElementById("sp-job").value;
+  const job = ((snapshot && snapshot.jobs) || []).find(j => j.name === name);
+  const sel = document.getElementById("sp-pair");
+  // The daemon's status only carries the pair count, so the select offers index
+  // placeholders; the API accepts an empty pair when the job has exactly one.
+  const count = job ? job.pairs : 0;
+  const want = name + "|" + count;
+  if (sel.dataset.sig === want) return;
+  sel.dataset.sig = want;
+  sel.innerHTML = '<option value="">（全部 / 单 pair）</option>';
+  if (count > 1) {
+    for (let i = 1; i <= count; i++) {
+      sel.innerHTML += `<option value="p${i - 1}">第 ${i} 个 pair</option>`;
+    }
+  }
+}
+
+function splitQS(extra) {
+  const q = new URLSearchParams();
+  q.set("job", document.getElementById("sp-job").value);
+  const pair = document.getElementById("sp-pair").value;
+  if (pair) q.set("pair", pair);
+  for (const [k, v] of Object.entries(extra || {})) {
+    if (v !== undefined && v !== null && v !== "") q.set(k, v);
+  }
+  return q.toString();
+}
+
+async function splitCheck() {
+  const body = document.getElementById("sp-body");
+  const job = document.getElementById("sp-job").value;
+  if (!job) { body.className = "empty"; body.textContent = "先选择一个作业"; return; }
+
+  body.className = "empty";
+  body.textContent = "检查中…";
+  let data;
+  try {
+    data = await getJSON("/api/split/precheck?" + splitQS());
+  } catch (e) {
+    body.className = "note err";
+    body.textContent = "检查失败：" + e.message;
+    return;
+  }
+  spState.over = data.findings || [];
+  renderSplitCheck(data);
+  if (spState.over.length) {
+    await splitPlan(spState.over[0].rel_path, "type");
+  } else {
+    document.getElementById("sp-plan-card").style.display = "none";
+  }
+}
+
+function renderSplitCheck(data) {
+  const body = document.getElementById("sp-body");
+  if (!(data.findings || []).length) {
+    body.className = "";
+    body.innerHTML = `<div class="note ok">没有目录超过上限（本工具按 ${data.refuse_at} 拦截，
+      飞书硬限 ${data.feishu_limit}）。</div>`;
+    return;
+  }
+  body.className = "";
+  body.innerHTML =
+    `<div class="note">发现 ${data.findings.length} 个目录超过 ${data.refuse_at} 项。` +
+    `同步会被拦下，需要先拆分其中一个：</div>` +
+    `<table><thead><tr><th>目录</th><th>文件</th><th>子目录</th><th>合计</th><th style="width:1%"></th></tr></thead><tbody>` +
+    data.findings.map(f => `<tr>
+      <td class="mono">${esc(f.rel_path || "（根目录）")}</td>
+      <td class="mono">${f.files}</td>
+      <td class="mono">${f.dirs}</td>
+      <td class="mono danger">${f.total}</td>
+      <td class="actions"><button data-sp-choose="${esc(f.rel_path)}">按此目录拆分</button></td>
+    </tr>`).join("") +
+    `</tbody></table>`;
+
+  body.querySelectorAll("button[data-sp-choose]").forEach(b => {
+    b.addEventListener("click", () => splitPlan(b.dataset.spChoose, currentScheme()));
+  });
+}
+
+function currentScheme() {
+  const active = document.querySelector("#sp-schemes button[aria-selected='true']");
+  return active ? active.dataset.spScheme : "type";
+}
+
+async function splitPlan(dir, scheme) {
+  const card = document.getElementById("sp-plan-card");
+  const body = document.getElementById("sp-plan-body");
+  card.style.display = "";
+  body.className = "empty";
+  body.textContent = "生成方案中…";
+
+  // The scheme row is rebuilt every time, so it always shows the current choice
+  // and the directory it applies to.
+  document.getElementById("sp-plan-dir").textContent = dir || "（根目录）";
+  document.getElementById("sp-schemes").innerHTML = Object.entries(SCHEME_LABELS)
+    .map(([key, label]) =>
+      `<button data-sp-scheme="${key}" aria-selected="${key === scheme}">${label}</button>`)
+    .join("");
+  document.querySelectorAll("#sp-schemes button[data-sp-scheme]").forEach(b => {
+    b.addEventListener("click", () => splitPlan(dir, b.dataset.spScheme));
+  });
+
+  let plan;
+  try {
+    plan = await getJSON("/api/split/plan?" + splitQS({ dir, scheme }));
+  } catch (e) {
+    body.className = "note err";
+    body.textContent = "生成方案失败：" + e.message;
+    return;
+  }
+  spState.plan = plan;
+  renderSplitPlan(plan);
+}
+
+function renderSplitPlan(plan) {
+  const body = document.getElementById("sp-plan-body");
+  body.className = "";
+  document.getElementById("sp-plan-total").textContent =
+    `${plan.files} 项 · ${fmtBytes(plan.bytes)} → ${plan.buckets.length} 个子目录`;
+
+  let html = "";
+  if (plan.notes && plan.notes.length) {
+    html += `<div class="note">${plan.notes.map(n => esc(n)).join("<br>")}</div>`;
+  }
+  html += `<table><thead><tr><th>子目录</th><th>条目</th><th>大小</th></tr></thead><tbody>` +
+    plan.buckets.map(b => `<tr>
+      <td class="mono">${esc(b.name)}</td>
+      <td class="mono">${b.files}</td>
+      <td class="mono">${fmtBytes(b.bytes)}</td>
+    </tr>`).join("") + `</tbody></table>`;
+
+  if ((plan.samples || []).length) {
+    html += `<div class="sub" style="margin:10px 0 4px">示例</div>
+      <div class="mono sub">` +
+      plan.samples.map(s => `${esc(s.from)} → ${esc(s.to)}`).join("<br>") +
+      `</div>`;
+  }
+  body.innerHTML = html;
+
+  const input = document.getElementById("sp-confirm");
+  input.value = "";
+  input.placeholder = `输入 ${plan.confirm} 以确认`;
+  document.getElementById("sp-confirm-hint").textContent =
+    `必须输入「${plan.confirm}」才能执行`;
+  document.getElementById("sp-execute").disabled = true;
+  document.getElementById("sp-note").textContent = "";
+}
+
+// The confirm box gates the button; the server checks the same value again.
+document.getElementById("sp-confirm").addEventListener("input", () => {
+  const plan = spState.plan;
+  if (!plan) return;
+  const btn = document.getElementById("sp-execute");
+  btn.disabled = document.getElementById("sp-confirm").value !== plan.confirm;
+});
+
+document.getElementById("sp-execute").addEventListener("click", async () => {
+  const plan = spState.plan;
+  const btn = document.getElementById("sp-execute");
+  const note = document.getElementById("sp-note");
+  if (!plan) return;
+
+  btn.disabled = true;
+  btn.textContent = "执行中…";
+  note.className = "sub";
+  note.textContent = "正在移动文件，请不要关闭页面…";
+
+  try {
+    const r = await fetch("/api/split/execute?" + splitQS({
+      dir: plan.dir, scheme: plan.scheme,
+      confirm: document.getElementById("sp-confirm").value,
+    }), { method: "POST" });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) {
+      // A failure carries the snapshot path, which is what a retry needs.
+      const detail = data && data.error ? data.error : ("HTTP " + r.status);
+      throw new Error(detail);
+    }
+    note.className = "sub ok";
+    note.textContent = `完成：移动 ${data.moved} 项，校验${data.verified ? "通过" : "未通过"}` +
+      `；同步状态更新 ${data.state_rewritten} 条`;
+    document.getElementById("sp-plan-card").style.display = "none";
+    await splitCheck();
+    await refreshSnapshots();
+  } catch (e) {
+    note.className = "sub bad";
+    note.textContent = "拆分失败：" + e.message;
+    btn.disabled = false;
+  }
+  btn.textContent = "同意并执行拆分";
+});
+
+async function refreshSnapshots() {
+  const tbody = document.getElementById("sp-snaps");
+  const job = document.getElementById("sp-job").value;
+  if (!job) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">先选择一个作业</td></tr>';
+    return;
+  }
+  let data;
+  try {
+    data = await getJSON("/api/split/snapshots?" + splitQS());
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">读取失败：${esc(e.message)}</td></tr>`;
+    return;
+  }
+  const list = data.snapshots || [];
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">还没有拆分记录</td></tr>';
+    return;
+  }
+  tbody.innerHTML = list.map(s => {
+    // Order matters: an undone split also has completed=false and (before the
+    // Pending fix) would look like an interrupted one.
+    const state = s.undone
+      ? '<span class="empty">已撤销</span>'
+      : s.completed
+        ? '<span class="ok">完成</span>'
+        : (s.pending ? `<span class="warn">未完成（剩 ${s.pending}）</span>`
+                     : '<span class="warn">未标记完成</span>');
+    // An undone ledger has nothing left to undo.
+    const undoBtn = s.undone
+      ? ''
+      : `<button data-sp-undo="${esc(s.path)}">撤销</button>`;
+    return `<tr>
+      <td class="mono">${esc(fmtTime(s.created_at))}</td>
+      <td class="mono">${esc(s.dir || "（根目录）")}</td>
+      <td>${esc(SCHEME_LABELS[s.scheme] || s.scheme)}</td>
+      <td class="mono">${s.moves}</td>
+      <td>${state}</td>
+      <td class="actions">${undoBtn}</td>
+    </tr>`;
+  }).join("");
+
+  tbody.querySelectorAll("button[data-sp-undo]").forEach(b => {
+    b.addEventListener("click", () => splitUndo(b.dataset.spUndo, b));
+  });
+}
+
+async function splitUndo(snapPath, btn) {
+  if (!confirm("撤销会把文件按账本移回原位（本地与云端都做）。继续吗？")) return;
+  btn.disabled = true;
+  btn.textContent = "撤销中…";
+  try {
+    const r = await fetch("/api/split/undo?" + splitQS({ snapshot: snapPath }),
+      { method: "POST" });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((data && data.error) || ("HTTP " + r.status));
+    btn.textContent = `已移回 ${data.moved} 项`;
+    await splitCheck();
+    await refreshSnapshots();
+  } catch (e) {
+    btn.textContent = "撤销失败";
+    btn.title = e.message;
+    alert("撤销失败：" + e.message);
+    btn.disabled = false;
+  }
+}
+
+document.getElementById("sp-job").addEventListener("change", () => {
+  syncSplitPairPicker();
+  document.getElementById("sp-plan-card").style.display = "none";
+  document.getElementById("sp-body").className = "empty";
+  document.getElementById("sp-body").textContent = "点「检查」开始";
+  refreshSnapshots();
+});
+document.getElementById("sp-check").addEventListener("click", splitCheck);
+document.getElementById("sp-refresh-snaps").addEventListener("click", refreshSnapshots);
 
 // ------------------------------------------------------------------ settings: autostart
 let autostartView = null;
