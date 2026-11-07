@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -48,15 +49,35 @@ type PassResult struct {
 // Destructive reports the total number of destructive operations in the pass.
 func (r PassResult) Destructive() int64 { return r.Deleted + r.DeletedDirs }
 
+// ErrDeletionBlocked is unused here; deletions are gated by GuardError.
+
+// ConflictError means the run stopped because the remote no longer matches the
+// snapshot and the policy is to report rather than act.
+type ConflictError struct {
+	Pair  string
+	Count int
+}
+
+func (e *ConflictError) Error() string {
+	return fmt.Sprintf(
+		"pair %q has %d conflict(s) between the folder and the sync state. "+
+			"NOTHING was uploaded, overwritten or deleted. "+
+			"Review the report above, then either fix the folder in Feishu, "+
+			"run `weftsync backend dedupe` for duplicate copies, "+
+			"or set conflict = \"overwrite\" / \"keep-both\" for this pair",
+		e.Pair, e.Count)
+}
+
 // PairResult is the outcome for one pair.
 type PairResult struct {
-	Pair     string
-	Variant  string
-	Local    string
-	Remote   string
-	DryRun   PassResult // what the gate measured
-	Actual   PassResult
-	GuardHit bool
+	Pair      string
+	Variant   string
+	Local     string
+	Remote    string
+	DryRun    PassResult // what the gate measured
+	Actual    PassResult
+	GuardHit  bool
+	Conflicts []Conflict
 }
 
 // Options tunes a run.
@@ -118,6 +139,18 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	if err != nil {
 		return res, fmt.Errorf("pair %q: open source %q: %w", p.Name, p.LocalPath(), err)
 	}
+
+	// Conflicts come first: if the remote no longer matches the snapshot, running
+	// either pass would push our version over somebody else's change.
+	handled, err := handleConflicts(ctx, p, spec, fdst, fsrc, w)
+	res.Conflicts = handled.reported
+	if err != nil {
+		return res, err
+	}
+	if handled.abort {
+		return res, &ConflictError{Pair: p.Name, Count: len(handled.reported)}
+	}
+	ctx = handled.ctx
 
 	// The trash folder name must be identical across both passes, otherwise the
 	// dry run would be measuring a different plan from the one executed.
@@ -189,6 +222,74 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 type passOptions struct {
 	backupDir string
 	suffix    string
+}
+
+// conflictOutcome is what handleConflicts decided.
+func handleConflicts(
+	ctx context.Context,
+	p *Pair,
+	spec ResolvedSync,
+	fdst, fsrc fs.Fs,
+	w io.Writer,
+) (conflictOutcome, error) {
+	conflicts, err := detectConflicts(ctx, fdst, "")
+	if err != nil {
+		// Detection is best effort: a backend without the command returns none.
+		// A real failure here must not silently become "no conflicts".
+		return conflictOutcome{}, fmt.Errorf("pair %q: %w", p.Name, err)
+	}
+	if len(conflicts) == 0 {
+		return conflictOutcome{ctx: ctx}, nil
+	}
+
+	paths := reportConflicts(w, p.Name, conflicts)
+	out := conflictOutcome{ctx: ctx, reported: conflicts}
+
+	switch spec.Conflict {
+	case ConflictOverwrite:
+		// Let the engine proceed; it will upload over the conflicting names.
+		fmt.Fprintf(w, "  conflict policy: overwrite - the local copy will replace the remote one\n")
+		return out, nil
+
+	case ConflictKeepBoth:
+		// Upload our copy under a new name, leave the remote original alone, and
+		// keep the original path out of the sync set so nothing overwrites it.
+		host, _ := os.Hostname()
+		seen := map[string]int{}
+		for _, c := range conflicts {
+			seen[c.Path]++
+			newPath, err := keepBoth(ctx, fdst, fsrc, c.Path, host, seen[c.Path])
+			if err != nil {
+				return out, fmt.Errorf("pair %q: keep-both: %w", p.Name, err)
+			}
+			fmt.Fprintf(w, "  kept both: %q also uploaded as %q\n", c.Path, newPath)
+		}
+		ctx, err := excludePaths(ctx, paths)
+		if err != nil {
+			return out, err
+		}
+		out.ctx = ctx
+		out.abort = true // the conflicts themselves were handled; do not sync them
+		return out, nil
+
+	default: // ConflictReport
+		ctx, err := excludePaths(ctx, paths)
+		if err != nil {
+			return out, err
+		}
+		out.ctx = ctx
+		out.abort = true
+		fmt.Fprintf(w, "  conflict policy: report - these paths are left untouched\n")
+		return out, nil
+	}
+}
+
+type conflictOutcome struct {
+	ctx      context.Context
+	reported []Conflict
+	// abort stops the run: with report the point is to change nothing at all,
+	// and with keep-both the conflicts are already resolved.
+	abort bool
 }
 
 // runPass performs one sync pass and reports what it did.

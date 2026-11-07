@@ -280,14 +280,30 @@ func (f *Fs) command(ctx context.Context, name string, arg []string, opt map[str
 		return f.dedupeListCommand(ctx, dir)
 	case "dedupe":
 		return f.dedupeCommand(ctx, dir, opt)
+	case "conflicts":
+		return f.conflictsCommand(ctx, dir)
 	default:
-		return nil, fmt.Errorf("feishu: unknown backend command %q (try \"help\")", name)
+		return nil, fmt.Errorf("%w: feishu has no command %q", fs.ErrorCommandNotFound, name)
 	}
 }
 
 // commandHelp documents the backend commands.
 func commandHelp() []fs.CommandHelp {
 	return []fs.CommandHelp{
+		{
+			Name:  "conflicts",
+			Short: "Report paths where the remote no longer matches the sync state",
+			Long: `Compares the folder against the sync state and reports three situations:
+
+  - the recorded file is gone
+  - the name now carries a different file
+  - the name is shared by more than one file
+
+Feishu makes all three hard signals rather than guesses: re-uploading always
+creates a new token, and a folder may hold several files with one name.
+
+Requires state_file. This command only reports; it never modifies the remote.`,
+		},
 		{
 			Name:  "duplicates",
 			Short: "List names that exist more than once in a folder",

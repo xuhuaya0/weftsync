@@ -44,6 +44,17 @@ const (
 	NamingTimestampDir  = "timestamp-folder"
 )
 
+// Conflict policies (PLAN.md §4.2, decided by the user 2026-11-05).
+const (
+	// ConflictReport touches nothing on the remote and exits non-zero.
+	ConflictReport = "report"
+	// ConflictOverwrite lets the sync replace the remote copy (share links change).
+	ConflictOverwrite = "overwrite"
+	// ConflictKeepBoth uploads the local copy under a new name and leaves the
+	// remote original alone.
+	ConflictKeepBoth = "keep-both"
+)
+
 // Defaults. max_delete comes from the user's decision (PLAN.md A13); the variant
 // default is update because a sync tool that silently deletes is a worse failure
 // than one that keeps too much.
@@ -53,6 +64,7 @@ const (
 	DefaultVersioningDir  = "_weftsync_trash"
 	DefaultVersioningName = NamingTimestampDir
 	DefaultMaxDelete      = int64(50)
+	DefaultConflict       = ConflictReport
 )
 
 // Config is one job file: a job, its defaults, and the pairs it covers.
@@ -99,6 +111,9 @@ type SyncSpec struct {
 	Deletion         string `toml:"deletion"`
 	VersioningDir    string `toml:"versioning_dir"`
 	VersioningNaming string `toml:"versioning_naming"`
+	// Conflict decides what happens when the remote no longer matches the
+	// snapshot. Defaults to report, which changes nothing.
+	Conflict string `toml:"conflict"`
 	// MaxDelete is a pointer so "unset" and "0" stay distinguishable: 0 means
 	// "delete nothing at all", which is a legitimate choice.
 	MaxDelete *int64 `toml:"max_delete"`
@@ -203,6 +218,7 @@ func (p *Pair) EffectiveSync(c *Config) (ResolvedSync, error) {
 		Deletion:         firstNonEmpty(p.Sync.Deletion, c.Job.Sync.Deletion, DefaultDeletion),
 		VersioningDir:    firstNonEmpty(p.Sync.VersioningDir, c.Job.Sync.VersioningDir, DefaultVersioningDir),
 		VersioningNaming: firstNonEmpty(p.Sync.VersioningNaming, c.Job.Sync.VersioningNaming, DefaultVersioningName),
+		Conflict:         firstNonEmpty(p.Sync.Conflict, c.Job.Sync.Conflict, DefaultConflict),
 		MaxDelete:        DefaultMaxDelete,
 	}
 	if p.Sync.MaxDelete != nil {
@@ -242,6 +258,14 @@ func (p *Pair) EffectiveSync(c *Config) (ResolvedSync, error) {
 			"pair %q: max_delete must be >= 0 (0 refuses every deletion); "+
 				"negative values are not a way to disable the guard", p.Name)
 	}
+
+	switch out.Conflict {
+	case ConflictReport, ConflictOverwrite, ConflictKeepBoth:
+	default:
+		return out, fmt.Errorf(
+			"pair %q: unknown conflict policy %q (expected %q, %q or %q)",
+			p.Name, out.Conflict, ConflictReport, ConflictOverwrite, ConflictKeepBoth)
+	}
 	return out, nil
 }
 
@@ -250,6 +274,7 @@ type ResolvedSync struct {
 	Deletion         string
 	VersioningDir    string
 	VersioningNaming string
+	Conflict         string
 	MaxDelete        int64
 }
 

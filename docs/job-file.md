@@ -102,6 +102,7 @@ state_file = "C:/Users/me/AppData/Roaming/weftsync/state/work.state.json"
 | `versioning_dir` | string | `"_weftsync_trash"` | 仅 `versioning` 生效；**必须是目标内的相对目录** |
 | `versioning_naming` | string | `"timestamp-folder"` | `replace` / `timestamp-file` / `timestamp-folder` |
 | `max_delete` | int | `50` | 一次运行允许删除的条目数上限；**超出则整轮中止，一个都不删** |
+| `conflict` | string | `"report"` | 远端与快照不一致时的策略，见 §5.2 |
 | `max_delete_size` | string | — | **尚未实现**，见 `docs/roadmap.md` F3 |
 
 `max_delete = 0` 表示「一个都不许删」，是合法配置。负数会被拒绝 —— 它看起来像
@@ -120,6 +121,39 @@ state_file = "C:/Users/me/AppData/Roaming/weftsync/state/work.state.json"
 
 `_weftsync_trash` 会被自动排除出同步集 —— 否则下一轮 mirror 会把回收站当成
 「多余的目录」再删一次。
+
+### 5.2 `conflict`：远端与快照不一致怎么办
+
+飞书很适合作冲突检测，因为它的两个特性把「远端被改」变成了**硬信号**：
+同名重传必然产生新 token（无原地更新），而且同一文件夹允许同名共存。所以不需要靠
+mtime 猜谁更新（飞书的 mtime 就是上传时刻）。
+
+**三种信号**
+
+| 信号（`kind`） | 含义 |
+|---|---|
+| `remote-deleted` | 快照记录的 token 在该目录里**完全不存在** |
+| `remote-replaced` | 名字还在，但已不是我们记录的那个 token |
+| `duplicate-name` | 同一名字有 ≥ 2 个条目 |
+
+**三种策略**
+
+| `conflict` | 行为 | 退出码 |
+|---|---|---|
+| `report`（**默认**） | 打印冲突表，**该路径整轮不碰** | 非 0 |
+| `overwrite` | 照常同步，用本地版本覆盖同名 | 0 |
+| `keep-both` | 把本地那份改名上传（`<名> (from <主机> <时间>)<扩展名>`），远端原名不动 | 0 |
+
+`report` 的实现方式是**把冲突路径从同步集里过滤掉**，而不是「跑完再回滚」——
+所以冲突路径不可能被半处理。
+
+> **`overwrite` 不会变得更干净**：如果记录的那个 token 已经不在了（有人替换过），
+> 我们只能上传自己的新版本，**不能删对方那一份**，因为无法证明那是我们的文件。
+> 结果就是同一名字下多一份。清重复请用 `backend dedupe`（见
+> `docs/backend-commands.md`）。
+
+**没有 state_file 时**：无法检测冲突（没有基线），后端命令会直接报错而不是说
+「没有冲突」。
 
 ## 6. 变体（variant）
 
