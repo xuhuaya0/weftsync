@@ -35,6 +35,9 @@ type client struct {
 	sleep func(time.Duration)
 	// rand01 provides jitter in [0,1).
 	rand01 func() float64
+	// listFolderFn overrides listFolder in tests that model a folder tree
+	// instead of standing up an HTTP server.
+	listFolderFn func(ctx context.Context, token string) ([]remoteEntry, error)
 }
 
 func newClient(baseURL string, ts *tokenSource, hc *http.Client) *client {

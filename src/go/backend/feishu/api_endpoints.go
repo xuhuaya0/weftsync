@@ -50,6 +50,10 @@ type fileJSON struct {
 
 // listFolder returns every direct child of folderToken, following pagination.
 func (c *client) listFolder(ctx context.Context, folderToken string) ([]remoteEntry, error) {
+	if c.listFolderFn != nil {
+		return c.listFolderFn(ctx, folderToken)
+	}
+
 	const where = "files.list"
 
 	var (

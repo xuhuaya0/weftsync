@@ -45,8 +45,9 @@ func init() {
 	fs.Register(&fs.RegInfo{
 		Name:        "feishu",
 		Description: "Feishu / Lark Drive",
-		NewFs:       NewFs,
-		Options: []fs.Option{
+		NewFs:       NewFs, // Static so `backend help feishu:` can list them; the implementations live
+		// on the Fs instance (see dedupe.go).
+		CommandHelp: commandHelp(), Options: []fs.Option{
 			{
 				Name:     "app_id",
 				Help:     "Feishu application ID.\n\nFalls back to the environment variable " + EnvAppID + " when empty.",

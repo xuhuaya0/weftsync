@@ -82,6 +82,10 @@ func newFs(ctx context.Context, name, root string, opt *Options) (*Fs, error) {
 		// existing destinations still route through Update(): adding Move does
 		// not change the upload path.
 		Move: f.Move,
+		// Command exposes `backend duplicates` / `backend dedupe`. They live on
+		// the backend because it is the only layer that sees the raw listing
+		// (List collapses duplicates on purpose) and holds the snapshot tokens.
+		Command: f.command,
 	}).Fill(ctx, f)
 
 	f.resolver = newDirResolver(c, rootToken, f.root, f.root)
