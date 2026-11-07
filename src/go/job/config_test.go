@@ -167,7 +167,7 @@ root = "r"
 }
 
 func TestConfigRejectsUnimplementedVariants(t *testing.T) {
-	for _, v := range []string{VariantTwoWay, VariantCustom} {
+	for _, v := range []string{VariantCustom} {
 		err := loadErr(t, `
 [job]
 variant = "`+v+`"

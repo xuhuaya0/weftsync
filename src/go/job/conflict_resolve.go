@@ -66,6 +66,20 @@ func ResolveConflict(ctx context.Context, cfg *Config, pairName, path, action st
 
 // pullConflict downloads the remote file over the local one and adopts it.
 func pullConflict(ctx context.Context, p *Pair, path string) error {
+	// No token supplied: ask the object we are about to download. That works for
+	// the manual resolve flow, which starts from a real listing.
+	return pullConflictToken(ctx, p, path, "")
+}
+
+// pullConflictToken is pullConflict with the cloud token supplied by the caller.
+//
+// A two-way run has the token already: the conflict report lists the tokens
+// currently carrying the name. Passing it avoids asking the backend for
+// something it may not know - after the cloud replaced a file, the object read
+// back from that path can carry no token at all, and adopting "?" fails with
+// `token ? is not at "doc.txt" any more`, leaving the state stale so the same
+// conflict returns every run.
+func pullConflictToken(ctx context.Context, p *Pair, path, token string) error {
 	remotePath, err := p.RemotePath()
 	if err != nil {
 		return err
@@ -105,12 +119,36 @@ func pullConflict(ctx context.Context, p *Pair, path string) error {
 		return fmt.Errorf("the downloaded file %q has no usable modification time", path)
 	}
 
+	if token == "" {
+		token = objectToken(remoteObj)
+	}
+	if token == "?" {
+		return fmt.Errorf("the downloaded copy of %q has no token, so the sync state "+
+			"cannot record it; re-run once the cloud listing is settled", path)
+	}
+
 	return callBackendResolve(ctx, p, path, map[string]string{
 		"action": "adopt",
-		"token":  objectToken(remoteObj),
+		"token":  token,
 		"mtime":  fmt.Sprintf("%d", modTime.Unix()),
 		"size":   fmt.Sprintf("%d", localInfo.Size()),
 	})
+}
+
+// errResolveUnsupported means the backend has no resolve command at all.
+//
+// It is a distinct value because the two callers want opposite things from it:
+// a manual "keep the remote copy" request must fail (the user asked for a state
+// edit that cannot happen), while a two-way run has already done the only thing
+// that mattered - the download - and a backend with no snapshot has nothing to
+// adopt into.
+var errResolveUnsupported = errors.New(
+	"this backend does not support resolving conflicts one path at a time")
+
+// isCommandUnsupported recognises rclone's "no such backend command" answers.
+func isCommandUnsupported(err error) bool {
+	return errors.Is(err, fs.ErrorCommandNotFound) ||
+		strings.Contains(err.Error(), "unknown backend command")
 }
 
 // truncateMTime drops the sub-second part of a local file's modification time.
@@ -153,9 +191,8 @@ func callBackendResolve(ctx context.Context, p *Pair, path string, opt map[strin
 
 	out, err := features.Command(ctx, "resolve", nil, opt)
 	if err != nil {
-		if errors.Is(err, fs.ErrorCommandNotFound) ||
-			strings.Contains(err.Error(), "unknown backend command") {
-			return errors.New("this backend does not support resolving conflicts one path at a time")
+		if isCommandUnsupported(err) {
+			return errResolveUnsupported
 		}
 		return err
 	}

@@ -35,6 +35,11 @@ type Conflict struct {
 	Detail   string   `json:"detail"`
 	Recorded string   `json:"recorded,omitempty"`
 	Found    []string `json:"found,omitempty"`
+	// RecordedMTime and RecordedSize are what the snapshot says the local file
+	// looked like at the last sync. A two-way run uses them to tell "the cloud
+	// changed" from "both sides changed"; a one-way run ignores them.
+	RecordedMTime int64 `json:"recorded_mtime,omitempty"`
+	RecordedSize  int64 `json:"recorded_size,omitempty"`
 }
 
 // Conflict kinds reported by the feishu backend.
@@ -52,6 +57,14 @@ type ConflictScan struct {
 	Summary   string
 	Conflicts []Conflict
 }
+
+// detectConflictsFn is the conflict source RunPair uses.
+//
+// It is a variable so tests can supply a snapshot without a Feishu backend: the
+// local backend has no `conflicts` command, so the interesting half of the
+// two-way variant (what to do with a reported conflict) would otherwise be
+// untestable. Production code never reassigns it.
+var detectConflictsFn = detectConflicts
 
 // detectConflicts asks the backend for conflicts under dir.
 //
@@ -84,12 +97,14 @@ func detectConflicts(ctx context.Context, fdst fs.Fs, dir string) (ConflictScan,
 		Available *bool  `json:"available"`
 		Summary   string `json:"summary"`
 		Conflicts []struct {
-			Dir      string   `json:"dir"`
-			Name     string   `json:"name"`
-			Kind     string   `json:"kind"`
-			Recorded string   `json:"recorded"`
-			Found    []string `json:"found"`
-			Detail   string   `json:"detail"`
+			Dir           string   `json:"dir"`
+			Name          string   `json:"name"`
+			Kind          string   `json:"kind"`
+			Recorded      string   `json:"recorded"`
+			RecordedMTime int64    `json:"recorded_mtime"`
+			RecordedSize  int64    `json:"recorded_size"`
+			Found         []string `json:"found"`
+			Detail        string   `json:"detail"`
 		} `json:"conflicts"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
@@ -116,6 +131,7 @@ func detectConflicts(ctx context.Context, fdst fs.Fs, dir string) (ConflictScan,
 		scan.Conflicts = append(scan.Conflicts, Conflict{
 			Path: p, Kind: c.Kind, Detail: c.Detail,
 			Recorded: c.Recorded, Found: c.Found,
+			RecordedMTime: c.RecordedMTime, RecordedSize: c.RecordedSize,
 		})
 	}
 	sort.SliceStable(scan.Conflicts, func(i, j int) bool {

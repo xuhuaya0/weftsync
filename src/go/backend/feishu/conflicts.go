@@ -44,6 +44,15 @@ type conflictItem struct {
 	Kind string `json:"kind"`
 	// Recorded is the token the snapshot holds (empty when it had no record).
 	Recorded string `json:"recorded,omitempty"`
+	// RecordedMTime and RecordedSize are the local fingerprint the snapshot
+	// holds for this path.
+	//
+	// They are reported so the caller can tell "the cloud changed" from "both
+	// sides changed": the state is the only place that knows what the local
+	// file looked like at the last sync, and a two-way run needs that to decide
+	// whether downloading is safe.
+	RecordedMTime int64 `json:"recorded_mtime,omitempty"`
+	RecordedSize  int64 `json:"recorded_size,omitempty"`
 	// Found lists every token currently carrying that name.
 	Found []string `json:"found,omitempty"`
 	// Detail is a human sentence, meant to be shown as-is.
@@ -99,18 +108,21 @@ func (f *Fs) conflictsCommand(ctx context.Context, dir string) (*conflictReport,
 			report.Conflicts = append(report.Conflicts, conflictItem{
 				Dir: parentDir(path), Name: baseName(path),
 				Kind: ConflictRemoteDeleted, Recorded: entry.RemoteToken,
+				RecordedMTime: entry.LocalMTime, RecordedSize: entry.LocalSize,
 				Detail: "the file recorded in the snapshot is no longer in the folder",
 			})
 		case len(tokens) > 1:
 			report.Conflicts = append(report.Conflicts, conflictItem{
 				Dir: parentDir(path), Name: baseName(path),
 				Kind: ConflictDuplicateName, Recorded: entry.RemoteToken, Found: tokens,
+				RecordedMTime: entry.LocalMTime, RecordedSize: entry.LocalSize,
 				Detail: fmt.Sprintf("%d files share this name", len(tokens)),
 			})
 		case tokens[0] != entry.RemoteToken:
 			report.Conflicts = append(report.Conflicts, conflictItem{
 				Dir: parentDir(path), Name: baseName(path),
 				Kind: ConflictRemoteReplaced, Recorded: entry.RemoteToken, Found: tokens,
+				RecordedMTime: entry.LocalMTime, RecordedSize: entry.LocalSize,
 				Detail: "this name now carries a different file than the one we uploaded",
 			})
 		}
@@ -223,7 +235,10 @@ func (f *Fs) stateEntries() map[string]stateEntryView {
 
 	out := make(map[string]stateEntryView, len(f.st.Entries))
 	for k, v := range f.st.Entries {
-		out[k] = stateEntryView{RemoteToken: v.RemoteToken, Rebuilt: v.Rebuilt}
+		out[k] = stateEntryView{
+			RemoteToken: v.RemoteToken, Rebuilt: v.Rebuilt,
+			LocalMTime: v.LocalMTime, LocalSize: v.LocalSize,
+		}
 	}
 	return out
 }
@@ -232,6 +247,11 @@ func (f *Fs) stateEntries() map[string]stateEntryView {
 type stateEntryView struct {
 	RemoteToken string
 	Rebuilt     bool
+	// LocalMTime and LocalSize are the local fingerprint recorded at the last
+	// sync, used by the two-way variant to tell "the cloud changed" from "both
+	// sides changed".
+	LocalMTime int64
+	LocalSize  int64
 }
 
 func baseName(p string) string {

@@ -226,16 +226,16 @@ func (p *Pair) EffectiveVariant(c *Config) (string, error) {
 		v = DefaultVariant
 	}
 	switch v {
-	case VariantUpdate, VariantMirror:
+	case VariantUpdate, VariantMirror, VariantTwoWay:
 		return v, nil
-	case VariantTwoWay, VariantCustom:
+	case VariantCustom:
 		return "", fmt.Errorf(
 			"pair %q: variant %q is recognised but not implemented yet. "+
-				"Use %q or %q", p.Name, v, VariantUpdate, VariantMirror)
+				"Use %q, %q or %q", p.Name, v, VariantUpdate, VariantMirror, VariantTwoWay)
 	default:
 		return "", fmt.Errorf(
-			"pair %q: unknown variant %q (expected %q or %q)",
-			p.Name, v, VariantUpdate, VariantMirror)
+			"pair %q: unknown variant %q (expected %q, %q or %q)",
+			p.Name, v, VariantUpdate, VariantMirror, VariantTwoWay)
 	}
 }
 

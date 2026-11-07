@@ -105,6 +105,11 @@ type PairResult struct {
 	Actual    PassResult `json:"actual"`
 	GuardHit  bool       `json:"guard_hit"`
 	Conflicts []Conflict `json:"conflicts,omitempty"`
+	// Pulled counts files downloaded because the cloud replaced them (two-way).
+	Pulled int `json:"pulled"`
+	// Held counts conflicts a two-way run left for a human: deletions and files
+	// that only exist in the cloud.
+	Held int `json:"held"`
 	// OverLimit names directories holding more direct children than the backend
 	// accepts, so the run was refused before anything was uploaded.
 	OverLimit []string `json:"over_limit,omitempty"`
@@ -215,15 +220,61 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 
 	// Conflicts come first: if the remote no longer matches the snapshot, running
 	// either pass would push our version over somebody else's change.
-	handled, err := handleConflicts(ctx, p, spec, fdst, fsrc, w)
-	res.Conflicts = handled.reported
-	if err != nil {
-		return res, err
+	if variant == VariantTwoWay {
+		// Two-way takes the conflicts apart instead of aborting on all of them:
+		// a file the cloud replaced while the local copy sat still is exactly the
+		// case this variant exists for. Everything else is reported and held.
+		scan, scanErr := detectConflictsFn(ctx, fdst, "")
+		if scanErr != nil {
+			return res, fmt.Errorf("pair %q: %w", p.Name, scanErr)
+		}
+		if !scan.Available {
+			fmt.Fprintf(w, "note: pair %q: conflicts cannot be checked (%s); "+
+				"two-way needs a state_file, so this run can only upload\n",
+				p.Name, scan.Summary)
+		} else {
+			plan := planPulls(ctx, fsrc, scan.Conflicts)
+			pulled, pullErr := pullRemoteChanges(ctx, p, plan, opt.DryRun, w)
+			res.Pulled = pulled
+			res.Conflicts = plan.hold
+			res.Held = len(plan.hold)
+			if pullErr != nil {
+				return res, fmt.Errorf("pair %q: %w", p.Name, pullErr)
+			}
+			if len(plan.hold) > 0 {
+				reportConflicts(w, p.Name, plan.hold)
+				// Held paths must leave the sync set as well, otherwise the upload
+				// pass resurrects a file somebody deleted in the cloud - which is
+				// the exact opposite of "left alone", and would make the report a
+				// lie. Same rule the report policy already applies.
+				paths := make([]string, 0, len(plan.hold))
+				for _, c := range plan.hold {
+					paths = append(paths, c.Path)
+				}
+				excluded, err := excludePaths(ctx, paths)
+				if err != nil {
+					return res, fmt.Errorf("pair %q: %w", p.Name, err)
+				}
+				ctx = excluded
+				fmt.Fprintf(w, "  two-way: %d path(s) need a decision and were left alone "+
+					"(deletions and cloud-only files are not propagated; see docs/decisions.md D43)\n",
+					len(plan.hold))
+			}
+			if len(plan.pullable) > 0 {
+				fmt.Fprintf(w, "  two-way: downloaded %d replaced file(s)\n", pulled)
+			}
+		}
+	} else {
+		handled, err := handleConflicts(ctx, p, spec, fdst, fsrc, w)
+		res.Conflicts = handled.reported
+		if err != nil {
+			return res, err
+		}
+		if handled.abort {
+			return res, &ConflictError{Pair: p.Name, Count: len(handled.reported)}
+		}
+		ctx = handled.ctx
 	}
-	if handled.abort {
-		return res, &ConflictError{Pair: p.Name, Count: len(handled.reported)}
-	}
-	ctx = handled.ctx
 
 	// The trash folder name must be identical across both passes, otherwise the
 	// dry run would be measuring a different plan from the one executed.
@@ -239,7 +290,11 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 		}
 	}
 
-	if variant == VariantUpdate {
+	// Two-way runs no deletions at all in this stage: it behaves like update once
+	// the cloud-side replacements have been downloaded. Propagating deletions is
+	// the part that needs its own decision, so reaching the mirror branch here
+	// would quietly turn "two-way" into "delete on both sides".
+	if variant == VariantUpdate || variant == VariantTwoWay {
 		// update never deletes, so there is nothing to guard against.
 		actual, err := runPass(ctx, fdst, fsrc, opts, opt.DryRun, false)
 		res.Actual = actual
