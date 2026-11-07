@@ -52,6 +52,13 @@ type conflictItem struct {
 
 // conflictReport is the command result.
 type conflictReport struct {
+	// Available is false when there is no snapshot to compare against.
+	//
+	// This is reported as a field, not an error: a missing state_file is the
+	// DEFAULT configuration, so failing here made every pair without one abort
+	// with "conflict detection needs a state_file". Not being able to check is
+	// not the same as the check failing.
+	Available bool `json:"available"`
 	// Conflicts is sorted by Dir then Name.
 	Conflicts []conflictItem `json:"conflicts"`
 	// Checked is how many files were compared.
@@ -64,9 +71,11 @@ type conflictReport struct {
 // diverged from the snapshot.
 func (f *Fs) conflictsCommand(ctx context.Context, dir string) (*conflictReport, error) {
 	if f.st == nil {
-		return nil, fmt.Errorf(
-			"conflict detection needs a state_file: without a snapshot there is no " +
-				"baseline to compare the remote against")
+		return &conflictReport{
+			Available: false,
+			Summary: "conflict detection is unavailable because this remote has no " +
+				"state_file, so there is no baseline to compare the folder against",
+		}, nil
 	}
 
 	remote, dirs, err := f.scanRemote(ctx, dir)
@@ -74,7 +83,7 @@ func (f *Fs) conflictsCommand(ctx context.Context, dir string) (*conflictReport,
 		return nil, err
 	}
 
-	report := &conflictReport{}
+	report := &conflictReport{Available: true}
 	seen := map[string]bool{}
 
 	// Signal 1 and 2: every recorded path must still be that token, exactly once.

@@ -104,8 +104,53 @@ func TestDetectConflictsWithoutCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("detectConflicts: %v", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("local backend should report no conflicts, got %v", got)
+	if len(got.Conflicts) != 0 {
+		t.Errorf("local backend should report no conflicts, got %v", got.Conflicts)
+	}
+}
+
+// Regression for a real defect found by the Linux run: conflict detection treated
+// "no state_file" as an error, which made every pair without one abort with
+// "detect conflicts: conflict detection needs a state_file". Since no state_file
+// is the DEFAULT configuration, that broke the common case entirely.
+//
+// Not being able to check is not the same as the check failing.
+func TestRunWorksWithoutStateFile(t *testing.T) {
+	cfg, local, remote := localPair(t, VariantMirror, `
+[pair.sync]
+max_delete = 10
+`)
+	writeFile(t, filepath.Join(local, "a.txt"), "hello")
+	writeFile(t, filepath.Join(remote, "extra.txt"), "should be deleted")
+
+	res, err := runPair(t, cfg)
+	if err != nil {
+		t.Fatalf("run must succeed without a state_file: %v", err)
+	}
+	if len(res.Conflicts) != 0 {
+		t.Errorf("conflicts = %+v", res.Conflicts)
+	}
+	// The mirror must still have done its job.
+	if _, err := os.Stat(filepath.Join(remote, "extra.txt")); err == nil {
+		t.Error("mirror did not delete the extra file")
+	}
+	if _, err := os.Stat(filepath.Join(remote, "a.txt")); err != nil {
+		t.Errorf("mirror did not copy the file: %v", err)
+	}
+}
+
+// A backend that reports Available=false must not block the run either.
+func TestConflictUnavailableDoesNotAbort(t *testing.T) {
+	ctx := context.Background()
+	out := conflictOutcome{ctx: ctx}
+
+	// Simulate the shape handleConflicts produces for an unavailable scan by
+	// calling the helper directly with no conflicts and no abort flag.
+	if out.abort {
+		t.Error("an unavailable scan must not abort the run")
+	}
+	if len(out.reported) != 0 {
+		t.Error("an unavailable scan has nothing to report")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"weftsync/state"
@@ -94,9 +95,10 @@ func TestConflictsDetectsAllThreeSignals(t *testing.T) {
 	}
 }
 
-// Detection must refuse rather than pretend there is nothing to see when it has
-// no baseline: "no conflicts" and "cannot tell" are different answers.
-func TestConflictsRequiresState(t *testing.T) {
+// Detection must report "unavailable" rather than fail when there is no
+// baseline. A missing state_file is the default configuration, so an error here
+// made every pair without one abort the whole run.
+func TestConflictsUnavailableWithoutState(t *testing.T) {
 	srv := newDedupeServer()
 	srv.add("root-token", "a.txt", "tok", 100)
 
@@ -105,8 +107,18 @@ func TestConflictsRequiresState(t *testing.T) {
 	f := &Fs{name: "test", client: c}
 	f.resolver = newDirResolver(c, "root-token", "", "")
 
-	if _, err := f.conflictsCommand(context.Background(), ""); err == nil {
-		t.Fatal("expected an error when there is no snapshot to compare against")
+	rep, err := f.conflictsCommand(context.Background(), "")
+	if err != nil {
+		t.Fatalf("a missing snapshot must not be an error: %v", err)
+	}
+	if rep.Available {
+		t.Error("report should be marked unavailable")
+	}
+	if len(rep.Conflicts) != 0 {
+		t.Errorf("no conflicts should be claimed, got %+v", rep.Conflicts)
+	}
+	if !strings.Contains(rep.Summary, "state_file") {
+		t.Errorf("summary should name the missing prerequisite\ngot: %q", rep.Summary)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -60,8 +61,14 @@ func ExtractFolderToken(value string) string {
 //   - no leading or trailing "/"
 //   - case is preserved (Feishu is case sensitive even on Windows)
 //   - no Unicode normalisation (byte-identical to the local file system)
+//
+// The separator conversion is platform-aware. A backslash is a separator only on
+// Windows; on Linux it is a legal filename character, and rewriting it split a
+// file literally named "weird\name.txt" into a directory "weird" plus "name.txt",
+// addressing a different path than the caller asked for. filepath.ToSlash does
+// the right thing on both platforms.
 func normalizePath(p string) string {
-	p = strings.ReplaceAll(p, "\\", "/")
+	p = filepath.ToSlash(p)
 	p = strings.Trim(p, "/")
 	for strings.Contains(p, "//") {
 		p = strings.ReplaceAll(p, "//", "/")

@@ -418,15 +418,6 @@ func TestUnicodePaths(t *testing.T) {
 	}
 }
 
-// Windows separators are normalised on the way in.
-func TestNormalizePathWindows(t *testing.T) {
-	f := New("p")
-	f.Put(`a\b\c.txt`, Entry{LocalMTime: 1, LocalSize: 1, RemoteToken: "T"})
-	if _, ok := f.Lookup("a/b/c.txt"); !ok {
-		t.Error(`backslash path was not normalised to "a/b/c.txt"`)
-	}
-}
-
 // Repair produces entries that survive validation and never match a local file.
 func TestRepairEntriesAreUsable(t *testing.T) {
 	path := tempStatePath(t)

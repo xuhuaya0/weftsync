@@ -44,15 +44,25 @@ const (
 	ConflictKindDuplicateName  = "duplicate-name"
 )
 
+// ConflictScan is the result of asking the backend about conflicts.
+type ConflictScan struct {
+	// Available is false when there is no baseline to compare against, which is
+	// the normal state when no state_file is configured.
+	Available bool
+	Summary   string
+	Conflicts []Conflict
+}
+
 // detectConflicts asks the backend for conflicts under dir.
 //
-// Returns nil (and no error) when the backend implements no such command: a
-// backend that cannot tell us about conflicts is not an error, it just has none
-// to report.
-func detectConflicts(ctx context.Context, fdst fs.Fs, dir string) ([]Conflict, error) {
+// Available=false (with no error) means "could not check": either the backend has
+// no such command, or it has no snapshot. Neither is a failure. Treating them as
+// errors made every pair without a state_file abort the whole run, which is the
+// default configuration.
+func detectConflicts(ctx context.Context, fdst fs.Fs, dir string) (ConflictScan, error) {
 	f := fdst.Features()
 	if f == nil || f.Command == nil {
-		return nil, nil
+		return ConflictScan{}, nil
 	}
 
 	out, err := f.Command(ctx, "conflicts", []string{dir}, nil)
@@ -61,16 +71,18 @@ func detectConflicts(ctx context.Context, fdst fs.Fs, dir string) ([]Conflict, e
 		// that is not a failure of the run. Anything else is.
 		if errors.Is(err, fs.ErrorCommandNotFound) ||
 			strings.Contains(err.Error(), "unknown backend command") {
-			return nil, nil
+			return ConflictScan{}, nil
 		}
-		return nil, fmt.Errorf("detect conflicts: %w", err)
+		return ConflictScan{}, fmt.Errorf("detect conflicts: %w", err)
 	}
 
 	raw, err := json.Marshal(out)
 	if err != nil {
-		return nil, fmt.Errorf("detect conflicts: %w", err)
+		return ConflictScan{}, fmt.Errorf("detect conflicts: %w", err)
 	}
 	var parsed struct {
+		Available *bool  `json:"available"`
+		Summary   string `json:"summary"`
 		Conflicts []struct {
 			Dir      string   `json:"dir"`
 			Name     string   `json:"name"`
@@ -81,11 +93,17 @@ func detectConflicts(ctx context.Context, fdst fs.Fs, dir string) ([]Conflict, e
 		} `json:"conflicts"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil, fmt.Errorf("detect conflicts: decode: %w", err)
+		return ConflictScan{}, fmt.Errorf("detect conflicts: decode: %w", err)
+	}
+
+	// A backend that predates the field means "available" by omission.
+	scan := ConflictScan{Available: true, Summary: parsed.Summary}
+	if parsed.Available != nil {
+		scan.Available = *parsed.Available
 	}
 
 	seen := map[string]bool{}
-	out2 := make([]Conflict, 0, len(parsed.Conflicts))
+	scan.Conflicts = make([]Conflict, 0, len(parsed.Conflicts))
 	for _, c := range parsed.Conflicts {
 		p := path.Join(c.Dir, c.Name)
 		// One path may trigger two signals (missing token AND a duplicate); the
@@ -95,13 +113,15 @@ func detectConflicts(ctx context.Context, fdst fs.Fs, dir string) ([]Conflict, e
 			continue
 		}
 		seen[key] = true
-		out2 = append(out2, Conflict{
+		scan.Conflicts = append(scan.Conflicts, Conflict{
 			Path: p, Kind: c.Kind, Detail: c.Detail,
 			Recorded: c.Recorded, Found: c.Found,
 		})
 	}
-	sort.SliceStable(out2, func(i, j int) bool { return out2[i].Path < out2[j].Path })
-	return out2, nil
+	sort.SliceStable(scan.Conflicts, func(i, j int) bool {
+		return scan.Conflicts[i].Path < scan.Conflicts[j].Path
+	})
+	return scan, nil
 }
 
 // reportConflicts prints a table and returns the paths involved.

@@ -1094,3 +1094,64 @@ job 层 `f.Features().Command(ctx, "conflicts", []string{dir}, nil)`，
 后端命令在一次真实扫描里同时报出三种 `kind`；`report` 策略下 run 退出码 1
 且原始列表前后**逐字节相同**；`overwrite` 下回读到的确实是本地内容。
 
+---
+
+## D32 · Linux 实机验证抓到的两个缺陷（2026-11-07）
+
+跑 WSL2 Ubuntu 的 23 项验收，22 项通过、2 项真失败（另一项是我脚本自己的错）。
+两个失败都是**在 Windows 上不可能出现**的那类问题。
+
+### 缺陷一：反斜杠被无条件当成路径分隔符
+
+`normalizePath` 里写的是 `strings.ReplaceAll(p, "\\", "/")`，两处（`state` 与
+`backend/feishu`）都是。在 Windows 上这没问题——反斜杠只能是分隔符。
+**在 Linux 上反斜杠是合法的文件名字符**，于是：
+
+```
+本地文件  weird\name.txt          （一个文件名里带反斜杠的文件）
+上传后变成 weird/name.txt          （一个叫 weird 的目录 + 一个叫 name.txt 的文件）
+```
+
+这不是「命名难看」，是**访问了另一个路径**：快照里记的 key 也变了，之后对账全错。
+
+**修法**：改用 `filepath.ToSlash`。它在 Windows 上把 `\` 变成 `/`，
+在其它平台**原样保留** —— 正好是「分隔符转换要跟平台走」的语义。
+
+**测试**：拆成两个带 build tag 的文件（`normalize_unix_test.go` /
+`normalize_windows_test.go`），因为断言本身是平台相关的。原来那个写在
+`state_test.go` 里的 Windows 断言在 Linux 上会变成错的期望。
+
+### 缺陷二：没有 `state_file` 的 pair 整体失败
+
+F4 的冲突检测在「没有快照」时返回 error：
+
+```go
+return nil, fmt.Errorf("conflict detection needs a state_file: ...")
+```
+
+看起来是「不能假装没有冲突」的严谨做法，实际后果是：**没配 `state_file` 的 pair
+整个 run 直接失败**。而没配 `state_file` 就是默认配置 —— 等于最常见的情况不可用。
+
+**为什么之前没发现**：F3/F4/F5 每次验证都顺手配了 `state_file`（为了测增量），
+Windows 上那批 job 文件也都带着它。**测试总是用「完整配置」，于是默认配置没人走过。**
+
+**修法**：区分「没有冲突」与「无法检测」。后端返回 `available: false` + 说明，
+job 层打印一行 note 后继续运行。
+
+**测试**：`TestConflictsUnavailableWithoutState` 覆盖后端行为，
+并**把修复回退验证过它会红**。注意 job 层那个测试用的是 local 后端，
+根本走不到 feishu 的代码 —— 我一开始以为它证明了一切，实际没有。
+**回归测试要打在真正包含缺陷的那一层。**
+
+### 另外三个「失败」是我脚本自己的错
+
+| 现象 | 真因 |
+|---|---|
+| `state header is '\n-1 …'` | 我定义了 `head()` 函数，**遮蔽了 `head` 命令** |
+| `message missing` | grep 模式写错（该匹配 `NOTHING was`，两处文案不同） |
+| `state perms 777` | 在 `/mnt/c`（DrvFs）上测 POSIX 权限，那里权限是模拟的 |
+
+**教训**
+「跑出来 6 个失败」里可能一半是工具/脚本自己的问题。先逐条核对**每一条失败是否真的是
+被测对象的问题**，再动手改代码 —— 否则会为 3 个不存在的缺陷改代码，同时漏掉 2 个真的。
+

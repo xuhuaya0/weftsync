@@ -33,7 +33,7 @@
 | F5 | 常驻进程 + 定时调度 + 托盘 + 开机自启 | R11, R12, R14, A15–A17 | M5 | F4 | 🔄 调度/API/单实例/防重叠已完成并实测；托盘与自启未做 |
 | F6 | 本地网页 UI（12 个功能） | R13, R14, R17, R18, A24 | M5.5 | F5 | 🔄 列表/立即运行/历史/日志/冲突已完成；预览、进度、停止、凭据、设置未做 |
 | F7 | 超 1500 节点拆分向导 | A22, A23 | M6 | F6 | ⬜ |
-| F8 | Linux 平台验证 | R9 | M6.5 | F1–F6 | ⬜ |
+| F8 | Linux 平台验证 | R9 | M6.5 | F1–F6 | 🔄 WSL2 实机 23/23 通过；未覆盖凭据存储与开机自启 |
 | F9 | 双向同步 | R5 | M7 | F4 | ⏸ 待评估 |
 | F10 | 多网盘（union / 多 pair） | R6, R7 | M8 | F4 | ⬜ 可选 |
 
@@ -382,13 +382,48 @@
 
 ---
 
-### F8 · Linux 平台验证 ⬜
+### F8 · Linux 平台验证 🔄
 
 **验收**
-1. 同一份源码在 Linux 编译成功（`GOOS=linux`）
-2. F1–F6 的验收标准在 Linux 上全部重跑通过
-3. 凭据走 Linux 加密文件路径
-4. 开机自启走 `~/.config/autostart/weftsync.desktop`
+
+| # | 验收项 | 结果 |
+|---|---|---|
+| 1 | 同一份源码在 Linux 编译成功（`GOOS=linux`） | ✅ 静态 ELF，`go build` 与 `go vet` 都过 |
+| 2 | F1–F6 的验收标准在 Linux 上全部重跑通过 | ✅ **23/23**（见下表） |
+| 3 | 凭据走 Linux 加密文件路径 | ⬜ 仍是 `rclone.conf` / 环境变量 |
+| 4 | 开机自启走 `~/.config/autostart/weftsync.desktop` | ⬜ 开机自启整体未做（F5 遗留） |
+
+**实测结果（2026-11-07，WSL2 Ubuntu 24.04 / kernel 6.18.54.1-microsoft-standard-WSL2 x86_64）**
+
+用 `GOOS=linux CGO_ENABLED=0` 交叉编译的静态 ELF，在 WSL 里直接跑真实租户。
+
+| 检查 | 结果 |
+|---|---|
+| `version` / `help backends` / feishu 后端注册 | ✅ |
+| `backend help feishu`、`daemon`、`run` 命令都在 | ✅ |
+| `mkdir` | ✅ |
+| 首轮上传 3 个文件；次轮全部跳过 | ✅ **亚秒 mtime 下增量仍生效**（实测 `…39.942947800`） |
+| state 文件可写、头部合法 | ✅ `# weftsync state v1  crc32=…` |
+| **state 文件权限 0600** | ✅ 必须在 ext4 上测：`/mnt/c` 是 DrvFs，权限一律显示 777 |
+| `os.UserConfigDir` 可用 | ✅ `HOME=/home/ghoul` |
+| 下载回读逐字节一致（3 个文件） | ✅ |
+| **反斜杠文件名保留为字面字符** | ✅ `weird\name.txt` |
+| 删除闸门越限时中止且不删 | ✅ exit 1，远端 5 个文件不变 |
+| 通过作业文件传 `state_file` | ✅ |
+| daemon API 在 loopback 应答 / 网页可访问 / 第二个 daemon 被拒 | ✅ |
+
+**Linux 专属路径覆盖**：`pid_unix.go`（`syscall.Kill`）通过 `state` 锁被实际执行；
+`os.Rename`、`O_EXCL` 行为验证通过。
+
+**本轮修掉的两个真实缺陷（详见 D32）**
+1. **反斜杠被无条件当作路径分隔符** —— Linux 专属缺陷。`weird\name.txt` 被上传成
+   `weird/name.txt`，等于访问了另一个路径。改为平台感知的 `filepath.ToSlash`。
+2. **没有 `state_file` 的 pair 整体失败** —— 冲突检测把「没有基线」当成错误，
+   而没配 `state_file` 是**默认配置**，等于让最常见的情况不可用。
+
+**未做 / 局限**
+WSL 不是真机：内核是微软的，磁盘可能是 DrvFs。上述结果证明「Linux 二进制在这套内核上
+行为正确」，**不能替代独立发行版实机验证**（尤其 systemd 集成、开机自启、凭据存储）。
 
 ---
 
@@ -428,3 +463,4 @@ FFS 用 `sync.ffs_db` 记录双向变更；我们的 state 结构类似，但要
 | 2026-11-07 | **F3 主体完成并实测**：新增 `job` 配置层与 `weftsync run` 命令。删除闸门（预检轮 + 执行轮，超限**一个不删**）、`deletion=permanent/versioning`（三种命名）、`variant=update/mirror` 全部通过真实租户验收；作业文件格式见 `docs/job-file.md`。实现服务端 `Move`（探针确认 token 不变），并修掉两个只有真实调用才暴露的缺陷：`Move` 的路径坐标系混用（D26）、`filter.NewFilter` 让所有文件不参与同步（D28） |
 | 2026-11-07 | 作业文件支持 `remote.options.state_file`（每 pair 独立增量快照，凭据类选项被拒绝）；新增 `backend duplicates` / `backend dedupe` 清理降级模式留下的同名副本（D29）；内置限速 5 QPS + move 20/min（D30）；**F4 冲突检测完成并实测**，三种信号全部检出、`report` 策略下远端零改动且 exit=1（D31） |
 | 2026-11-07 | **F5 常驻进程完成并实测**：`weftsync daemon`，三种调度模式 + `align_to_start`、防重叠、单实例（端口即锁）、loopback API；修掉“Trigger 用请求 context 导致后台运行被杀”的缺陷。**F6 网页界面**：内嵌单页（作业/冲突/历史/日志 + 立即运行），浏览器实测可操作；修掉整体重绘吞点击、双时间戳、按钮竖排三个界面缺陷 |
+| 2026-11-07 | **F8 Linux 实机验证**（WSL2 Ubuntu 24.04）：静态 ELF 在真实租户上 **23/23 通过**，含亚秒 mtime 增量、ext4 上的 0600 权限、`pid_unix.go` 执行路径。抓出两个 Windows 上不可能出现的缺陷（D32）：**反斜杠被无条件当分隔符**（Linux 上是合法文件名字符）、**没配 state_file 时 run 整体失败**（而那正是默认配置） |

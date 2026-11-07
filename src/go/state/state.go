@@ -116,8 +116,16 @@ func (f *File) Delete(rel string) {
 func (f *File) Len() int { return len(f.Entries) }
 
 // NormalizePath converts a path into the canonical form used as the map key.
+//
+// Separators become "/" so a snapshot written on Windows still matches on Linux.
+// The conversion is platform-aware on purpose: on Windows a backslash can only be
+// a separator, but on Linux it is an ordinary filename character. Replacing it
+// unconditionally made a Linux file literally named "weird\name.txt" be recorded
+// (and uploaded) as "weird/name.txt", silently addressing a different path.
+// filepath.ToSlash does exactly the right thing: it rewrites "\" on Windows and
+// leaves it alone elsewhere.
 func NormalizePath(p string) string {
-	p = strings.ReplaceAll(p, "\\", "/")
+	p = filepath.ToSlash(p)
 	p = strings.Trim(p, "/")
 	for strings.Contains(p, "//") {
 		p = strings.ReplaceAll(p, "//", "/")

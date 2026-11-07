@@ -238,12 +238,20 @@ func handleConflicts(
 		// A real failure here must not silently become "no conflicts".
 		return conflictOutcome{}, fmt.Errorf("pair %q: %w", p.Name, err)
 	}
-	if len(conflicts) == 0 {
+	if !conflicts.Available {
+		// Not being able to check is not a failure. Say so once and carry on;
+		// blocking the run here would make the default configuration (no
+		// state_file) unusable.
+		fmt.Fprintf(w, "note: pair %q: conflicts cannot be checked (%s)\n",
+			p.Name, conflicts.Summary)
+		return conflictOutcome{ctx: ctx}, nil
+	}
+	if len(conflicts.Conflicts) == 0 {
 		return conflictOutcome{ctx: ctx}, nil
 	}
 
-	paths := reportConflicts(w, p.Name, conflicts)
-	out := conflictOutcome{ctx: ctx, reported: conflicts}
+	paths := reportConflicts(w, p.Name, conflicts.Conflicts)
+	out := conflictOutcome{ctx: ctx, reported: conflicts.Conflicts}
 
 	switch spec.Conflict {
 	case ConflictOverwrite:
@@ -256,7 +264,7 @@ func handleConflicts(
 		// keep the original path out of the sync set so nothing overwrites it.
 		host, _ := os.Hostname()
 		seen := map[string]int{}
-		for _, c := range conflicts {
+		for _, c := range conflicts.Conflicts {
 			seen[c.Path]++
 			newPath, err := keepBoth(ctx, fdst, fsrc, c.Path, host, seen[c.Path])
 			if err != nil {
