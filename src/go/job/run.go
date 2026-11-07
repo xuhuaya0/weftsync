@@ -178,7 +178,10 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	}
 	res.Variant = variant
 	res.Local = p.LocalPath()
-	res.Remote = remotePath
+	// Display form, not the connection string: the options folded into
+	// RemotePath are an implementation detail and would publish a local path
+	// into the web console.
+	res.Remote = p.RemoteDisplay()
 
 	// Pre-flight: refuse a directory holding more direct children than the backend
 	// accepts. Feishu answers 1062507 for those, but only on the call that creates

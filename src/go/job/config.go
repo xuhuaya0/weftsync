@@ -429,6 +429,22 @@ func (p *Pair) RemotePath() (string, error) {
 	return buildRemotePath(p.Name, backend, root, p.Remote.Options)
 }
 
+// RemoteDisplay is RemotePath without the backend options.
+//
+// The result is what a human should see: options are folded into the connection
+// string, which turns a perfectly ordinary remote into
+// `test,state_file="C:/Users/…/state.json":folder` - unreadable in a table, and
+// it publishes a local absolute path into a web page. Options are an
+// implementation detail of how the Fs is opened, not something to show.
+func (p *Pair) RemoteDisplay() string {
+	root := strings.TrimSpace(p.Remote.Root)
+	backend := strings.TrimSpace(p.Remote.Backend)
+	if backend == "" {
+		return root
+	}
+	return backend + ":" + root
+}
+
 // buildRemotePath assembles "<backend>,k="v",k2="v2":<root>" in a stable order.
 func buildRemotePath(pairName, backend, root string, opts map[string]string) (string, error) {
 	keys := make([]string, 0, len(opts))

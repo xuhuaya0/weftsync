@@ -1908,3 +1908,27 @@ pair "tw": download "doc.txt": resolve: token ? is not at "doc.txt" any more
 真实租户 8 步全对：上传 → 云端改 → 拉下来 → 无事可做 → 本地改 → 上传 → 
 云端删 → 报告且不复活、不删本地。单测 7 个覆盖同样分支（含「两边都改」「只在云端
 存在的文件不拉」「预览不下载」「无 state 时降级」）。
+
+### 3. 界面把「连接串」当成了远端路径显示
+
+配对配了 `remote.options`（例如 `state_file`）时，`RemotePath()` 返回的是 rclone 的
+**连接串**形式：
+
+```
+test,state_file="C:/Users/…/.scratch/twui/state.json":FZivfuh4hlEeLBdI4S5c7T0Cnsb/twui
+```
+
+这串东西被直接塞进了 `PairResult.remote`，于是预览面板里显示出来 —— 一行看不懂的字符串，
+顺便把**本地绝对路径发布到了一个网页上**。
+
+连接串是「怎么打开这个 Fs」的技术细节，不是给人看的信息。新增 `Pair.RemoteDisplay()`
+只拼 `backend:root`，`PairResult.remote` 改用它；真正打开 Fs 时仍然用连接串。
+
+**教训**：一个值同时承担「机器要用」和「人要读」两种职责时，迟早会在人那一侧出丑。
+凡是会进日志/界面的字段，都要问一句：这个形式是给人看的吗。
+
+### 4. `pulled` / `held` 必须出现在界面上
+
+第一版只把它们放进了 JSON。历史和预览里看不到，用户就只会看到 `transferred 0`
+—— 而这一轮其实下载了文件。功能做完了不代表用户看得见它做完了。
+现在历史表在上传数后面显示 `↓N`，预览面板多两行「从云端下载」「需要你判断」。

@@ -653,14 +653,20 @@ async function refreshHistory() {
     let verdict = r.ok ? '<span class="ok">成功</span>' : '<span class="bad">失败</span>';
     if (r.dry_run) verdict = '<span class="badge">预览</span>';
     if (r.stopped) verdict = '<span class="warn">已停止</span>';
+    // A two-way run downloads too, and the counts belong next to the uploads:
+    // "transferred 0" alone would look like the run did nothing.
+    let pulled = 0, held = 0;
+    for (const p of r.results || []) { pulled += p.pulled || 0; held += p.held || 0; }
+    const notes = r.error || (r.conflicts ? r.conflicts + " 个冲突" : "") ||
+      (held ? held + " 个待处理" : "");
     return `<tr>
     <td>${esc(r.job)}</td>
     <td class="mono">${esc(fmtTime(r.started))}</td>
     <td class="mono">${esc(duration(r.started, r.ended))}</td>
     <td>${verdict}</td>
-    <td class="mono">${r.transferred}</td>
+    <td class="mono">${r.transferred}${pulled ? ` <span class="pill">↓${pulled}</span>` : ""}</td>
     <td class="mono">${r.deleted}${r.guard_hit ? ' <span class="pill bad">熔断</span>' : ""}</td>
-    <td class="mono">${esc(r.error || (r.conflicts ? r.conflicts + " 个冲突" : ""))}</td>
+    <td class="mono">${esc(notes)}</td>
   </tr>`;
   }).join("");
 }
@@ -850,6 +856,11 @@ function planHTML(p) {
           ? `<span>预检测得删除</span><span class="mono">${d.deleted} 项</span>` : ""}
         <span>冲突</span>
         <span class="mono">${(r.conflicts || []).length} 个</span>
+        ${r.pulled
+          ? `<span>从云端下载</span><span class="mono">${r.pulled} 个</span>` : ""}
+        ${r.held
+          ? `<span>需要你判断</span><span class="mono warn">${r.held} 个（删除与仅云端有的文件不会自动处理）</span>`
+          : ""}
         <span>本地</span>
         <span class="mono" style="word-break:break-all">${esc(r.local)}</span>
         <span>远端</span>
