@@ -55,20 +55,39 @@ func Qualified(path string) (string, error) {
 	return filepath.Abs(path)
 }
 
-// SpecFromInvocation builds a Spec from the values the daemon was started with.
+// Invocation is how the current process was started.
+//
+// It is a struct rather than a parameter list because every field is a flag the
+// autostart entry may need to reproduce, and positional booleans at a call site
+// are the kind of thing that silently swaps two of them.
+type Invocation struct {
+	// Exe is normally os.Executable().
+	Exe string
+	// JobFiles are the positional arguments.
+	JobFiles []string
+	// Addr, LogFile, ConfigFile and the booleans mirror the flags.
+	Addr       string
+	LogFile    string
+	ConfigFile string
+	RunNow     bool
+	Tray       bool
+	// DefaultAddr is the built-in value of Addr; when Addr equals it, the flag
+	// is not recorded.
+	DefaultAddr string
+}
+
+// SpecFrom builds the entry's command from the invocation.
 //
 // It is shared by every platform so the entry says the same thing everywhere;
 // only the quoting differs.
-func SpecFromInvocation(exe string, jobFiles []string, addr, logFile, configFile string,
-	runNow bool, defaultAddr string) (Spec, error) {
-
-	exe, err := filepath.Abs(exe)
+func SpecFrom(in Invocation) (Spec, error) {
+	exe, err := filepath.Abs(in.Exe)
 	if err != nil {
 		return Spec{}, err
 	}
 	spec := Spec{Exe: exe, Args: []string{"daemon"}}
 
-	for _, f := range jobFiles {
+	for _, f := range in.JobFiles {
 		abs, err := filepath.Abs(f)
 		if err != nil {
 			return Spec{}, err
@@ -78,25 +97,30 @@ func SpecFromInvocation(exe string, jobFiles []string, addr, logFile, configFile
 	// Only record flags that differ from the defaults: an entry that spells out
 	// every default keeps working after a default changes, which is the opposite
 	// of what the user wants.
-	if addr != "" && addr != defaultAddr {
-		spec.Args = append(spec.Args, "--addr", addr)
+	if in.Addr != "" && in.Addr != in.DefaultAddr {
+		spec.Args = append(spec.Args, "--addr", in.Addr)
 	}
-	if logFile != "" {
-		abs, err := filepath.Abs(logFile)
+	if in.LogFile != "" {
+		abs, err := filepath.Abs(in.LogFile)
 		if err != nil {
 			return Spec{}, err
 		}
 		spec.Args = append(spec.Args, "--log-file", abs)
 	}
-	if configFile != "" {
-		abs, err := filepath.Abs(configFile)
+	if in.ConfigFile != "" {
+		abs, err := filepath.Abs(in.ConfigFile)
 		if err != nil {
 			return Spec{}, err
 		}
 		spec.Args = append(spec.Args, "--config", abs)
 	}
-	if runNow {
+	if in.RunNow {
 		spec.Args = append(spec.Args, "--run-now")
+	}
+	// The tray is a flag rather than a default, so it has to be carried over;
+	// otherwise turning on autostart quietly drops the icon the user turned on.
+	if in.Tray {
+		spec.Args = append(spec.Args, "--tray")
 	}
 	return spec, nil
 }

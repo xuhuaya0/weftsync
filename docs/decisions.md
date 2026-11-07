@@ -1311,5 +1311,61 @@ Linux 侧把 `XDG_CONFIG_HOME` 指到 `t.TempDir()`，`os.UserConfigDir()` 就�
   格式按 Desktop Entry 规范写，解析往返有单测覆盖，但**规范校验器这一关是空的**。
 - 托盘图标仍未做（F5 剩余）。
 
+---
+
+## D36 · 托盘：纯 Go 无 cgo，但必须假定它会坏（2026-11-07）
+
+实现方式是 `Shell_NotifyIcon` + 一个隐藏窗口 + 消息循环，全部走 `syscall`，
+**没有 cgo**（从 Linux 交叉编译 Windows 程序的能力不能丢）。图标用像素现画，
+不打包 `.ico`，二进制保持单文件。
+
+### 让托盘永远不是「必须成功」的东西
+
+它是 web UI 的快捷方式，丢了不能影响同步。两处落实：
+
+1. `Start` 返回 error ⇒ 打印一行后继续跑。没有通知区域（服务会话、Explorer 没起）
+   是完全正常的状态。
+2. **消息线程必须 `recover`。** 第一版把 `CreateDIBSection` / `CreateBitmap` /
+   `DeleteObject` 写成 `user32.NewProc(...)`，实际它们在 `gdi32`。
+   `syscall.LazyProc.Call` 在找不到函数时是 **panic**，而 panic 在 goroutine 里
+   ⇒ 整个进程退出。也就是「画不出图标」升级成了「同步守护进程被杀」。
+   加 `recover` 后这类错误变成一条日志。
+
+### 一个窗口类只能有一个
+
+第一版类名写死。第二个托盘实例 `RegisterClassEx` 失败（类已存在），
+而更糟的是：**窗口类携带 WndProc**，如果复用类名，第二个图标的消息会被派发到
+第一个实例的处理器。改成类名带自增序号，并在 `WM_DESTROY` 里 `UnregisterClass`，
+否则每次 Start/Stop 泄漏一个已注册类。
+
+### 清理挂在 `WM_DESTROY` 而不是 `WM_CLOSE`
+
+窗口也可能被包外的东西销毁（实测用 `taskkill` 不带 `/F` 就会）。把 `NIM_DELETE`
+放在 `WM_DESTROY` 里，两条路径都能清掉图标；只挂 `WM_CLOSE` 会留下一个
+「鼠标划过才消失」的幽灵图标。
+
+### 怎么验证一个看不见的东西
+
+托盘图标在通知区域，截屏截不到（任务栏不在捕获范围）。所以验证走程序化路径：
+
+- `Shell_NotifyIcon(NIM_ADD)` 返回非 0 —— 失败的话 `Start` 会返回 error，日志里会有
+- `IsWindow(hwnd)` 为真
+- `Notify`（即 `NIM_MODIFY`）成功
+- 进程存活、`/api/health` 返回 200
+- 把托盘窗口打掉后 daemon 继续服务
+
+图标**画得对不对**单独验：把像素填充抽成 `fillIconPixels`，用测试断言
+（四角透明、圆盘偏蓝即通道没反、中点是白色箭杆、箭头在右），再借
+`WEFTSYNC_ICON_PNG` 环境变量导出一张 PNG 亲眼看。第一版测试在 `mid-1` 采样，
+那正是箭杆所在行，于是「箭头被镜像了」是**断言写错**，不是代码错 —— 看 PNG 才发现。
+
+### 顺带修掉的一个真问题
+
+`--tray` 是开关而不是默认，所以开机自启的命令必须带上它。漏了的话：
+用户勾了自启 + 托盘，重启后 daemon 起来了但图标没了，且没有任何提示。
+为此把 `SpecFromInvocation` 的参数列表改成 `Invocation` 结构体 ——
+一排位置布尔参数是那种「某天两个被写反」的东西。
+
+
 
 

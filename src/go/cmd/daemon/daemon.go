@@ -15,12 +15,14 @@ import (
 
 	"weftsync/autostart"
 	"weftsync/daemon"
+	"weftsync/tray"
 )
 
 var (
 	addr    string
 	logFile string
 	runNow  bool
+	trayOn  bool
 )
 
 func init() {
@@ -32,6 +34,8 @@ func init() {
 		"Append the daemon log to this file instead of stdout")
 	flags.BoolVar(&runNow, "run-now", false,
 		"Run every enabled job once at startup, then follow the schedule")
+	flags.BoolVar(&trayOn, "tray", false,
+		"Show a notification area icon (Windows only; ignored elsewhere)")
 }
 
 var commandDefinition = &cobra.Command{
@@ -98,12 +102,47 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 				return err
 			}
 
-			ctx, stopSignals := signal.NotifyContext(context.Background(),
+			// Own the lifetime context separately from the signal handler: the
+			// tray's "quit" item has to take the same shutdown path as Ctrl+C,
+			// and signal.NotifyContext cannot be triggered by anything but a
+			// signal.
+			base, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx, stopSignals := signal.NotifyContext(base,
 				os.Interrupt, syscall.SIGTERM)
 			defer stopSignals()
 
 			fmt.Fprintf(w, "weftsync daemon: API listening on http://%s\n", ln.Addr())
 			d.Start(ctx)
+
+			if trayOn {
+				// A tray that will not start is a missing convenience, not a
+				// reason to refuse to sync.
+				tr, trayErr := tray.Start(tray.Config{
+					Tooltip:    "weftsync - 定时同步",
+					ConsoleURL: "http://" + ln.Addr().String() + "/",
+					OnRunAll: func() {
+						for _, st := range d.Status() {
+							if !st.Enabled {
+								continue
+							}
+							// Trigger is asynchronous and ignores this context,
+							// so the tray's message thread is not blocked by a
+							// transfer.
+							if err := d.Trigger(ctx, st.Name); err != nil {
+								fmt.Fprintf(w, "tray run %s: %v\n", st.Name, err)
+							}
+						}
+					},
+					OnQuit:  cancel,
+					OnError: func(err error) { fmt.Fprintln(w, err) },
+				})
+				if trayErr != nil {
+					fmt.Fprintf(w, "tray: %v (continuing without an icon)\n", trayErr)
+				} else {
+					defer tr.Stop()
+				}
+			}
 
 			if runNow {
 				for _, st := range d.Status() {
@@ -145,8 +184,16 @@ func autostartSpec(jobFiles []string) autostart.Spec {
 		cfgFile = f.Value.String()
 	}
 
-	spec, err := autostart.SpecFromInvocation(exe, jobFiles, addr, logFile, cfgFile,
-		runNow, "127.0.0.1:5572")
+	spec, err := autostart.SpecFrom(autostart.Invocation{
+		Exe:         exe,
+		JobFiles:    jobFiles,
+		Addr:        addr,
+		LogFile:     logFile,
+		ConfigFile:  cfgFile,
+		RunNow:      runNow,
+		Tray:        trayOn,
+		DefaultAddr: "127.0.0.1:5572",
+	})
 	if err != nil {
 		return autostart.Spec{}
 	}
