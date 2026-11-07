@@ -463,6 +463,7 @@
 | 1 | 同一份源码在 Linux 编译成功（`GOOS=linux`） | ✅ 静态 ELF，`go build` 与 `go vet` 都过 |
 | 2 | F1–F6 的验收标准在 Linux 上全部重跑通过 | ✅ **23/23**（见下表） |
 | 2b | F7 拆分在 Linux 上重跑通过 | ✅ **12/12**：`repath` 迁移后次轮传输 0、无重复、超限目录被拦下且远端无该目录（NUL 分隔符的 bug 就是这一轮抓到的） |
+| 2c | F9 双向第一期在 Linux 上重跑通过 | ✅ **8/8**：上传 → 云端替换 → 拉下来 → 无事可做 → 云端删除报出且本地保留、云端不复活 |
 | 3 | 凭据走 Linux 加密文件路径 | ⬜ 仍是 `rclone.conf` / 环境变量 |
 | 4 | 开机自启走 `~/.config/autostart/weftsync.desktop` | ✅ WSL 端到端：enable → 文件内容（绝对路径 + `X-GNOME-Autostart-enabled=true`）→ `matches:true` → disable → 文件删除；8 个单测含引号/反斜杠/`%`/`$` 往返 |
 
