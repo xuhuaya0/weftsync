@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -88,6 +89,9 @@ type Endpoint struct {
 	Backend string `toml:"backend"`
 	// Root is the directory. Combined with Backend it becomes "<backend>:<root>".
 	Root string `toml:"root"`
+	// Options are extra backend options applied to this pair only, e.g.
+	// state_file. They are restricted to a whitelist: see allowedRemoteOptions.
+	Options map[string]string `toml:"options"`
 }
 
 // SyncSpec holds the settings that decide whether and how much gets deleted.
@@ -161,6 +165,9 @@ func (c *Config) validate() error {
 			return err
 		}
 		if _, err := p.EffectiveSync(c); err != nil {
+			return err
+		}
+		if err := p.validateOptions(); err != nil {
 			return err
 		}
 	}
@@ -249,11 +256,80 @@ type ResolvedSync struct {
 // LocalPath is the rclone path for the local side.
 func (p *Pair) LocalPath() string { return p.Local.Root }
 
+// allowedRemoteOptions is the whitelist of backend options a job file may set.
+//
+// The reason for a whitelist rather than "anything goes": options are folded
+// into the remote's name, and rclone prints names in logs and error messages. A
+// secret put here would therefore end up in plain text in logs and bug reports.
+// Credentials belong in rclone.conf or the documented environment variables.
+//
+// state_file is here because it is the one option that MUST vary per pair: the
+// rclone global flag applies to every remote in the process, so several pairs in
+// one job would otherwise share a single snapshot and corrupt each other's
+// incremental decisions.
+var allowedRemoteOptions = map[string]string{
+	"state_file": "path to the incremental-sync snapshot for this pair",
+}
+
+// secretOptionHints catches the mistake even when the key is spelled unusually.
+var secretOptionHints = []string{"secret", "password", "passwd", "token", "key", "credential"}
+
+// validateOptions rejects unknown or secret-looking backend options.
+func (p *Pair) validateOptions() error {
+	for k, v := range p.Remote.Options {
+		if _, ok := allowedRemoteOptions[k]; !ok {
+			lower := strings.ToLower(k)
+			for _, hint := range secretOptionHints {
+				if strings.Contains(lower, hint) {
+					return fmt.Errorf(
+						"pair %q: remote.options[%q] looks like a credential. "+
+							"Credentials must not go in a job file: rclone prints remote names "+
+							"in logs, and this file is easy to commit by accident. "+
+							"Put it in rclone.conf or use the matching environment variable",
+						p.Name, k)
+				}
+			}
+			keys := make([]string, 0, len(allowedRemoteOptions))
+			for name := range allowedRemoteOptions {
+				keys = append(keys, name)
+			}
+			sort.Strings(keys)
+			return fmt.Errorf(
+				"pair %q: remote.options[%q] is not settable from a job file. "+
+					"Allowed: %s", p.Name, k, strings.Join(keys, ", "))
+		}
+		if strings.TrimSpace(v) == "" {
+			return fmt.Errorf("pair %q: remote.options[%q] is empty", p.Name, k)
+		}
+	}
+	if len(p.Remote.Options) > 0 && strings.TrimSpace(p.Remote.Backend) == "" {
+		return fmt.Errorf(
+			"pair %q: remote.options requires remote.backend to name an rclone remote; "+
+				"a bare remote.root path cannot carry options", p.Name)
+	}
+	return nil
+}
+
+// quoteOptionValue renders a value for rclone's connection-string parser.
+//
+// Values are always quoted: an unquoted Windows path such as C:\x parses as
+// value "C" followed by garbage, because ':' ends an unquoted value. Embedded
+// quotes are doubled, which is what the parser undoes.
+func quoteOptionValue(v string) string {
+	return `"` + strings.ReplaceAll(v, `"`, `""`) + `"`
+}
+
 // RemotePath is the rclone path for the remote side.
 //
 // A bare backend name plus a root becomes "<backend>:<root>", matching the way
 // rclone remotes are addressed. If Backend is empty the root has to be a
 // complete path.
+//
+// When per-pair options are present they are folded in as
+// "<backend>,key="value":<root>". Verified: that form still reads every other
+// option from the same-named config section, so credentials keep coming from
+// rclone.conf (probe: overriding root_token changed only that key while
+// authentication still succeeded).
 func (p *Pair) RemotePath() (string, error) {
 	root := strings.TrimSpace(p.Remote.Root)
 	backend := strings.TrimSpace(p.Remote.Backend)
@@ -270,7 +346,34 @@ func (p *Pair) RemotePath() (string, error) {
 		return "", fmt.Errorf("pair %q: remote.backend %q must be a remote name, not a path",
 			p.Name, backend)
 	}
-	return backend + ":" + root, nil
+	if len(p.Remote.Options) == 0 {
+		return backend + ":" + root, nil
+	}
+	return buildRemotePath(p.Name, backend, root, p.Remote.Options)
+}
+
+// buildRemotePath assembles "<backend>,k="v",k2="v2":<root>" in a stable order.
+func buildRemotePath(pairName, backend, root string, opts map[string]string) (string, error) {
+	keys := make([]string, 0, len(opts))
+	for k := range opts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // deterministic output keeps tests and logs stable
+
+	var b strings.Builder
+	b.WriteString(backend)
+	for _, k := range keys {
+		b.WriteString(",")
+		b.WriteString(k)
+		b.WriteString("=")
+		b.WriteString(quoteOptionValue(opts[k]))
+	}
+	b.WriteString(":")
+
+	// The root is appended verbatim; it is never quoted. A root containing ':'
+	// is fine here because the parser is already in its final state.
+	b.WriteString(root)
+	return b.String(), nil
 }
 
 // Enabled reports whether the job should run.

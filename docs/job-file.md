@@ -59,9 +59,38 @@ root    = "team/docs"
 | `local.root` | string | 是 | 本地目录 |
 | `remote.backend` | string | 否 | rclone 远端名，如 `feishu` |
 | `remote.root` | string | 是 | 远端目录 |
+| `remote.options` | table | 否 | 仅本 pair 生效的后端选项，见 §4.1 |
 
 `backend` + `root` 会拼成 `<backend>:<root>`。`backend` 留空时 `root` 必须是完整路径
 （含 `:`）；只写一个裸目录名会报错，因为「本地路径」和「远端路径」不能靠猜。
+
+### 4.1 `remote.options` —— 让每个 pair 有自己的增量快照
+
+```toml
+[[pair]]
+name = "work-docs"
+[pair.local]
+root = "D:/work/docs"
+[pair.remote]
+backend = "feishu"
+root    = "team/docs"
+[pair.remote.options]
+state_file = "C:/Users/me/AppData/Roaming/weftsync/state/work.state.json"
+```
+
+**为什么需要它**：增量同步靠 state 快照。rclone 的 `--feishu-state-file` 是**进程级**
+开关，一个进程里所有 pair 会共用同一份快照，于是互相把对方的记录当成「已同步」，
+导致漏传。`remote.options` 是唯一能表达「每个 pair 一份」的方式。
+
+**允许的键**：目前只有 `state_file`。其他键会报错而不是静默忽略。
+
+**不允许放凭据**：`app_secret` / `root_token` / `password` 这类键会被**拒绝**。
+原因不是矫情：选项会被拼进远端名，而 rclone 在日志和错误信息里会打印远端名，
+所以作业文件里的密码一定会进日志。凭据请放在 `rclone.conf` 或对应的环境变量里。
+
+**和 `rclone.conf` 的关系**：带选项的形式是 `<名字>,key="value":<root>`，
+它**仍会读取同名配置节的其他字段**。已实测：只覆盖 `root_token` 时认证仍用配置节里的
+凭据，报错是「文件夹找不到」而不是「凭据无效」。所以不必把凭据搬进作业文件。
 
 ## 5. `sync` 小节（删除策略）
 
@@ -125,7 +154,7 @@ root    = "team/docs"
 
 | 限制 | 影响 | 绕法 |
 |---|---|---|
-| `state_file` 未在作业文件里暴露 | 没配 state 时每轮都会重传未变化的文件 | 在 `rclone.conf` 里给该远端配 `state_file`，或每个 pair 用独立的远端名 |
+| `remote.options` 只支持 `state_file` | 其他后端选项只能在 `rclone.conf` 里配 | 给不同 pair 用不同远端名 |
 | 挂载/定时未实现 | 需手动 `weftsync run` | F5 |
 | `max_delete_size` 未实现 | 只能按数量限，不能按体积限 | 见 roadmap |
 | `schedule` 小节不生效 | 写了也不会自动跑 | F5 |

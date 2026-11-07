@@ -246,7 +246,7 @@
 | 熔断通知（系统托盘/消息栏） | 依赖 F5 的通知基础设施 |
 | `max_delete_size`（按体积限） | rclone 的 stats 没有暴露 `deletesSize` 的读接口 |
 | `two-way` / `custom` | 需要 F4 的冲突检测先就位 |
-| 作业文件里配 `state_file` | 现在只能在 `rclone.conf` 里给远端配；见 `docs/job-file.md` §8 |
+| 作业文件里配 `state_file` | ✅ 已支持：`[pair.remote.options]`（只允许非敏感项，凭据会被拒绝） |
 
 ---
 
