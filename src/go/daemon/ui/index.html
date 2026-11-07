@@ -67,6 +67,40 @@
   .tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
   .tabs button[aria-selected="true"] { border-color: var(--blue); color: var(--blue); font-weight: 600; }
   .hidden { display: none; }
+
+  /* config form */
+  select, input[type=text], input[type=number] {
+    font: inherit; padding: 4px 8px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    max-width: 100%;
+  }
+  select:focus, input:focus { outline: 2px solid var(--blue); outline-offset: -1px; }
+  fieldset {
+    border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 0 0 14px;
+  }
+  legend { padding: 0 6px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  .field { display: flex; gap: 10px; align-items: center; margin-bottom: 9px; flex-wrap: wrap; }
+  .field label { min-width: 130px; color: var(--muted); }
+  .field .hint { color: var(--muted); font-size: 12px; }
+  .pair-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+  .pair-card .head { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .note {
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+    border: 1px solid var(--warn); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 12px; color: var(--ink);
+  }
+  .note.ok {
+    background: color-mix(in srgb, var(--ok) 12%, transparent);
+    border-color: var(--ok);
+  }
+  .note.err {
+    background: color-mix(in srgb, var(--bad) 12%, transparent);
+    border-color: var(--bad);
+    white-space: pre-wrap;
+  }
+  .note code { background: rgba(127,127,127,.18); padding: 1px 4px; border-radius: 4px; }
+  .save-note { margin: 10px 0 0; }
+  .save-note:empty { display: none; }
 </style>
 </head>
 <body>
@@ -80,6 +114,7 @@
 
 <div class="tabs" role="tablist">
   <button role="tab" aria-selected="true"  data-tab="jobs">作业</button>
+  <button role="tab" aria-selected="false" data-tab="config">配置</button>
   <button role="tab" aria-selected="false" data-tab="conflicts">冲突</button>
   <button role="tab" aria-selected="false" data-tab="history">历史</button>
   <button role="tab" aria-selected="false" data-tab="log">日志</button>
@@ -101,6 +136,19 @@
       </thead>
       <tbody id="jobs"><tr><td colspan="7" class="empty">载入中…</td></tr></tbody>
     </table>
+  </div>
+</section>
+
+<section id="tab-config" class="tab hidden">
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <strong class="grow">作业配置</strong>
+      <select id="cfg-job"><option value="">（选择作业）</option></select>
+      <button id="cfg-save" disabled>保存</button>
+    </div>
+    <div id="cfg-save-note" class="note save-note"></div>
+    <div id="cfg-warn" class="hidden"></div>
+    <div id="cfg-body" class="empty">选择一个作业后可编辑</div>
   </div>
 </section>
 
@@ -205,6 +253,13 @@ async function refresh() {
   }
   refreshHistory();
   refreshLog();
+  syncJobPicker();
+}
+
+// syncJobPicker is declared further down with the config tab; this wrapper keeps
+// refresh() readable and tolerates the script not having reached it yet.
+function syncJobPicker() {
+  if (typeof syncJobPickerImpl === "function") syncJobPickerImpl();
 }
 
 function renderJobs() {
@@ -350,7 +405,256 @@ document.querySelectorAll('.tabs button').forEach(btn => {
     document.querySelectorAll('.tabs button').forEach(b => b.setAttribute("aria-selected", b === btn));
     document.querySelectorAll('.tab').forEach(s => s.classList.add('hidden'));
     document.getElementById('tab-' + btn.dataset.tab).classList.remove('hidden');
+    if (btn.dataset.tab === 'config') { syncJobPicker(); loadConfig(); }
   });
+});
+
+// ------------------------------------------------------------------ config tab
+//
+// The form is rendered from the server's view of the job file, and saved by
+// posting the same shape back. Fields the user does not touch keep their value,
+// so a partial form cannot erase settings just because the UI did not render them.
+
+let cfgView = null;
+
+function syncJobPickerImpl() {
+  const sel = document.getElementById("cfg-job");
+  const jobs = (snapshot && snapshot.jobs) || [];
+  const current = sel.value;
+  const wanted = jobs.map(j => j.name).join("\u0000");
+  if (sel.dataset.sig === wanted) return;
+  sel.dataset.sig = wanted;
+  sel.innerHTML = '<option value="">（选择作业）</option>' +
+    jobs.map(j => `<option value="${esc(j.name)}">${esc(j.name)}</option>`).join("");
+  if (current && jobs.some(j => j.name === current)) sel.value = current;
+}
+
+function opt(list, current) {
+  return list.map(v => `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(v)}</option>`).join("");
+}
+
+function field(label, inner, hint) {
+  return `<div class="field"><label>${esc(label)}</label>${inner}` +
+         (hint ? `<span class="hint">${esc(hint)}</span>` : "") + `</div>`;
+}
+
+function syncFields(prefix, s) {
+  return field("删除方式", `<select id="${prefix}-deletion">${opt(s.deletions, s.deletion)}</select>`) +
+    field("版本目录", `<input type="text" id="${prefix}-vdir" value="${esc(s.versioning_dir)}">`,
+          "仅 versioning 生效") +
+    field("版本命名", `<select id="${prefix}-vnaming">${opt(s.namings, s.versioning_naming)}</select>`) +
+    field("冲突策略", `<select id="${prefix}-conflict">${opt(s.conflicts, s.conflict)}</select>`,
+          "report = 只报告不改动") +
+    field("删除上限",
+          `<input type="number" id="${prefix}-maxdel" min="0" placeholder="${s.max_delete}" ` +
+          `value="${s.max_delete_set ? s.max_delete : ""}">`,
+          s.max_delete_set ? "留空 = 继承默认值" : `继承默认值（${s.max_delete}）`);
+}
+
+function renderConfig() {
+  const v = cfgView;
+  const body = document.getElementById("cfg-body");
+  const warn = document.getElementById("cfg-warn");
+  const save = document.getElementById("cfg-save");
+  if (!v) {
+    body.className = "empty";
+    body.textContent = "选择一个作业后可编辑";
+    warn.classList.add("hidden");
+    save.disabled = true;
+    return;
+  }
+  body.className = "";
+  save.disabled = false;
+
+  if (v.has_comments) {
+    warn.className = "note";
+    warn.innerHTML = "这个文件里有 <code>#</code> 注释。保存会**丢掉注释**（旧内容会备份为 " +
+      "<code>" + esc(v.file) + ".bak</code>）。想保留注释就直接编辑文件。";
+  } else if (v.backup_exists) {
+    warn.className = "note ok";
+    warn.innerHTML = "上次保存的旧版本仍在 <code>" + esc(v.file) + ".bak</code>";
+  } else {
+    warn.classList.add("hidden");
+  }
+
+  body.innerHTML =
+    `<div class="field"><label>文件</label><span class="mono">${esc(v.file)}</span></div>` +
+    field("启用", `<input type="checkbox" id="cfg-enabled"${v.enabled ? " checked" : ""}>`) +
+    field("变体", `<select id="cfg-variant">${opt(v.variants, v.variant)}</select>`,
+          "update = 只增不减；mirror = 会删除") +
+
+    `<fieldset><legend>调度</legend>` +
+    field("模式", `<select id="cfg-sched-mode">${opt(v.schedule.modes, v.schedule.mode || "none")}</select>`) +
+    field("间隔", `<input type="text" id="cfg-sched-interval" value="${esc(v.schedule.interval)}">`, "如 1h / 30m") +
+    field("起始时刻", `<input type="text" id="cfg-sched-start" value="${esc(v.schedule.start_at)}">`, "HH:MM") +
+    field("锚定起始", `<input type="checkbox" id="cfg-sched-align"${v.schedule.align_to_start ? " checked" : ""}>`,
+          "勾选后按起始时刻对齐，重启不漂移") +
+    field("每日时刻", `<input type="text" id="cfg-sched-daily" value="${esc(v.schedule.daily_time)}">`, "HH:MM") +
+    field("cron", `<input type="text" id="cfg-sched-cron" value="${esc(v.schedule.cron)}">`, "五字段") +
+    `</fieldset>` +
+
+    `<fieldset><legend>默认同步设置（可被每个 pair 覆盖）</legend>` +
+    syncFields("cfg-sync", v.sync) +
+    `</fieldset>` +
+
+    `<div class="row" style="margin-bottom:8px">
+       <strong class="grow">文件夹对</strong>
+       <button id="cfg-add">添加一对</button>
+     </div>` +
+    `<div id="cfg-pairs">` + (v.pairs || []).map((p, i) => pairCard(p, i)).join("") + `</div>`;
+
+  bindConfig();
+}
+
+function pairCard(p, i) {
+  return `<div class="pair-card" data-idx="${i}">
+    <div class="head">
+      <strong class="grow">#${i + 1} ${esc(p.name)}</strong>
+      <span class="hint">实际变体：${esc(p.effective_variant)}</span>
+      <button data-remove="${i}">删除</button>
+    </div>
+    ${field("名称", `<input type="text" class="p-name" value="${esc(p.name)}">`)}
+    ${field("本地目录", `<input type="text" class="p-local" value="${esc(p.local_root)}">`)}
+    ${field("远端 backend", `<input type="text" class="p-backend" value="${esc(p.remote_backend)}">`, "如 feishu")}
+    ${field("远端目录", `<input type="text" class="p-remote" value="${esc(p.remote_root)}">`)}
+    ${field("state_file", `<input type="text" class="p-state" value="${esc(p.state_file)}">`,
+      "留空 = 不做增量，每轮重传")}
+    ${field("变体覆盖", `<input type="text" class="p-variant" value="${esc(p.variant)}">`, "留空 = 用作业默认")}
+    ${syncFields("p" + i + "-sync", p.sync)}
+  </div>`;
+}
+
+function bindConfig() {
+  const add = document.getElementById("cfg-add");
+  if (add) {
+    add.addEventListener("click", () => {
+      if (!cfgView) return;
+      cfgView.pairs = cfgView.pairs || [];
+      cfgView.pairs.push({
+        name: "pair-" + (cfgView.pairs.length + 1),
+        variant: "", effective_variant: cfgView.variant,
+        local_root: "", remote_backend: "", remote_root: "", state_file: "",
+        sync: cfgView.sync,
+      });
+      renderConfig();
+    });
+  }
+  document.querySelectorAll("#cfg-body button[data-remove]").forEach(b => {
+    b.addEventListener("click", () => {
+      cfgView.pairs.splice(Number(b.dataset.remove), 1);
+      renderConfig();
+    });
+  });
+}
+
+function collectSync(prefix) {
+  const g = id => document.getElementById(id);
+  const val = (id) => (g(prefix + "-" + id) ? g(prefix + "-" + id).value : "");
+  // An empty box means "inherit the default"; only a typed number is explicit.
+  const maxdel = val("maxdel");
+  return {
+    deletion: val("deletion"),
+    versioning_dir: val("vdir"),
+    versioning_naming: val("vnaming"),
+    conflict: val("conflict"),
+    max_delete: maxdel === "" ? 0 : Number(maxdel),
+    max_delete_set: maxdel !== "",
+  };
+}
+
+function collectConfig() {
+  const g = id => document.getElementById(id);
+  const pairs = [];
+  document.querySelectorAll("#cfg-pairs .pair-card").forEach(card => {
+    const i = card.dataset.idx;
+    pairs.push({
+      name: card.querySelector(".p-name").value,
+      variant: card.querySelector(".p-variant").value,
+      effective_variant: "",
+      local_root: card.querySelector(".p-local").value,
+      remote_backend: card.querySelector(".p-backend").value,
+      remote_root: card.querySelector(".p-remote").value,
+      state_file: card.querySelector(".p-state").value,
+      sync: collectSync("p" + i + "-sync"),
+    });
+  });
+
+  return {
+    name: cfgView.name,
+    file: cfgView.file,
+    enabled: g("cfg-enabled").checked,
+    variant: g("cfg-variant").value,
+    schedule: {
+      mode: g("cfg-sched-mode").value,
+      interval: g("cfg-sched-interval").value,
+      start_at: g("cfg-sched-start").value,
+      align_to_start: g("cfg-sched-align").checked,
+      daily_time: g("cfg-sched-daily").value,
+      cron: g("cfg-sched-cron").value,
+    },
+    sync: collectSync("cfg-sync"),
+    pairs,
+    has_comments: cfgView.has_comments,
+    backup_exists: cfgView.backup_exists,
+  };
+}
+
+async function loadConfig() {
+  const name = document.getElementById("cfg-job").value;
+  const note = document.getElementById("cfg-save-note");
+  if (note) { note.className = "note save-note"; note.textContent = ""; }
+  if (!name) { cfgView = null; renderConfig(); return; }
+  try {
+    cfgView = await getJSON("/api/config?job=" + encodeURIComponent(name));
+  } catch (e) {
+    cfgView = null;
+    renderConfig();
+    note.className = "note err save-note";
+    note.textContent = "读取配置失败：" + e.message;
+    return;
+  }
+  renderConfig();
+}
+
+document.getElementById("cfg-job").addEventListener("change", loadConfig);
+
+document.getElementById("cfg-save").addEventListener("click", async () => {
+  if (!cfgView) return;
+  const payload = collectConfig();
+
+  if (cfgView.has_comments &&
+      !confirm("这个文件里有注释，保存会丢掉它们（旧内容会备份为 .bak）。继续吗？")) {
+    return;
+  }
+
+  const btn = document.getElementById("cfg-save");
+  const note = document.getElementById("cfg-save-note");
+  btn.disabled = true;
+  btn.textContent = "保存中…";
+  note.className = "note save-note";
+  note.textContent = "";
+  try {
+    const r = await fetch("/api/config?job=" + encodeURIComponent(payload.name), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((body && body.error) || ("HTTP " + r.status));
+    lastSignature = "";
+    await refresh();
+    await loadConfig();
+    const res = body || {};
+    const kept = res.backup_path ? "，旧内容已备份为 " + res.backup_path : "";
+    note.className = "note ok save-note";
+    note.textContent = "已保存" + kept + "；下一轮同步起生效。";
+  } catch (e) {
+    note.className = "note err save-note";
+    note.textContent = "保存失败：" + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "保存";
+  }
 });
 
 refresh();

@@ -8,6 +8,7 @@
 package job
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -73,6 +74,16 @@ type Config struct {
 	Pair []Pair `toml:"pair"`
 }
 
+// NewConfig returns an empty config for a new job, with the safe defaults.
+func NewConfig(name string) *Config {
+	return &Config{
+		Job: Job{
+			Name:    name,
+			Variant: DefaultVariant,
+		},
+	}
+}
+
 // Job is the job-level header and the defaults every pair inherits.
 type Job struct {
 	Name    string   `toml:"name"`
@@ -131,9 +142,17 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read job file: %w", err)
 	}
+	return parseBytes(path, raw)
+}
 
+// parseBytes decodes and validates job file content.
+//
+// Shared by Load and Save so that what the UI writes is checked by exactly the
+// same rules as what the daemon reads. A second, slightly different validator is
+// how a bad config slips through.
+func parseBytes(path string, raw []byte) (*Config, error) {
 	var cfg Config
-	dec := toml.NewDecoder(strings.NewReader(string(raw)))
+	dec := toml.NewDecoder(bytes.NewReader(raw))
 	// Reject unknown keys so a typo cannot silently disable a safety setting.
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
@@ -156,6 +175,13 @@ func Load(path string) (*Config, error) {
 func (c *Config) validate() error {
 	if len(c.Pair) == 0 {
 		return fmt.Errorf("no [[pair]] defined")
+	}
+
+	// The schedule must be resolvable here, not only when the daemon starts.
+	// Load and Save both route through validate, so checking it once keeps a
+	// file we accept from being one the daemon refuses to boot on.
+	if _, err := c.EffectiveSchedule(); err != nil {
+		return err
 	}
 
 	seen := map[string]bool{}
