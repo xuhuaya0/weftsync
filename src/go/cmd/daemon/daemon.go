@@ -144,6 +144,16 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 					fmt.Fprintf(w, "tray: %v (continuing without an icon)\n", trayErr)
 				} else {
 					defer tr.Stop()
+					fmt.Fprintln(w, "tray: icon shown; failures will raise a notification")
+					// A scheduled run happens unattended, so failures have to
+					// reach the user some other way. The notifier is set only
+					// when the tray exists: without it there is nowhere to
+					// show a balloon, and the log is the record.
+					d.SetNotifier(func(title, text string) {
+						if err := tr.Notify(title, text); err != nil {
+							fmt.Fprintf(w, "tray notify: %v\n", err)
+						}
+					})
 				}
 			}
 

@@ -155,6 +155,36 @@ type Daemon struct {
 	// splitting marks jobs with a split in flight. A split moves files on both
 	// sides, so two at once on one job would move the same files under each other.
 	splitting map[string]bool
+
+	// notify raises a desktop notification. Nil means "no tray", which is the
+	// normal case on Linux and on a headless Windows box; every caller must
+	// tolerate it.
+	notify func(title, text string)
+}
+
+// SetNotifier installs the callback used to report a run that needs attention.
+//
+// Only failures, guard hits and conflicts are reported. A notification for every
+// successful scheduled run would be noise that trains the user to ignore the one
+// that matters.
+func (d *Daemon) SetNotifier(fn func(title, text string)) {
+	d.mu.Lock()
+	d.notify = fn
+	d.mu.Unlock()
+}
+
+// notifyf raises a notification when one is installed.
+func (d *Daemon) notifyf(title, format string, args ...any) {
+	d.mu.Lock()
+	fn := d.notify
+	d.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	// Logged as well as shown: a balloon disappears, and "was I told about
+	// this?" is a question the log has to be able to answer.
+	d.logf("notify: %s", title)
+	fn(title, fmt.Sprintf(format, args...))
 }
 
 // New builds a daemon for the given job files.
@@ -434,6 +464,23 @@ func (d *Daemon) execute(ctx context.Context, e *entry, mode RunMode) {
 	default:
 		d.logf("job %q: finished in %v (%d pair result(s), %d conflict(s))",
 			e.name, d.now().Sub(start).Round(time.Millisecond), finishedCount, conflicts)
+	}
+
+	// A scheduled run happens while nobody is watching the console, so the
+	// outcomes that need a human have to come to them. A success does not: a
+	// notification per run would train the user to dismiss all of them.
+	//
+	// Previews are excluded too - the user just clicked, so they are looking.
+	if mode != ModeRun || stopped {
+		return
+	}
+	switch {
+	case err != nil:
+		d.notifyf("weftsync："+e.name+" 同步失败", "%v", err)
+	case guardHit:
+		d.notifyf("weftsync："+e.name+" 已拦下", "删除量超过上限，本次什么都没有删。打开控制台查看详情")
+	case conflicts > 0:
+		d.notifyf("weftsync："+e.name+" 有冲突", "%d 个文件在云端被改动，本次未处理，打开控制台查看", conflicts)
 	}
 }
 
