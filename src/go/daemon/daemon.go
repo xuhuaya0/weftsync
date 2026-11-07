@@ -93,6 +93,10 @@ type Daemon struct {
 	stop     chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
+
+	// history and logs back the UI's "what happened" views.
+	history *ring[RunRecord]
+	logs    *logSink
 }
 
 // New builds a daemon for the given job files.
@@ -101,12 +105,17 @@ func New(files []string, log io.Writer) (*Daemon, error) {
 		return nil, errors.New("daemon: at least one job file is required")
 	}
 	d := &Daemon{
-		log:  log,
-		now:  time.Now,
-		stop: make(chan struct{}),
+		log:     log,
+		now:     time.Now,
+		stop:    make(chan struct{}),
+		history: newRing[RunRecord](historySize),
 		runJob: func(ctx context.Context, cfg *job.Config, w io.Writer) ([]job.PairResult, error) {
 			return job.Run(ctx, cfg, w, job.Options{})
 		},
+	}
+	if sink, ok := log.(interface{ Recent() []LogLine }); ok {
+		d.logs = sink.(*logSink)
+		_ = sink
 	}
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 
@@ -266,8 +275,15 @@ func (d *Daemon) execute(ctx context.Context, e *entry) {
 	d.mu.Unlock()
 
 	var conflicts int
+	var transferred, deleted int64
+	guardHit := false
 	for _, r := range results {
 		conflicts += len(r.Conflicts)
+		transferred += r.Actual.Transferred
+		deleted += r.Actual.Deleted
+		if r.GuardHit {
+			guardHit = true
+		}
 	}
 
 	d.mu.Lock()
@@ -281,7 +297,20 @@ func (d *Daemon) execute(ctx context.Context, e *entry) {
 	} else {
 		e.lastError = ""
 	}
+	end := d.now()
 	d.mu.Unlock()
+
+	rec := RunRecord{
+		Job: e.name, Started: start, Ended: end, OK: err == nil,
+		Results: results, Conflicts: conflicts,
+		Transferred: transferred, Deleted: deleted, GuardHit: guardHit,
+	}
+	if err != nil {
+		rec.Error = err.Error()
+	}
+	if d.history != nil {
+		d.history.add(rec)
+	}
 
 	switch {
 	case err != nil:

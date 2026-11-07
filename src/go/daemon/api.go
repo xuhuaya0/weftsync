@@ -30,9 +30,13 @@ func (a *API) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", a.handleStatus)
 	mux.HandleFunc("/api/run", a.handleRun)
+	mux.HandleFunc("/api/history", a.handleHistory)
+	mux.HandleFunc("/api/log", a.handleLog)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
+	// The UI is the point of opening the address in a browser.
+	mux.Handle("/", a.uiHandler())
 	return mux
 }
 

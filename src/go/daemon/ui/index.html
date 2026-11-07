@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>weftsync</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #fff;
+    --ink: #1f2328;
+    --muted: #656d76;
+    --line: #d8dee4;
+    --ok: #1a7f37;
+    --warn: #9a6700;
+    --bad: #cf222e;
+    --blue: #0969da;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --card: #161b22; --ink: #e6edf3; --muted: #8b949e;
+      --line: #30363d; --ok: #3fb950; --warn: #d29922; --bad: #f85149; --blue: #58a6ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 20px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  tr:last-child td { border-bottom: none; }
+  code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  button {
+    font: inherit; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    white-space: nowrap;
+  }
+  td.actions { width: 1%; white-space: nowrap; }
+  button:hover { border-color: var(--blue); color: var(--blue); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .pill {
+    display: inline-block; padding: 1px 8px; border-radius: 999px;
+    font-size: 12px; border: 1px solid var(--line);
+  }
+  .idle { color: var(--muted); }
+  .running { color: var(--blue); border-color: var(--blue); }
+  .disabled { color: var(--muted); opacity: .7; }
+  .ok { color: var(--ok); }
+  .bad { color: var(--bad); }
+  .warn { color: var(--warn); }
+  .log {
+    max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+    font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+    background: var(--bg); border-radius: 6px; padding: 10px; border: 1px solid var(--line);
+  }
+  .empty { color: var(--muted); font-style: italic; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
+  .tabs button[aria-selected="true"] { border-color: var(--blue); color: var(--blue); font-weight: 600; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<h1>weftsync</h1>
+<div class="sub">
+  本地同步控制台 ·
+  <span id="now">—</span> ·
+  <span id="conn" class="idle">连接中…</span>
+</div>
+
+<div class="tabs" role="tablist">
+  <button role="tab" aria-selected="true"  data-tab="jobs">作业</button>
+  <button role="tab" aria-selected="false" data-tab="conflicts">冲突</button>
+  <button role="tab" aria-selected="false" data-tab="history">历史</button>
+  <button role="tab" aria-selected="false" data-tab="log">日志</button>
+</div>
+
+<section id="tab-jobs" class="tab">
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <strong class="grow">作业列表</strong>
+      <button id="run-all">全部立即运行</button>
+      <button id="refresh">刷新</button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>作业</th><th>状态</th><th>调度</th><th>下次</th>
+          <th>上次</th><th>上次结果</th><th style="width:1%"></th>
+        </tr>
+      </thead>
+      <tbody id="jobs"><tr><td colspan="7" class="empty">载入中…</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<section id="tab-conflicts" class="tab hidden">
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <strong class="grow">冲突列表</strong>
+      <span class="sub" style="margin:0">来自每个作业最近一次运行</span>
+    </div>
+    <table>
+      <thead><tr><th>作业</th><th>路径</th><th>类型</th><th>说明</th></tr></thead>
+      <tbody id="conflicts"><tr><td colspan="4" class="empty">暂无冲突</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<section id="tab-history" class="tab hidden">
+  <div class="card">
+    <strong>运行历史</strong>
+    <table style="margin-top:12px">
+      <thead>
+        <tr><th>作业</th><th>开始</th><th>耗时</th><th>结果</th><th>上传</th><th>删除</th><th>说明</th></tr>
+      </thead>
+      <tbody id="history"><tr><td colspan="7" class="empty">暂无记录</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<section id="tab-log" class="tab hidden">
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <strong class="grow">最近日志</strong>
+      <label class="sub" style="margin:0"><input type="checkbox" id="follow" checked> 自动滚动</label>
+    </div>
+    <div class="log" id="log">（暂无日志）</div>
+  </div>
+</section>
+
+<script>
+"use strict";
+
+let snapshot = null;
+// lastSignature skips the re-render when nothing changed. Re-rendering the table
+// every poll replaced the buttons mid-click and made the page feel unstable.
+let lastSignature = "";
+let lastHistory = "";
+let lastLog = "";
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+         `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function duration(a, b) {
+  const s = (new Date(b) - new Date(a)) / 1000;
+  if (!isFinite(s) || s < 0) return "—";
+  if (s < 60) return s.toFixed(1) + "s";
+  return Math.floor(s / 60) + "m" + Math.round(s % 60) + "s";
+}
+
+function statePill(state) {
+  const label = { idle: "空闲", running: "运行中", disabled: "已停用" }[state] || state;
+  return `<span class="pill ${esc(state)}">${esc(label)}</span>`;
+}
+
+async function getJSON(url) {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) throw new Error(url + " -> " + r.status);
+  return r.json();
+}
+
+async function refresh() {
+  const conn = document.getElementById("conn");
+  try {
+    snapshot = await getJSON("/api/status");
+    conn.textContent = "已连接";
+    conn.className = "ok";
+  } catch (e) {
+    conn.textContent = "连接失败：" + e.message;
+    conn.className = "bad";
+    return;
+  }
+  document.getElementById("now").textContent = "服务器时间 " + fmtTime(snapshot.now);
+
+  // Only touch the DOM when the data actually changed: a full re-render every
+  // few seconds swallows clicks on the buttons it replaces.
+  const sig = JSON.stringify(snapshot.jobs || []);
+  if (sig !== lastSignature) {
+    lastSignature = sig;
+    renderJobs();
+    renderConflicts();
+  }
+  refreshHistory();
+  refreshLog();
+}
+
+function renderJobs() {
+  const tbody = document.getElementById("jobs");
+  const jobs = (snapshot && snapshot.jobs) || [];
+  if (!jobs.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">没有作业</td></tr>';
+    return;
+  }
+  tbody.innerHTML = jobs.map(j => {
+    let result = "—";
+    if (j.last_ok === true) result = '<span class="ok">成功</span>';
+    if (j.last_ok === false) {
+      result = '<span class="bad">失败</span>'
+             + (j.last_error ? `<div class="mono bad">${esc(j.last_error)}</div>` : "");
+    }
+    const busy = j.state === "running";
+    return `<tr>
+      <td><strong>${esc(j.name)}</strong>
+          <div class="sub mono" style="margin:0">${esc(j.pairs)} 对 · ${esc(j.file)}</div></td>
+      <td>${statePill(j.state)}${j.skipped ? `<div class="sub" style="margin:0">跳过 ${j.skipped} 次</div>` : ""}</td>
+      <td class="mono">${esc(j.schedule)}</td>
+      <td class="mono">${esc(fmtTime(j.next_run))}</td>
+      <td class="mono">${esc(fmtTime(j.last_run))}</td>
+      <td>${result}</td>
+      <td class="actions"><button data-run="${esc(j.name)}" ${busy || !j.enabled ? "disabled" : ""}>立即运行</button></td>
+    </tr>`;
+  }).join("");
+
+  tbody.querySelectorAll("button[data-run]").forEach(b => {
+    b.addEventListener("click", () => runJob(b.dataset.run, b));
+  });
+}
+
+function renderConflicts() {
+  const tbody = document.getElementById("conflicts");
+  const rows = [];
+  for (const j of (snapshot && snapshot.jobs) || []) {
+    for (const r of j.last_result || []) {
+      for (const c of r.Conflicts || []) {
+        rows.push({ job: j.name, ...c });
+      }
+    }
+  }
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">暂无冲突</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(c => `<tr>
+    <td>${esc(c.job)}</td>
+    <td class="mono">${esc(c.path)}</td>
+    <td><span class="pill warn">${esc(c.kind)}</span></td>
+    <td>${esc(c.detail)}</td>
+  </tr>`).join("");
+}
+
+async function refreshHistory() {
+  const tbody = document.getElementById("history");
+  let data;
+  try { data = await getJSON("/api/history"); } catch { return; }
+  const runs = (data.runs || []).slice().reverse();
+  const sig = JSON.stringify(runs);
+  if (sig === lastHistory) return;
+  lastHistory = sig;
+  if (!runs.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">暂无记录</td></tr>';
+    return;
+  }
+  tbody.innerHTML = runs.map(r => `<tr>
+    <td>${esc(r.job)}</td>
+    <td class="mono">${esc(fmtTime(r.started))}</td>
+    <td class="mono">${esc(duration(r.started, r.ended))}</td>
+    <td>${r.ok ? '<span class="ok">成功</span>' : '<span class="bad">失败</span>'}</td>
+    <td class="mono">${r.transferred}</td>
+    <td class="mono">${r.deleted}${r.guard_hit ? ' <span class="pill bad">熔断</span>' : ""}</td>
+    <td class="mono">${esc(r.error || (r.conflicts ? r.conflicts + " 个冲突" : ""))}</td>
+  </tr>`).join("");
+}
+
+async function refreshLog() {
+  let data;
+  try { data = await getJSON("/api/log"); } catch { return; }
+  const el = document.getElementById("log");
+  const lines = data.lines || [];
+  const text = lines.length
+    ? lines.map(l => l.time ? (l.time + "  " + l.text) : l.text).join("\n")
+    : "（暂无日志）";
+  if (text === lastLog) return;
+  lastLog = text;
+  el.textContent = text;
+  if (document.getElementById("follow").checked) {
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+async function post(url) {
+  const r = await fetch(url, { method: "POST" });
+  let body = null;
+  try { body = await r.json(); } catch {}
+  if (!r.ok) {
+    throw new Error((body && body.error) || ("HTTP " + r.status));
+  }
+  return body;
+}
+
+async function runJob(name, btn) {
+  btn.disabled = true;
+  btn.textContent = "启动中…";
+  try {
+    await post("/api/run?job=" + encodeURIComponent(name));
+    btn.textContent = "已启动";
+  } catch (e) {
+    btn.textContent = "失败";
+    btn.title = e.message;
+    alert("启动失败：" + e.message);
+  }
+  // Force a re-render so the fresh state shows up immediately.
+  lastSignature = "";
+  setTimeout(refresh, 600);
+  // Restore the label after a moment, in case the run finished unnoticed.
+  setTimeout(() => { btn.disabled = false; btn.textContent = "立即运行"; }, 4000);
+}
+
+document.getElementById("run-all").addEventListener("click", async (e) => {
+  e.target.disabled = true;
+  try {
+    const body = await post("/api/run");
+    e.target.textContent = "已启动 " + (body.started || []).length + " 个";
+  } catch (err) {
+    e.target.textContent = "失败：" + err.message;
+  }
+  setTimeout(() => {
+    e.target.disabled = false;
+    e.target.textContent = "全部立即运行";
+    refresh();
+  }, 3000);
+});
+
+document.getElementById("refresh").addEventListener("click", refresh);
+
+document.querySelectorAll('.tabs button').forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll('.tabs button').forEach(b => b.setAttribute("aria-selected", b === btn));
+    document.querySelectorAll('.tab').forEach(s => s.classList.add('hidden'));
+    document.getElementById('tab-' + btn.dataset.tab).classList.remove('hidden');
+  });
+});
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

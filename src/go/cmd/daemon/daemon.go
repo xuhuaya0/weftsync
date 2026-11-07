@@ -83,7 +83,10 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 				defer func() { _ = closer.Close() }()
 			}
 
-			d, err := daemon.New(args, w)
+			// Tee the log so the UI can show recent lines: the daemon may be
+			// writing to a file, but the page still needs something to display.
+			sink := daemon.NewLogSink(w)
+			d, err := daemon.New(args, sink)
 			if err != nil {
 				return err
 			}
