@@ -13,6 +13,7 @@ import (
 	"github.com/rclone/rclone/cmd"
 	"github.com/spf13/cobra"
 
+	"weftsync/autostart"
 	"weftsync/daemon"
 )
 
@@ -91,7 +92,7 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 				return err
 			}
 
-			api := &daemon.API{D: d, Addr: addr}
+			api := &daemon.API{D: d, Addr: addr, Autostart: autostartSpec(args)}
 			srv, ln, err := daemon.Listen(addr, api)
 			if err != nil {
 				return err
@@ -124,4 +125,30 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 			return nil
 		})
 	},
+}
+
+// autostartSpec captures how this process was started, so "enable autostart" in
+// the UI reproduces the invocation the user has working rather than asking them
+// to retype it.
+//
+// A failure here is not fatal: the daemon still works, only the login-startup
+// toggle stays off (the API reports it as unavailable).
+func autostartSpec(jobFiles []string) autostart.Spec {
+	exe, err := os.Executable()
+	if err != nil {
+		return autostart.Spec{}
+	}
+	// --config is rclone's, so it is a persistent flag on the root command, not
+	// one of ours; read it back from where cobra keeps it.
+	cfgFile := ""
+	if f := cmd.Root.PersistentFlags().Lookup("config"); f != nil && f.Changed {
+		cfgFile = f.Value.String()
+	}
+
+	spec, err := autostart.SpecFromInvocation(exe, jobFiles, addr, logFile, cfgFile,
+		runNow, "127.0.0.1:5572")
+	if err != nil {
+		return autostart.Spec{}
+	}
+	return spec
 }

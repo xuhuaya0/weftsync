@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"weftsync/autostart"
 )
 
 // Local HTTP API.
@@ -23,6 +25,10 @@ type API struct {
 	D *Daemon
 	// Addr is the listen address, e.g. "127.0.0.1:5572".
 	Addr string
+	// Autostart is the command to register for login startup. It is captured
+	// from the running process so the entry reproduces what actually works; an
+	// empty Exe turns the feature off in the UI instead of guessing.
+	Autostart autostart.Spec
 }
 
 // Routes returns the handler for the API.
@@ -33,6 +39,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/api/history", a.handleHistory)
 	mux.HandleFunc("/api/log", a.handleLog)
 	mux.HandleFunc("/api/config", a.handleConfig)
+	mux.HandleFunc("/api/autostart", a.handleAutostart)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})

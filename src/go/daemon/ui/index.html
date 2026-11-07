@@ -118,6 +118,7 @@
   <button role="tab" aria-selected="false" data-tab="conflicts">冲突</button>
   <button role="tab" aria-selected="false" data-tab="history">历史</button>
   <button role="tab" aria-selected="false" data-tab="log">日志</button>
+  <button role="tab" aria-selected="false" data-tab="settings">设置</button>
 </div>
 
 <section id="tab-jobs" class="tab">
@@ -184,6 +185,13 @@
       <label class="sub" style="margin:0"><input type="checkbox" id="follow" checked> 自动滚动</label>
     </div>
     <div class="log" id="log">（暂无日志）</div>
+  </div>
+</section>
+
+<section id="tab-settings" class="tab hidden">
+  <div class="card">
+    <strong>开机自启</strong>
+    <div id="as-body" class="empty">载入中…</div>
   </div>
 </section>
 
@@ -406,8 +414,91 @@ document.querySelectorAll('.tabs button').forEach(btn => {
     document.querySelectorAll('.tab').forEach(s => s.classList.add('hidden'));
     document.getElementById('tab-' + btn.dataset.tab).classList.remove('hidden');
     if (btn.dataset.tab === 'config') { syncJobPicker(); loadConfig(); }
+    if (btn.dataset.tab === 'settings') { loadAutostart(); }
   });
 });
+
+// ------------------------------------------------------------------ settings tab
+let autostartView = null;
+
+async function loadAutostart() {
+  const body = document.getElementById("as-body");
+  try {
+    autostartView = await getJSON("/api/autostart");
+  } catch (e) {
+    autostartView = null;
+    body.className = "note err";
+    body.textContent = "读取开机自启状态失败：" + e.message;
+    return;
+  }
+  renderAutostart();
+}
+
+function renderAutostart() {
+  const body = document.getElementById("as-body");
+  const v = autostartView;
+  if (!v || !v.supported) {
+    body.className = "";
+    body.innerHTML = `<div class="note">此平台暂不支持由界面管理开机自启` +
+      (v && v.detail ? `（${esc(v.detail)}）` : "") + `。</div>`;
+    return;
+  }
+  body.className = "";
+
+  // A stale entry still runs, just not the job files this daemon knows about.
+  // Saying only "已启用" would be true and misleading at the same time.
+  let note = "";
+  if (v.enabled && !v.matches) {
+    note = `<div class="note">已有的启动项与本进程的命令行不一致` +
+      `（可能指向旧的可执行文件或旧的作业文件）。重新勾选一次会覆盖它。</div>`;
+  }
+
+  body.innerHTML = note +
+    `<div class="field" style="margin-top:12px">
+       <label>开机自启</label>
+       <input type="checkbox" id="as-enabled" ${v.enabled ? "checked" : ""}>
+       <span class="hint">登录 Windows / Linux 桌面时自动启动这个守护进程</span>
+     </div>
+     <div class="field">
+       <label>写入位置</label>
+       <span class="mono">${esc(v.location)}</span>
+     </div>
+     <div class="field">
+       <label>当前命令</label>
+       <span class="mono" style="word-break:break-all">${v.command ? esc(v.command) : "（未设置）"}</span>
+     </div>
+     <div id="as-save-note" class="note save-note"></div>`;
+
+  document.getElementById("as-enabled").addEventListener("change", saveAutostart);
+}
+
+async function saveAutostart() {
+  const box = document.getElementById("as-enabled");
+  const note = document.getElementById("as-save-note");
+  const want = box.checked;
+  box.disabled = true;
+  note.className = "note save-note";
+  note.textContent = "";
+  try {
+    const r = await fetch("/api/autostart", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: want }),
+    });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((data && data.error) || ("HTTP " + r.status));
+    autostartView = data;
+    renderAutostart();
+    const fresh = document.getElementById("as-save-note");
+    fresh.className = "note ok save-note";
+    fresh.textContent = want ? "已设置为开机自启。" : "已取消开机自启。";
+  } catch (e) {
+    box.checked = !want;   // put the box back where it was
+    box.disabled = false;
+    note.className = "note err save-note";
+    note.textContent = "保存失败：" + e.message;
+  }
+}
 
 // ------------------------------------------------------------------ config tab
 //
