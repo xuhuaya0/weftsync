@@ -225,7 +225,7 @@ func TestNoOverlappingRuns(t *testing.T) {
 
 	release := make(chan struct{})
 	var starts int32
-	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer) ([]job.PairResult, error) {
+	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer, opt job.Options) ([]job.PairResult, error) {
 		atomic.AddInt32(&starts, 1)
 		<-release
 		return nil, nil
@@ -276,7 +276,7 @@ func TestStatusReflectsRunningState(t *testing.T) {
 
 	release := make(chan struct{})
 	started := make(chan struct{})
-	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer) ([]job.PairResult, error) {
+	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer, opt job.Options) ([]job.PairResult, error) {
 		close(started)
 		<-release
 		return []job.PairResult{{Pair: "p", Actual: job.PassResult{Transferred: 2}}}, nil
@@ -321,7 +321,7 @@ func TestRunSurvivesItsRequester(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{})
 
-	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer) ([]job.PairResult, error) {
+	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer, opt job.Options) ([]job.PairResult, error) {
 		close(started)
 		go func() {
 			// Watch the context the run was given for the whole run duration.
@@ -374,7 +374,7 @@ func TestStopCancelsRuns(t *testing.T) {
 	defer cancel()
 
 	started := make(chan struct{})
-	d.runJob = func(runCtx context.Context, cfg *job.Config, w io.Writer) ([]job.PairResult, error) {
+	d.runJob = func(runCtx context.Context, cfg *job.Config, w io.Writer, opt job.Options) ([]job.PairResult, error) {
 		close(started)
 		<-runCtx.Done()
 		return nil, runCtx.Err()
@@ -403,7 +403,7 @@ func TestFailedRunIsRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer) ([]job.PairResult, error) {
+	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer, opt job.Options) ([]job.PairResult, error) {
 		return nil, errors.New("boom: nothing was deleted")
 	}
 
@@ -467,7 +467,7 @@ func TestAPIStatusAndRun(t *testing.T) {
 	}
 	var ran int32
 	release := make(chan struct{})
-	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer) ([]job.PairResult, error) {
+	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer, opt job.Options) ([]job.PairResult, error) {
 		atomic.AddInt32(&ran, 1)
 		<-release
 		return nil, nil

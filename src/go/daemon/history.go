@@ -29,6 +29,10 @@ type RunRecord struct {
 	Transferred int64 `json:"transferred"`
 	Deleted     int64 `json:"deleted"`
 	GuardHit    bool  `json:"guard_hit"`
+	// DryRun marks a preview: the numbers are what a run would have done.
+	DryRun bool `json:"dry_run,omitempty"`
+	// Stopped marks a run cut short on request; OK is true because nothing failed.
+	Stopped bool `json:"stopped,omitempty"`
 }
 
 // historySize is how many runs are retained. Enough to answer "why did it fail

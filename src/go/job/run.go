@@ -40,10 +40,13 @@ func (e *GuardError) Error() string {
 
 // PassResult is what one sync pass did (or, for a dry run, would have done).
 type PassResult struct {
-	Transferred int64
-	Deleted     int64
-	DeletedDirs int64
-	Errors      int64
+	Transferred int64 `json:"transferred"`
+	Deleted     int64 `json:"deleted"`
+	DeletedDirs int64 `json:"deleted_dirs"`
+	Errors      int64 `json:"errors"`
+	// Bytes is how much was transferred, for showing a plan's size rather than
+	// only its file count.
+	Bytes int64 `json:"bytes"`
 }
 
 // Destructive reports the total number of destructive operations in the pass.
@@ -70,14 +73,14 @@ func (e *ConflictError) Error() string {
 
 // PairResult is the outcome for one pair.
 type PairResult struct {
-	Pair      string
-	Variant   string
-	Local     string
-	Remote    string
-	DryRun    PassResult // what the gate measured
-	Actual    PassResult
-	GuardHit  bool
-	Conflicts []Conflict
+	Pair      string     `json:"pair"`
+	Variant   string     `json:"variant"`
+	Local     string     `json:"local"`
+	Remote    string     `json:"remote"`
+	DryRun    PassResult `json:"dry_run"`
+	Actual    PassResult `json:"actual"`
+	GuardHit  bool       `json:"guard_hit"`
+	Conflicts []Conflict `json:"conflicts,omitempty"`
 }
 
 // Options tunes a run.
@@ -85,6 +88,13 @@ type Options struct {
 	// DryRun measures and reports without changing anything. In this mode the
 	// guard still runs, so a plan can show that a real run would be blocked.
 	DryRun bool
+	// StatsGroup routes this run's counters into a named accounting group
+	// instead of the global one.
+	//
+	// Without it, two jobs running at once report the sum of both, and "current
+	// file" can name a file from the other job. Empty means global, which is what
+	// the command line wants.
+	StatsGroup string
 }
 
 // Run executes every enabled pair in the job, in order.
@@ -95,6 +105,10 @@ func Run(ctx context.Context, cfg *Config, w io.Writer, opt Options) ([]PairResu
 	if !cfg.Enabled() {
 		fmt.Fprintf(w, "job %q is disabled; nothing to do\n", cfg.Job.Name)
 		return nil, nil
+	}
+	if opt.StatsGroup != "" {
+		// Everything below counts into this group instead of the global one.
+		ctx = accounting.WithStatsGroup(ctx, opt.StatsGroup)
 	}
 
 	var (
@@ -312,7 +326,10 @@ func runPass(ctx context.Context, fdst, fsrc fs.Fs, opts passOptions, dryRun, de
 	// opposite of what this project needs. Ours runs above, on the dry pass.
 	ci.MaxDelete = -1
 
-	stats := accounting.GlobalStats()
+	// accounting.Stats honours the group on the context and falls back to the
+	// global counters, so the command line keeps its old behaviour while the
+	// daemon gets per-job numbers.
+	stats := accounting.Stats(ctx)
 	stats.ResetCounters()
 
 	var err error
@@ -328,6 +345,7 @@ func runPass(ctx context.Context, fdst, fsrc fs.Fs, opts passOptions, dryRun, de
 		Transferred: stats.GetTransfers(),
 		Deleted:     stats.GetDeletes(),
 		Errors:      stats.GetErrors(),
+		Bytes:       stats.GetBytes(),
 	}
 	if raw, err := stats.RemoteStats(true); err == nil && raw != nil {
 		if v, ok := raw["deletedDirs"]; ok {

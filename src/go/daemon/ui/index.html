@@ -101,6 +101,25 @@
   .note code { background: rgba(127,127,127,.18); padding: 1px 4px; border-radius: 4px; }
   .save-note { margin: 10px 0 0; }
   .save-note:empty { display: none; }
+
+  /* progress + preview */
+  .bar {
+    height: 5px; border-radius: 999px; background: var(--line);
+    overflow: hidden; margin-top: 4px; min-width: 90px;
+  }
+  .bar > i { display: block; height: 100%; background: var(--blue); width: 0; }
+  .prog { font-size: 12px; color: var(--muted); }
+  .prog .cur { word-break: break-all; }
+  .plan-grid { display: grid; grid-template-columns: 1fr auto; gap: 6px 14px; align-items: baseline; }
+  .plan-pair { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+  .plan-pair .head { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+  .danger { color: var(--bad); font-weight: 600; }
+  button.primary { border-color: var(--blue); color: var(--blue); font-weight: 600; }
+  button.danger-btn { border-color: var(--bad); color: var(--bad); }
+  .badge {
+    display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px;
+    border: 1px solid var(--line); color: var(--muted);
+  }
 </style>
 </head>
 <body>
@@ -125,6 +144,9 @@
   <div class="card">
     <div class="row" style="margin-bottom:12px">
       <strong class="grow">作业列表</strong>
+      <label class="sub" style="margin:0">
+        <input type="checkbox" id="skip-preview"> 跳过预览
+      </label>
       <button id="run-all">全部立即运行</button>
       <button id="refresh">刷新</button>
     </div>
@@ -137,6 +159,15 @@
       </thead>
       <tbody id="jobs"><tr><td colspan="7" class="empty">载入中…</td></tr></tbody>
     </table>
+  </div>
+
+  <div class="card" id="plan-card" style="display:none">
+    <div class="row" style="margin-bottom:12px">
+      <strong class="grow">变更预览 · <span id="plan-job" class="mono"></span></strong>
+      <button id="plan-run" class="primary">按此执行</button>
+      <button id="plan-close">关闭</button>
+    </div>
+    <div id="plan-body"></div>
   </div>
 </section>
 
@@ -204,6 +235,7 @@ let snapshot = null;
 let lastSignature = "";
 let lastHistory = "";
 let lastLog = "";
+let pollTimer = 0;
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
@@ -247,21 +279,62 @@ async function refresh() {
   } catch (e) {
     conn.textContent = "连接失败：" + e.message;
     conn.className = "bad";
+    // Still reschedule: a dropped connection must not stop the page from ever
+    // trying again, which is what a bare return with an interval replaced by a
+    // timer would do.
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(refresh, 5000);
     return;
   }
   document.getElementById("now").textContent = "服务器时间 " + fmtTime(snapshot.now);
 
   // Only touch the DOM when the data actually changed: a full re-render every
   // few seconds swallows clicks on the buttons it replaces.
-  const sig = JSON.stringify(snapshot.jobs || []);
+  //
+  // Progress is deliberately kept OUT of the signature. It changes on every poll
+  // while a job runs, and re-rendering the row each time would replace the stop
+  // button under the user's cursor. Instead the counters are written into spans
+  // that already exist, so the buttons stay put.
+  const sig = JSON.stringify((snapshot.jobs || []).map(j => ({
+    name: j.name, state: j.state, enabled: j.enabled, pairs: j.pairs,
+    schedule: j.schedule, next_run: j.next_run, last_run: j.last_run,
+    last_ok: j.last_ok, last_error: j.last_error, skipped: j.skipped,
+    can_stop: j.can_stop, mode: j.mode, last_stopped: j.last_stopped,
+    plan_at: j.plan ? j.plan.at : null,
+  })));
   if (sig !== lastSignature) {
     lastSignature = sig;
     renderJobs();
     renderConflicts();
   }
+  updateProgress();
+  afterPlanRun();
   refreshHistory();
   refreshLog();
   syncJobPicker();
+  scheduleNextPoll();
+}
+
+// scheduleNextPoll polls faster while something is running, so the numbers move
+// at a speed that reads as "live" without waking the browser up every second
+// when nothing is happening.
+function scheduleNextPoll() {
+  const busy = (snapshot && snapshot.jobs || []).some(j => j.state === "running");
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(refresh, busy ? 1000 : 3000);
+}
+
+// afterPlanRun opens the preview panel once the preview it started has finished.
+// Opening it on completion rather than immediately means the panel always has
+// numbers in it instead of a spinner.
+function afterPlanRun() {
+  if (!pendingPlanJob) return;
+  const job = ((snapshot && snapshot.jobs) || []).find(j => j.name === pendingPlanJob);
+  if (!job) { pendingPlanJob = null; return; }
+  if (job.state === "running") return;   // still measuring
+  const started = pendingPlanJob;
+  pendingPlanJob = null;
+  if (job.plan) openPlanPanel(started);
 }
 
 // syncJobPicker is declared further down with the config tab; this wrapper keeps
@@ -279,27 +352,115 @@ function renderJobs() {
   }
   tbody.innerHTML = jobs.map(j => {
     let result = "—";
-    if (j.last_ok === true) result = '<span class="ok">成功</span>';
+    if (j.last_ok === true) {
+      result = j.last_stopped
+        ? '<span class="warn">已停止</span>'
+        : '<span class="ok">成功</span>';
+    }
     if (j.last_ok === false) {
       result = '<span class="bad">失败</span>'
              + (j.last_error ? `<div class="mono bad">${esc(j.last_error)}</div>` : "");
     }
     const busy = j.state === "running";
+    const planning = busy && j.mode === "plan";
+
+    // The state cell carries the live counters. They are updated in place by
+    // updateProgress() so the buttons below are never replaced mid-click.
+    let stateCell = statePill(j.state);
+    if (busy) {
+      stateCell += `<span class="badge" style="margin-left:6px">${
+        planning ? "预览中" : "执行中"}</span>`;
+    }
+    stateCell += `<div class="prog" id="prog-${esc(j.name)}"></div>`;
+    if (j.skipped) {
+      stateCell += `<div class="sub" style="margin:0">跳过 ${j.skipped} 次</div>`;
+    }
+
+    // Stop is only meaningful while running; preview is hidden while busy
+    // because neither can start until the current run finishes.
+    const actions = busy
+      ? `<button class="danger-btn" data-stop="${esc(j.name)}" ${
+          j.can_stop ? "" : "disabled"}>停止</button>`
+      : `<button data-plan="${esc(j.name)}" ${j.enabled ? "" : "disabled"}>预览</button>
+         <button data-run="${esc(j.name)}" ${j.enabled ? "" : "disabled"}>立即运行</button>`;
+
     return `<tr>
       <td><strong>${esc(j.name)}</strong>
           <div class="sub mono" style="margin:0">${esc(j.pairs)} 对 · ${esc(j.file)}</div></td>
-      <td>${statePill(j.state)}${j.skipped ? `<div class="sub" style="margin:0">跳过 ${j.skipped} 次</div>` : ""}</td>
+      <td style="min-width:170px">${stateCell}</td>
       <td class="mono">${esc(j.schedule)}</td>
       <td class="mono">${esc(fmtTime(j.next_run))}</td>
       <td class="mono">${esc(fmtTime(j.last_run))}</td>
       <td>${result}</td>
-      <td class="actions"><button data-run="${esc(j.name)}" ${busy || !j.enabled ? "disabled" : ""}>立即运行</button></td>
+      <td class="actions">${actions}</td>
     </tr>`;
   }).join("");
 
   tbody.querySelectorAll("button[data-run]").forEach(b => {
-    b.addEventListener("click", () => runJob(b.dataset.run, b));
+    b.addEventListener("click", () => startRun(b.dataset.run, false, b));
   });
+  tbody.querySelectorAll("button[data-plan]").forEach(b => {
+    b.addEventListener("click", () => startRun(b.dataset.plan, true, b));
+  });
+  tbody.querySelectorAll("button[data-stop]").forEach(b => {
+    b.addEventListener("click", () => stopJob(b.dataset.stop, b));
+  });
+}
+
+// updateProgress writes the counters into the row that is already there.
+//
+// Writing into an existing span rather than re-rendering is what keeps the stop
+// button under the cursor while the numbers tick once a second.
+function updateProgress() {
+  for (const j of (snapshot && snapshot.jobs) || []) {
+    const el = document.getElementById("prog-" + j.name);
+    if (!el) continue;
+    if (j.state !== "running" || !j.progress) { el.innerHTML = ""; continue; }
+    el.innerHTML = progressHTML(j.progress);
+  }
+}
+
+function progressHTML(p) {
+  const bar = [];
+  const parts = [];
+  if (p.total_bytes > 0) {
+    const pct = Math.min(100, Math.round(100 * p.bytes / p.total_bytes));
+    bar.push(`<div class="bar"><i style="width:${pct}%"></i></div>`);
+    parts.push(`${pct}% · ${fmtBytes(p.bytes)} / ${fmtBytes(p.total_bytes)}`);
+  } else if (p.bytes > 0) {
+    parts.push(fmtBytes(p.bytes));
+  }
+  if (p.speed > 0) parts.push(`${fmtBytes(p.speed)}/s`);
+  if (p.transfers > 0) parts.push(`${p.transfers} 个文件`);
+  if (p.deletes > 0) parts.push(`删除 ${p.deletes}`);
+  if (p.errors > 0) parts.push(`<span class="bad">${p.errors} 个错误</span>`);
+
+  // The bar goes above the text rather than into it: joining it with the same
+  // separator left a stray "·" at the start of the line.
+  let out = bar.join("");
+  if (parts.length) out += `<div>${parts.join(" · ")}</div>`;
+  if (p.eta) out += `<div class="prog">剩余约 ${esc(fmtDuration(p.eta))}</div>`;
+  for (const f of (p.files || []).slice(0, 3)) {
+    out += `<div class="prog cur">${esc(f.name)} ${f.size ? f.percent + "%" : ""}</div>`;
+  }
+  return out;
+}
+
+function fmtBytes(n) {
+  if (!n || n < 0) return "0 B";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let i = 0, v = n;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return (i === 0 ? v.toFixed(0) : v.toFixed(1)) + " " + units[i];
+}
+
+function fmtDuration(seconds) {
+  if (seconds == null || !isFinite(seconds) || seconds <= 0) return "—";
+  const s = Math.round(seconds);
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m" + (s % 60) + "s";
+  return Math.floor(m / 60) + "h" + (m % 60) + "m";
 }
 
 function renderConflicts() {
@@ -336,15 +497,20 @@ async function refreshHistory() {
     tbody.innerHTML = '<tr><td colspan="7" class="empty">暂无记录</td></tr>';
     return;
   }
-  tbody.innerHTML = runs.map(r => `<tr>
+  tbody.innerHTML = runs.map(r => {
+    let verdict = r.ok ? '<span class="ok">成功</span>' : '<span class="bad">失败</span>';
+    if (r.dry_run) verdict = '<span class="badge">预览</span>';
+    if (r.stopped) verdict = '<span class="warn">已停止</span>';
+    return `<tr>
     <td>${esc(r.job)}</td>
     <td class="mono">${esc(fmtTime(r.started))}</td>
     <td class="mono">${esc(duration(r.started, r.ended))}</td>
-    <td>${r.ok ? '<span class="ok">成功</span>' : '<span class="bad">失败</span>'}</td>
+    <td>${verdict}</td>
     <td class="mono">${r.transferred}</td>
     <td class="mono">${r.deleted}${r.guard_hit ? ' <span class="pill bad">熔断</span>' : ""}</td>
     <td class="mono">${esc(r.error || (r.conflicts ? r.conflicts + " 个冲突" : ""))}</td>
-  </tr>`).join("");
+  </tr>`;
+  }).join("");
 }
 
 async function refreshLog() {
@@ -373,29 +539,154 @@ async function post(url) {
   return body;
 }
 
-async function runJob(name, btn) {
+// startRun starts a preview or a real run.
+//
+// A real run started by hand previews first, unless "跳过预览" is ticked: the plan
+// is the only way to see that a mirror pair is about to delete more than the user
+// expects, and finding that out afterwards is too late. Scheduled runs skip the
+// preview - nobody is there to read it.
+async function startRun(name, plan, btn) {
+  const skip = document.getElementById("skip-preview");
+  const previewFirst = !plan && !(skip && skip.checked);
+
   btn.disabled = true;
-  btn.textContent = "启动中…";
+  btn.textContent = plan ? "预览中…" : (previewFirst ? "预览中…" : "启动中…");
   try {
-    await post("/api/run?job=" + encodeURIComponent(name));
-    btn.textContent = "已启动";
+    await post("/api/run?job=" + encodeURIComponent(name) +
+      (plan || previewFirst ? "&plan=true" : ""));
+    btn.textContent = plan ? "已开始预览" : (previewFirst ? "正在预览" : "已启动");
+    if (plan || previewFirst) pendingPlanJob = name;
   } catch (e) {
     btn.textContent = "失败";
     btn.title = e.message;
-    alert("启动失败：" + e.message);
+    btn.disabled = false;
+    alert((plan ? "预览" : "启动") + "失败：" + e.message);
+    return;
   }
-  // Force a re-render so the fresh state shows up immediately.
   lastSignature = "";
-  setTimeout(refresh, 600);
-  // Restore the label after a moment, in case the run finished unnoticed.
-  setTimeout(() => { btn.disabled = false; btn.textContent = "立即运行"; }, 4000);
+  setTimeout(refresh, 400);
 }
+
+// pendingPlanJob is set when a preview was started from the run button; when that
+// preview lands, the panel opens and the user decides whether to go ahead.
+let pendingPlanJob = null;
+
+// stopJob asks the daemon to cancel the run in flight.
+async function stopJob(name, btn) {
+  btn.disabled = true;
+  btn.textContent = "停止中…";
+  try {
+    await post("/api/stop?job=" + encodeURIComponent(name));
+    btn.textContent = "已请求停止";
+  } catch (e) {
+    btn.textContent = "停止失败";
+    btn.title = e.message;
+    alert("停止失败：" + e.message);
+    btn.disabled = false;
+    return;
+  }
+  // The run unwinds in the daemon, not here; the next polls show it going idle.
+  lastSignature = "";
+  setTimeout(refresh, 400);
+}
+
+function openPlanPanel(name) {
+  const card = document.getElementById("plan-card");
+  const job = ((snapshot && snapshot.jobs) || []).find(j => j.name === name);
+  if (!job || !job.plan) { card.style.display = "none"; return; }
+
+  document.getElementById("plan-job").textContent = name;
+  document.getElementById("plan-body").innerHTML = planHTML(job.plan);
+  const runBtn = document.getElementById("plan-run");
+  runBtn.dataset.job = name;
+  // "Run it" makes no sense for a preview that could not be built.
+  runBtn.disabled = !!job.plan.error;
+  runBtn.textContent = "按此执行";
+  card.style.display = "";
+  planJob = name;
+}
+
+// planJob is the job the open panel belongs to; "" when the panel is closed.
+let planJob = "";
+
+function closePlanPanel() {
+  document.getElementById("plan-card").style.display = "none";
+  planJob = "";
+  pendingPlanJob = null;
+}
+
+function planHTML(p) {
+  const parts = [];
+  if (p.error) {
+    // A failed preview and a clean preview both produce zero counts. Saying
+    // "nothing to change" here would be exactly the wrong message.
+    parts.push(`<div class="note err"><strong>预览失败，不能据此判断有没有变更。</strong>` +
+      `<div class="mono" style="margin-top:6px">${esc(p.error)}</div></div>`);
+  } else if (p.guard_hit) {
+    parts.push(`<div class="note"><strong>这个作业现在真的跑一次会被拒绝。</strong>` +
+      `待删除的数量超过 max_delete，保护机制会在任何删除发生之前中止整轮。` +
+      `下面的数字是「如果允许，会做什么」。</div>`);
+  } else if (!p.transferred && !p.deleted && !p.conflicts) {
+    parts.push(`<div class="note ok">没有需要变更的内容。</div>`);
+  }
+
+  for (const r of p.results || []) {
+    const a = r.actual || {};
+    const d = r.dry_run || {};
+    const guard = r.guard_hit;
+    parts.push(`<div class="plan-pair">
+      <div class="head">
+        <strong>${esc(r.pair)}</strong>
+        <span class="badge">${esc(r.variant)}</span>
+        ${guard ? '<span class="pill bad">会被熔断</span>' : ""}
+      </div>
+      <div class="plan-grid">
+        <span>上传 / 覆盖</span>
+        <span class="mono">${a.transferred || 0} 个${a.bytes ? " · " + fmtBytes(a.bytes) : ""}</span>
+        <span>删除</span>
+        <span class="mono ${a.deleted || a.deleted_dirs ? "danger" : ""}">${
+          (a.deleted || 0) + (a.deleted_dirs || 0)} 项</span>
+        ${d.deleted !== undefined && r.variant === "mirror" && d.deleted !== a.deleted
+          ? `<span>预检测得删除</span><span class="mono">${d.deleted} 项</span>` : ""}
+        <span>冲突</span>
+        <span class="mono">${(r.conflicts || []).length} 个</span>
+        <span>本地</span>
+        <span class="mono" style="word-break:break-all">${esc(r.local)}</span>
+        <span>远端</span>
+        <span class="mono" style="word-break:break-all">${esc(r.remote)}</span>
+      </div>
+    </div>`);
+  }
+  return parts.join("");
+}
+
+document.getElementById("plan-run").addEventListener("click", async (e) => {
+  const name = e.target.dataset.job;
+  if (!name) return;
+  e.target.disabled = true;
+  e.target.textContent = "启动中…";
+  try {
+    await post("/api/run?job=" + encodeURIComponent(name));
+    closePlanPanel();
+  } catch (err) {
+    alert("启动失败：" + err.message);
+    e.target.disabled = false;
+    e.target.textContent = "按此执行";
+    return;
+  }
+  lastSignature = "";
+  setTimeout(refresh, 400);
+});
+
+document.getElementById("plan-close").addEventListener("click", closePlanPanel);
 
 document.getElementById("run-all").addEventListener("click", async (e) => {
   e.target.disabled = true;
+  const plan = !document.getElementById("skip-preview").checked;
   try {
-    const body = await post("/api/run");
-    e.target.textContent = "已启动 " + (body.started || []).length + " 个";
+    const body = await post("/api/run" + (plan ? "?plan=true" : ""));
+    e.target.textContent = (plan ? "预览中 " : "已启动 ") +
+      (body.started || []).length + " 个";
   } catch (err) {
     e.target.textContent = "失败：" + err.message;
   }
@@ -749,7 +1040,6 @@ document.getElementById("cfg-save").addEventListener("click", async () => {
 });
 
 refresh();
-setInterval(refresh, 3000);
 </script>
 </body>
 </html>

@@ -101,7 +101,7 @@ func TestRunIsRecordedInHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer) ([]job.PairResult, error) {
+	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer, opt job.Options) ([]job.PairResult, error) {
 		return []job.PairResult{{
 			Pair:      "p",
 			Actual:    job.PassResult{Transferred: 4, Deleted: 1},
@@ -140,7 +140,7 @@ func TestFailedRunRecordedWithMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer) ([]job.PairResult, error) {
+	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer, opt job.Options) ([]job.PairResult, error) {
 		return nil, context.DeadlineExceeded
 	}
 	if err := d.Trigger(context.Background(), "a"); err != nil {

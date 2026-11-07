@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -36,6 +37,7 @@ func (a *API) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", a.handleStatus)
 	mux.HandleFunc("/api/run", a.handleRun)
+	mux.HandleFunc("/api/stop", a.handleStop)
 	mux.HandleFunc("/api/history", a.handleHistory)
 	mux.HandleFunc("/api/log", a.handleLog)
 	mux.HandleFunc("/api/config", a.handleConfig)
@@ -61,10 +63,20 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRun starts one job, or every enabled job when no name is given.
+//
+// `plan=true` turns the run into a preview: it measures what would change and
+// changes nothing. The flag lives here rather than on a separate endpoint because
+// everything except the mode is identical - same single-flight guard, same
+// history entry, same progress reporting.
 func (a *API) handleRun(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "POST only")
 		return
+	}
+
+	mode := ModeRun
+	if isTrue(r.URL.Query().Get("plan")) {
+		mode = ModePlan
 	}
 
 	name := r.URL.Query().Get("job")
@@ -77,6 +89,13 @@ func (a *API) handleRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	start := func(n string) error {
+		if mode == ModePlan {
+			return a.D.TriggerPlan(r.Context(), n)
+		}
+		return a.D.Trigger(r.Context(), n)
+	}
+
 	if name == "" {
 		// Run everything enabled.
 		var started []string
@@ -85,23 +104,55 @@ func (a *API) handleRun(w http.ResponseWriter, r *http.Request) {
 			if !st.Enabled {
 				continue
 			}
-			if err := a.D.Trigger(r.Context(), st.Name); err != nil {
+			if err := start(st.Name); err != nil {
 				problems = append(problems, fmt.Sprintf("%s: %v", st.Name, err))
 				continue
 			}
 			started = append(started, st.Name)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"started": started, "problems": problems,
+			"started": started, "problems": problems, "mode": mode,
 		})
 		return
 	}
 
-	if err := a.D.Trigger(r.Context(), name); err != nil {
+	if err := start(name); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"started": []string{name}})
+	writeJSON(w, http.StatusOK, map[string]any{"started": []string{name}, "mode": mode})
+}
+
+// handleStop cancels the run in flight for one job.
+func (a *API) handleStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	name := r.URL.Query().Get("job")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "the job query parameter is required")
+		return
+	}
+
+	err := a.D.StopJob(name)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusAccepted, map[string]any{"stopping": name})
+	case errors.Is(err, ErrNotRunning):
+		writeError(w, http.StatusConflict, err.Error())
+	default:
+		writeError(w, http.StatusNotFound, err.Error())
+	}
+}
+
+// isTrue accepts the forms a hand-written query string actually uses.
+func isTrue(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

@@ -32,6 +32,16 @@ const (
 	StateDisabled RunState = "disabled"
 )
 
+// RunMode distinguishes a real run from a preview.
+type RunMode string
+
+const (
+	// ModeRun changes the destination.
+	ModeRun RunMode = "run"
+	// ModePlan measures what a run would do and changes nothing.
+	ModePlan RunMode = "plan"
+)
+
 // JobStatus is the observable state of one job.
 type JobStatus struct {
 	Name      string     `json:"name"`
@@ -49,6 +59,37 @@ type JobStatus struct {
 	Skipped int `json:"skipped"`
 	// LastResult summarises the previous run.
 	LastResult []job.PairResult `json:"last_result,omitempty"`
+
+	// Mode is what the current (or last) run was: a real run or a preview.
+	Mode RunMode `json:"mode,omitempty"`
+	// Plan is the most recent preview for this job, so the UI can show what a run
+	// would do without having to read history.
+	Plan *PlanStatus `json:"plan,omitempty"`
+	// CanStop is true while a run can still be cancelled.
+	CanStop bool `json:"can_stop"`
+	// LastStopped means the last run was cut short on request rather than failing.
+	LastStopped bool `json:"last_stopped,omitempty"`
+	// Progress is live counters while a run is in flight.
+	Progress *job.Progress `json:"progress,omitempty"`
+}
+
+// PlanStatus is the result of the most recent preview.
+type PlanStatus struct {
+	At      time.Time        `json:"at"`
+	Results []job.PairResult `json:"results"`
+	// Error is why the preview could not be built.
+	//
+	// Without it a failed preview is indistinguishable from "nothing to do": both
+	// arrive as zero counts, and the UI would tell the user there is nothing to
+	// change when in fact the destination could not even be opened.
+	Error string `json:"error,omitempty"`
+	// GuardHit means a real run would be refused by the delete guard, so the
+	// preview is also the explanation for why nothing is happening.
+	GuardHit bool `json:"guard_hit"`
+	// Conflicts and totals are copied out so the UI does not have to re-add them.
+	Conflicts   int   `json:"conflicts"`
+	Transferred int64 `json:"transferred"`
+	Deleted     int64 `json:"deleted"`
 }
 
 // entry is one scheduled job file.
@@ -59,6 +100,14 @@ type entry struct {
 
 	// running guards against overlapping runs of the same job.
 	running bool
+	// cancelRun aborts the in-flight run; nil when idle. Kept here rather than
+	// passed around the API so "stop" does not have to find the goroutine.
+	cancelRun context.CancelFunc
+	// mode is what the current or last run was.
+	mode RunMode
+	// tracker owns this job's accounting group so its progress cannot mix with
+	// another job's.
+	tracker *job.Tracker
 
 	name      string
 	enabled   bool
@@ -70,6 +119,11 @@ type entry struct {
 	lastError string
 	skipped   int
 	lastRes   []job.PairResult
+	// lastPlan is the most recent preview; nil until one has run.
+	lastPlan *PlanStatus
+	// lastStopped records that the last run was cut short on request, which is
+	// not the same as a failure and must not read like one.
+	lastStopped bool
 }
 
 // Daemon owns the jobs and their schedule.
@@ -80,7 +134,7 @@ type Daemon struct {
 	now     func() time.Time
 
 	// runJob is injectable so tests can avoid touching the network.
-	runJob func(ctx context.Context, cfg *job.Config, w io.Writer) ([]job.PairResult, error)
+	runJob func(ctx context.Context, cfg *job.Config, w io.Writer, opt job.Options) ([]job.PairResult, error)
 
 	// ctx is the daemon's own lifetime. Runs must NOT inherit the context of
 	// whoever asked for them: an HTTP request's context is cancelled the moment
@@ -109,8 +163,8 @@ func New(files []string, log io.Writer) (*Daemon, error) {
 		now:     time.Now,
 		stop:    make(chan struct{}),
 		history: newRing[RunRecord](historySize),
-		runJob: func(ctx context.Context, cfg *job.Config, w io.Writer) ([]job.PairResult, error) {
-			return job.Run(ctx, cfg, w, job.Options{})
+		runJob: func(ctx context.Context, cfg *job.Config, w io.Writer, opt job.Options) ([]job.PairResult, error) {
+			return job.Run(ctx, cfg, w, opt)
 		},
 	}
 	if sink, ok := log.(interface{ Recent() []LogLine }); ok {
@@ -147,6 +201,7 @@ func New(files []string, log io.Writer) (*Daemon, error) {
 			enabled:  cfg.Enabled(),
 			pairs:    len(cfg.Pair),
 			nextRun:  d.computeNext(sched, d.now()),
+			tracker:  job.NewTracker(statsGroupFor(name)),
 		})
 	}
 	return d, nil
@@ -258,17 +313,52 @@ func (d *Daemon) runDue(ctx context.Context) {
 		d.wg.Add(1)
 		go func(e *entry) {
 			defer d.wg.Done()
-			d.execute(ctx, e)
+			d.execute(ctx, e, ModeRun)
 		}(e)
 	}
 }
 
 // execute runs one job and records the outcome.
-func (d *Daemon) execute(ctx context.Context, e *entry) {
+func (d *Daemon) execute(ctx context.Context, e *entry, mode RunMode) {
 	start := d.now()
-	d.logf("job %q: starting", e.name)
+	if mode == ModePlan {
+		d.logf("job %q: building a preview (nothing will be changed)", e.name)
+	} else {
+		d.logf("job %q: starting", e.name)
+	}
 
-	results, err := d.runJob(ctx, e.cfg, d.log)
+	// The run gets its own context so it can be cancelled on request while the
+	// daemon keeps running. It is derived from the daemon's context so a shutdown
+	// still stops it.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Reset before publishing the run: a second run would otherwise begin with
+	// the previous run's totals and the UI would show it as already complete.
+	//
+	// cfg and tracker are read under the lock because reload() swaps cfg; reading
+	// the pointer while it is being replaced is a data race.
+	d.mu.Lock()
+	cfg := e.cfg
+	tracker := e.tracker
+	e.cancelRun = cancel
+	e.mode = mode
+	e.lastStopped = false
+	d.mu.Unlock()
+
+	tracker.Reset()
+
+	results, err := d.runJob(runCtx, cfg, d.log, job.Options{
+		DryRun:     mode == ModePlan,
+		StatsGroup: tracker.Group(),
+	})
+
+	// A cancelled context is what our own stop request looks like. Reporting it as
+	// a failure would send the user hunting for a problem that is not there.
+	stopped := errors.Is(runCtx.Err(), context.Canceled)
+	if stopped {
+		err = nil
+	}
 
 	d.mu.Lock()
 	finishedCount := len(results)
@@ -288,14 +378,29 @@ func (d *Daemon) execute(ctx context.Context, e *entry) {
 
 	d.mu.Lock()
 	e.running = false
-	e.lastRun = start
-	e.hasRun = true
-	e.lastOK = err == nil
-	e.lastRes = results
-	if err != nil {
-		e.lastError = err.Error()
+	e.cancelRun = nil
+	// A preview is not a run: it must not move "last run" or claim success, or the
+	// job row would say a sync happened when nothing was touched.
+	if mode == ModePlan {
+		errText := ""
+		if err != nil {
+			errText = err.Error()
+		}
+		e.lastPlan = &PlanStatus{
+			At: start, Results: results, GuardHit: guardHit, Error: errText,
+			Conflicts: conflicts, Transferred: transferred, Deleted: deleted,
+		}
 	} else {
-		e.lastError = ""
+		e.lastRun = start
+		e.hasRun = true
+		e.lastOK = err == nil
+		e.lastRes = results
+		e.lastStopped = stopped
+		if err != nil {
+			e.lastError = err.Error()
+		} else {
+			e.lastError = ""
+		}
 	}
 	end := d.now()
 	d.mu.Unlock()
@@ -304,6 +409,7 @@ func (d *Daemon) execute(ctx context.Context, e *entry) {
 		Job: e.name, Started: start, Ended: end, OK: err == nil,
 		Results: results, Conflicts: conflicts,
 		Transferred: transferred, Deleted: deleted, GuardHit: guardHit,
+		DryRun: mode == ModePlan, Stopped: stopped,
 	}
 	if err != nil {
 		rec.Error = err.Error()
@@ -313,12 +419,26 @@ func (d *Daemon) execute(ctx context.Context, e *entry) {
 	}
 
 	switch {
+	case stopped:
+		d.logf("job %q: stopped on request after %v",
+			e.name, d.now().Sub(start).Round(time.Millisecond))
 	case err != nil:
 		d.logf("job %q: failed after %v: %v", e.name, d.now().Sub(start).Round(time.Millisecond), err)
+	case mode == ModePlan:
+		d.logf("job %q: preview done in %v (%d pair result(s), %d conflict(s))",
+			e.name, d.now().Sub(start).Round(time.Millisecond), finishedCount, conflicts)
 	default:
 		d.logf("job %q: finished in %v (%d pair result(s), %d conflict(s))",
 			e.name, d.now().Sub(start).Round(time.Millisecond), finishedCount, conflicts)
 	}
+}
+
+// statsGroupFor names a job's accounting group.
+//
+// The prefix keeps our groups distinguishable from anything else that might use
+// rclone's group feature in the same process.
+func statsGroupFor(jobName string) string {
+	return "weftsync:" + jobName
 }
 
 // Stop ends the scheduler and waits for running jobs to return.
@@ -337,6 +457,21 @@ func (d *Daemon) Stop() {
 // The run uses the daemon's lifetime context, not the caller's: an API request
 // that returns immediately must not take the transfer down with it.
 func (d *Daemon) Trigger(_ context.Context, name string) error {
+	return d.start(name, ModeRun)
+}
+
+// TriggerPlan builds a preview: it measures what a run would change and changes
+// nothing.
+//
+// It shares the running flag with a real run rather than running alongside one.
+// Two passes over the same pair would each see the other's writes and the guard
+// count would be meaningless, so "one thing at a time per job" is the useful rule
+// even for a read-only pass.
+func (d *Daemon) TriggerPlan(_ context.Context, name string) error {
+	return d.start(name, ModePlan)
+}
+
+func (d *Daemon) start(name string, mode RunMode) error {
 	d.mu.Lock()
 	var target *entry
 	for _, e := range d.entries {
@@ -358,6 +493,7 @@ func (d *Daemon) Trigger(_ context.Context, name string) error {
 		return fmt.Errorf("daemon: job %q is already running", name)
 	}
 	target.running = true
+	target.mode = mode
 	runCtx := d.ctx
 	if runCtx == nil {
 		runCtx = context.Background()
@@ -367,10 +503,44 @@ func (d *Daemon) Trigger(_ context.Context, name string) error {
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
-		d.execute(runCtx, target)
+		d.execute(runCtx, target, mode)
 	}()
 	return nil
 }
+
+// StopJob cancels the run in flight for one job.
+//
+// It returns ErrNotRunning when there is nothing to stop, so the caller can answer
+// 409 instead of pretending something happened.
+func (d *Daemon) StopJob(name string) error {
+	d.mu.Lock()
+	var target *entry
+	for _, e := range d.entries {
+		if e.name == name {
+			target = e
+			break
+		}
+	}
+	if target == nil {
+		d.mu.Unlock()
+		return fmt.Errorf("daemon: no job named %q", name)
+	}
+	if !target.running || target.cancelRun == nil {
+		d.mu.Unlock()
+		return ErrNotRunning
+	}
+	cancel := target.cancelRun
+	d.mu.Unlock()
+
+	// The run unwinds on its own; waiting here would block the HTTP handler for
+	// as long as the current transfer takes to notice.
+	cancel()
+	d.logf("job %q: stop requested", name)
+	return nil
+}
+
+// ErrNotRunning means a stop was requested for a job that is not running.
+var ErrNotRunning = errors.New("daemon: the job is not running")
 
 // Status returns a snapshot of every job.
 func (d *Daemon) Status() []JobStatus {
@@ -405,8 +575,23 @@ func (d *Daemon) Status() []JobStatus {
 			st.LastRun = &last
 			ok := e.lastOK
 			st.LastOK = &ok
+			st.LastStopped = e.lastStopped
 		}
 		st.LastError = e.lastError
+		if e.lastPlan != nil {
+			p := *e.lastPlan
+			st.Plan = &p
+		}
+
+		// Progress is read while holding no lock of ours: the tracker has its own,
+		// and holding d.mu here would stall every other API call for the duration
+		// of a stats read.
+		if e.running && e.tracker != nil {
+			p := e.tracker.Snapshot()
+			st.Progress = &p
+			st.Mode = e.mode
+			st.CanStop = e.cancelRun != nil
+		}
 		out = append(out, st)
 	}
 	return out

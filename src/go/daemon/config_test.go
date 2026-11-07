@@ -141,7 +141,7 @@ func TestConfigSaveRefusedWhileRunning(t *testing.T) {
 	}
 	release := make(chan struct{})
 	started := make(chan struct{})
-	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer) ([]job.PairResult, error) {
+	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer, opt job.Options) ([]job.PairResult, error) {
 		close(started)
 		<-release
 		return nil, nil
