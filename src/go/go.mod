@@ -2,7 +2,10 @@ module weftsync
 
 go 1.24.0
 
-require github.com/rclone/rclone v1.71.2
+require (
+	github.com/pelletier/go-toml/v2 v2.2.4
+	github.com/rclone/rclone v1.71.2
+)
 
 require (
 	bazil.org/fuse v0.0.0-20230120002735-62a210ff1fd5 // indirect

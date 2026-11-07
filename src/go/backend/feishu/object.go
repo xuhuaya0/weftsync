@@ -159,6 +159,17 @@ type limitedReadCloser struct {
 
 func (l *limitedReadCloser) Close() error { return l.closer.Close() }
 
+// readAll downloads the whole object. Used by rename, which has no server-side
+// equivalent on Feishu (the move API relocates but does not rename).
+func (o *Object) readAll(ctx context.Context) ([]byte, error) {
+	rc, err := o.Open(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rc.Close() }()
+	return io.ReadAll(rc)
+}
+
 // Update replaces this object's content.
 //
 // Feishu offers no in-place update: re-uploading a name always creates a NEW

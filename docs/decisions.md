@@ -832,3 +832,134 @@ if oldToken != newToken { ... }  // 永远相等 → 永远不删
 凡是「我加了一层归一化/去重/折叠」，就必须同时准备一条**绕过它的观测通道**，
 否则从那一刻起，这一类缺陷对测试完全不可见。
 
+---
+
+## D25 · `max_delete` 必须自己实现，rclone 的语义是反的（2026-11-07）
+
+**背景**
+F3 要「一次同步超过 N 个待删 → 整轮中止，一个都不删」（`PLAN.md` B12，用户 2026-11-05 定）。
+
+**rclone 自带 `--max-delete`，但语义不同**
+
+源码 `fs/accounting/stats.go`：
+```go
+if ci.MaxDelete >= 0 && s.deletes+1 > ci.MaxDelete {
+    return errMaxDelete
+}
+```
+它在**每次删除前**判断，所以是「删到上限再停」。rclone 自己的测试
+`TestMaxDelete`（`ci.MaxDelete = 2`，3 个文件）断言**剩下 1 个** —— 即删了 2 个。
+
+实测确认（真实租户，2 个待删文件）：
+
+| 命令 | 结果 |
+|---|---|
+| `--dry-run` | 2 条 `Skipped delete`，远端仍是 4 个文件 |
+| `--max-delete 1` | **`f2.txt: Deleted`**，然后 `--max-delete threshold reached`，远端 4 → 3 |
+| 无限制 | 4 → 2 |
+
+对一个**删除不可恢复**的目标，删掉一半就退出比完全不删更糟：用户以为被拦住了，
+实际已经丢数据。
+
+**决定**
+在 `job` 层做两轮：预检轮用 dry-run 统计，越限则整轮中止；否则执行轮真跑。
+
+**dry-run 能准确统计的前提**（已核对源码 + 实测）：`DeleteFileWithBackupDir` 里
+`accounting.Stats(ctx).DeleteFile(...)` 在 `SkipDestructive` **之前**调用，
+所以 dry-run 下计数照常累加、只是不执行 `dst.Remove`。
+
+**预检和执行之间目标被改动怎么办**
+执行轮结束后再核对一次实际删除数；若超过上限（说明两轮之间别人写了目标），
+报错并明确说明。不静默放行。
+
+---
+
+## D26 · 实现服务端 `Move`，以及一个只有真实租户才暴露的「路径坐标系」缺陷（2026-11-07）
+
+**为什么做 Move**
+`deletion = versioning` 要把退休文件挪进回收目录。没有服务端 Move，rclone 的
+`--backup-dir` 只能「下载 + 重新上传」，对云目标等于把流量付两遍。
+
+**先探针，再写代码**（`.scratch/probe_move.py`，真实租户）：
+
+| 问题 | 实测结果 |
+|---|---|
+| scope 够不够 | ✅ 移动成功 |
+| 文件移动是否同步 | ✅ 同步完成，`data: {}`，无 task_id |
+| **移动后 token 变不变** | ✅ **不变**（`CjYxbi...` → 同一 token）→ state 条目仍有效 |
+| 移到同名已存在的位置 | 不报错、不覆盖，变成**两个同名条目**（与上传一致） |
+| 移目录 | 异步，返回 task_id |
+| 频率限制 | **20 次/分钟**（远低于其它接口的 5 QPS） |
+
+**踩到的缺陷（单测抓不到，真实调用才暴露）**
+
+`moveto remote:a.txt remote:sub/a.txt` 报告 `Moved (server-side)`，但文件**根本没动**。
+
+根因：rclone 给 `Move` 的目标 Fs 是**以目标目录为 root** 的（这里 root = `sub`），
+而 `remote` 参数是**相对该 Fs 根**的（`a.txt`），`src.Remote()` 却是**相对源 Fs 根**的
+（也是 `a.txt`）。我直接比较两个字符串，于是永远相等 → 命中「无需动作」提前返回。
+
+**修法**：两侧都先展开成绝对路径再比较
+（`joinPath(srcObj.fs.root, srcObj.remote)` vs `joinPath(f.root, remote)`），
+再把「是否需要搬家」「是否需要改名」分成两个独立判断。
+
+**连带影响**
+这个缺陷同时让 `deletion=versioning` 失效：`MoveBackupDir` 传进来的目标 Fs root 是
+回收目录，`remote` 与 `src.Remote()` 又相等 → 不搬 → 旧文件留在原地，随后新版本上传，
+于是每个被覆盖/删除的文件都多出一个**同名副本**。实测确认（`2x keep.txt`）。
+
+**教训**
+`src.Remote()` 和 `Move` 的 `remote` 参数**不是同一个坐标系**，rclone 的接口文档不会
+强调这一点。这类「两个看起来一样的字符串其实是两种坐标」的 bug，单测只要复用同一个
+Fs 实例就永远抓不到 —— 必须用**两个 root 不同的 Fs** 去测
+（`TestMoveAcrossDifferentFsRoots`）。
+
+---
+
+## D27 · sync 层放在 `job` 包，而不是塞进 backend（2026-11-07）
+
+**问题**
+「该不该删这 900 个文件」不是 backend 能回答的：backend 只看到单次调用。判断需要
+**整个 pair 的视角**，还要读配置（variant / max_delete / deletion）。
+
+**决定**
+新增 `src/go/job`（配置 + 受保护的运行）与 `src/go/cmd/run`（`weftsync run` 命令）。
+backend 保持只做「一个文件的增删改查」。
+
+**不这样做的后果**
+如果让 backend 自己拦删除，它就只能看到 `Remove` 被调用的次数，看不到「总共会删多少」，
+于是又退回「删到上限再停」——正是 D25 否掉的那种行为。
+
+**顺带定下的两件事**
+
+1. **默认 `variant = "update"`**（不是 mirror）。一个备份工具默认开始删数据，比默认多留
+   一些文件危险得多。
+2. **未知 variant 直接报错**。拼错成 `mirorr` 时：退化成 update 会悄悄停止同步删除；
+   退化成 mirror 会突然开始删。两种都不能接受。
+3. **`max_delete` 负数拒绝**。它看起来像「关闭保护」，不提供这个口子。
+
+---
+
+## D28 · 用 `filter.AddConfig` 加排除规则，不能用 `filter.NewFilter` + `ReplaceConfig`（2026-11-07）
+
+**背景**
+回收目录在目标内部，rclone 拒绝与目标重叠的 `--backup-dir`，除非该目录被过滤掉
+（`operations.OverlappingFilterCheck` → `filterCheck` 判断目录是否在同步集内）。
+而且不排除它，下一轮 mirror 会真的把回收站删掉。
+
+**试错记录（实测于本地目录）**
+
+| 做法 | 结果 |
+|---|---|
+| 不改 filter | ✅ 传 1 / 删 1 |
+| `filter.NewFilter(&Options{})` + `filter.ReplaceConfig` | ❌ **传 0 / 删 0**（即使一条规则都没加） |
+| 同上 + `Add(false, "/_trash/**")` | ❌ 同样全被排除 |
+| `filter.AddConfig(ctx)` + `Add(false, "/_trash/**")` | ✅ 传 1 / 删 1，且回收目录被排除 |
+
+一个「零规则的过滤器」竟然让所有文件都不参与同步 —— 单看 API 完全看不出来。
+所以：**在已有 filter 的副本上追加规则**。
+
+**教训**
+「新建一个空对象应该等于默认行为」是直觉，不是事实。凡是替换掉某个既有配置对象，
+先做一个最小对照实验（改前 / 改后各一次），别假设空对象 == 默认。
+

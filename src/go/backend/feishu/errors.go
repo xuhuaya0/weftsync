@@ -37,6 +37,12 @@ const (
 	CodeBlockNumOutOfBounds = 1062011
 	// CodeMigrating is a temporary tenant-wide lock during a data migration.
 	CodeMigrating = 1064230
+	// Codes from the move endpoint, which has its own permission model: the
+	// caller needs manage rights on the node plus edit rights on both the source
+	// and the destination folder.
+	CodeFileDeleted       = 1061007 // the node was deleted while we held its token
+	CodeSourceNoPerm      = 1062524 // no edit permission on the source folder
+	CodeDestinationNoPerm = 1062535 // no edit permission on the destination folder
 )
 
 // APIError is a Feishu business-level error (HTTP 200 with code != 0, or an
@@ -199,6 +205,9 @@ var codeTable = map[int]codeInfo{
 	CodeForbidden:           {class: classPermission},
 	CodeNotFound:            {class: classNotFound},
 	CodeParentNotFound:      {class: classNotFound},
+	CodeFileDeleted:         {class: classNotFound},
+	CodeSourceNoPerm:        {class: classPermission},
+	CodeDestinationNoPerm:   {class: classPermission},
 	CodeParamsError:         {class: classInvalidArgument},
 	CodeDepthExceeded:       {class: classInvalidArgument},
 	CodeTooManyNodes:        {class: classInvalidArgument},

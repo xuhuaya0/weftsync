@@ -74,6 +74,14 @@ func newFs(ctx context.Context, name, root string, opt *Options) (*Fs, error) {
 		WriteMimeType:           false,
 		SlowModTime:             false,
 		PartialUploads:          false,
+		// Move is server-side (verified by probing). It also makes
+		// deletion=versioning cheap, because rclone's --backup-dir retires old
+		// versions with Move instead of re-uploading them.
+		//
+		// PartialUploads stays false, so checkPartial still forces inplace and
+		// existing destinations still route through Update(): adding Move does
+		// not change the upload path.
+		Move: f.Move,
 	}).Fill(ctx, f)
 
 	f.resolver = newDirResolver(c, rootToken, f.root, f.root)
