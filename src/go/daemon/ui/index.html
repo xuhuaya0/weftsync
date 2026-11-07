@@ -245,6 +245,22 @@
     <strong>开机自启</strong>
     <div id="as-body" class="empty">载入中…</div>
   </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <strong class="grow">远程凭据</strong>
+      <span class="sub" style="margin:0">写在 rclone 配置文件里</span>
+    </div>
+    <div class="note" style="margin-bottom:12px">
+      密钥<strong>不会回显</strong>——这里只显示是否已设置以及字符长度
+      （长度能帮忙发现多打进去的空格或换行）。保存时密钥以 rclone 的模糊形式写入配置文件，
+      在 Linux / macOS 上文件权限会被收紧到 <code>0600</code>。
+      <div style="margin-top:6px;color:var(--muted)">
+        字段留空 = 不修改；要清除已存的值，勾选右侧的「清除」。
+      </div>
+    </div>
+    <div id="cred-body" class="empty">载入中…</div>
+  </div>
 </section>
 
 <script>
@@ -837,11 +853,11 @@ document.querySelectorAll('.tabs button').forEach(btn => {
     document.querySelectorAll('.tab').forEach(s => s.classList.add('hidden'));
     document.getElementById('tab-' + btn.dataset.tab).classList.remove('hidden');
     if (btn.dataset.tab === 'config') { syncJobPicker(); loadConfig(); }
-    if (btn.dataset.tab === 'settings') { loadAutostart(); }
+    if (btn.dataset.tab === 'settings') { loadAutostart(); loadCredentials(); }
   });
 });
 
-// ------------------------------------------------------------------ settings tab
+// ------------------------------------------------------------------ settings: autostart
 let autostartView = null;
 
 async function loadAutostart() {
@@ -921,6 +937,198 @@ async function saveAutostart() {
     note.className = "note err save-note";
     note.textContent = "保存失败：" + e.message;
   }
+}
+
+// ------------------------------------------------------------------ settings: credentials
+//
+// A secret is never sent to the page, so the form cannot show it back. Each field
+// therefore starts empty with a hint saying whether something is already stored;
+// leaving it empty means "do not change", and clearing is a separate, explicit
+// checkbox. That is what makes submitting a half-filled form safe.
+let credView = null;
+
+// credFlash holds a message per remote that survives the re-render.
+//
+// Saving re-reads the whole list (so the "已设置（N 个字符）" hints are current),
+// and that rebuild replaces the row the message lived in. Without this the user
+// clicks 保存 and sees nothing at all, which reads as "it did nothing".
+let credFlash = {};
+
+async function loadCredentials() {
+  const body = document.getElementById("cred-body");
+  try {
+    const data = await getJSON("/api/credentials");
+    credView = data;
+  } catch (e) {
+    credView = null;
+    body.className = "note err";
+    body.textContent = "读取凭据失败：" + e.message;
+    return;
+  }
+  renderCredentials();
+}
+
+function renderCredentials() {
+  const body = document.getElementById("cred-body");
+  const v = credView;
+  if (!v || !(v.remotes || []).length) {
+    body.className = "empty";
+    body.textContent = "配置文件里还没有远程。先用 `weftsync config` 创建一个。";
+    return;
+  }
+  body.className = "";
+
+  const cards = v.remotes.map(r => {
+    const fields = r.fields.map(f => credField(r.name, f)).join("");
+    const used = (r.used_by || []).length
+      ? `被这些作业使用：<span class="mono">${esc(r.used_by.join(", "))}</span>`
+      : '<span class="warn">没有作业使用这个远程</span>';
+    return `<div class="pair-card">
+      <div class="head">
+        <strong>${esc(r.name)}</strong>
+        <span class="badge">${esc(r.type)}</span>
+        <span class="sub" style="margin:0">${used}</span>
+      </div>
+      ${r.detail ? `<div class="note">${esc(r.detail)}</div>` : ""}
+      ${fields}
+      <div class="row" style="margin-top:10px">
+        <button data-cred-save="${esc(r.name)}">保存</button>
+        <button data-cred-test="${esc(r.name)}" ${r.testable ? "" : "disabled"}>测试连接</button>
+        <span class="sub" id="cred-note-${esc(r.name)}" style="margin:0"></span>
+      </div>
+    </div>`;
+  }).join("");
+
+  body.innerHTML =
+    `<div class="sub mono" style="margin:0 0 10px">${esc(v.file || "(未指定配置文件)")}</div>` +
+    cards;
+
+  body.querySelectorAll("button[data-cred-save]").forEach(b => {
+    b.addEventListener("click", () => saveCredentials(b.dataset.credSave, b));
+  });
+  body.querySelectorAll("button[data-cred-test]").forEach(b => {
+    b.addEventListener("click", () => testCredentials(b.dataset.credTest, b));
+  });
+
+  // Re-apply any message that was set just before a re-render, then forget it:
+  // a "saved" note left over from ten minutes ago is worse than no note.
+  for (const [name, flash] of Object.entries(credFlash)) {
+    const el = document.getElementById("cred-note-" + name);
+    if (el) {
+      el.className = flash.cls;
+      el.textContent = flash.text;
+    }
+    delete credFlash[name];
+  }
+}
+
+function credField(remote, f) {
+  const id = "cred-" + remote + "-" + f.name;
+  const hint = [];
+  if (f.set) {
+    if (f.secret) {
+      // "encoded" means the file holds an obscured blob, so the length shown is the
+      // decoded one - the length of the secret, which is what the user can compare
+      // against their notes.
+      hint.push(`已设置（${f.length} 个字符${f.encoded ? "，已模糊存储" : ""}）`);
+    } else {
+      hint.push("已设置");
+    }
+  } else {
+    hint.push("未设置");
+  }
+  if (f.required) hint.push("必填");
+  if (f.from_env) hint.push("来自环境变量，这里改不了");
+
+  // A secret never gets a value attribute, not even a masked one.
+  const input = f.secret
+    ? `<input type="password" id="${esc(id)}" value="" autocomplete="new-password"
+             placeholder="${f.set ? "（留空表示不修改）" : ""}"
+             ${f.from_env ? "disabled" : ""}>`
+    : `<input type="text" id="${esc(id)}" value="${esc(f.value || "")}"
+             ${f.from_env ? "disabled" : ""}>`;
+
+  const clear = f.secret && !f.from_env
+    ? `<label class="sub" style="margin:0"><input type="checkbox" id="${esc(id)}-clear"> 清除</label>`
+    : "";
+
+  return `<div class="field">
+    <label>${esc(f.label || f.name)}</label>
+    ${input}
+    ${clear}
+    <span class="hint">${esc(hint.join(" · "))}</span>
+  </div>`;
+}
+
+async function saveCredentials(name, btn) {
+  const card = btn.closest(".pair-card");
+  const values = {};
+  card.querySelectorAll("input[id^='cred-" + name + "-']").forEach(inp => {
+    const field = inp.id.slice(("cred-" + name + "-").length);
+    if (field.endsWith("-clear")) return;
+    const clearBox = document.getElementById(inp.id + "-clear");
+    if (clearBox && clearBox.checked) {
+      values[field] = "";          // explicit removal
+      return;
+    }
+    if (inp.value !== "") {
+      values[field] = inp.value;   // omitted entirely means "leave alone"
+    }
+  });
+
+  const note = document.getElementById("cred-note-" + name);
+  if (!Object.keys(values).length) {
+    note.className = "sub bad";
+    note.textContent = "没有填写任何字段";
+    return;
+  }
+
+  btn.disabled = true;
+  note.className = "sub";
+  note.textContent = "保存中…";
+  try {
+    const r = await fetch("/api/credentials?name=" + encodeURIComponent(name), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values }),
+    });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((data && data.error) || ("HTTP " + r.status));
+    credFlash[name] = {
+      cls: "sub ok",
+      text: "已保存 " + (data.updated || []).join(", ") + "；下次运行生效",
+    };
+    // Re-read so the hints reflect what is actually stored now.
+    await loadCredentials();
+  } catch (e) {
+    note.className = "sub bad";
+    note.textContent = "保存失败：" + e.message;
+    btn.disabled = false;
+  }
+}
+
+async function testCredentials(name, btn) {
+  const note = document.getElementById("cred-note-" + name);
+  btn.disabled = true;
+  note.className = "sub";
+  note.textContent = "测试中…";
+  try {
+    const r = await fetch("/api/credentials/test?name=" + encodeURIComponent(name),
+      { method: "POST" });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((data && data.error) || ("HTTP " + r.status));
+    if (data.ok) {
+      note.className = "sub ok";
+      note.textContent = "连接正常：" + (data.hint || "");
+    } else {
+      note.className = "sub bad";
+      note.textContent = "失败：" + (data.error || "未知错误");
+    }
+  } catch (e) {
+    note.className = "sub bad";
+    note.textContent = "测试失败：" + e.message;
+  }
+  btn.disabled = false;
 }
 
 // ------------------------------------------------------------------ config tab

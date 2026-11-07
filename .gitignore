@@ -46,9 +46,19 @@ config.local.json
 *.local.toml
 
 # 凭据目录与常见命名
+#
+# Rules here must describe FILES THAT HOLD SECRETS, not any name containing a word.
+# `credentials*` used to hide src/go/daemon/credentials.go outright - a source file
+# silently never committed is far worse than a leaked test fixture. Same trap as
+# `*secret*` hiding scripts/check_secrets.py. Credential-shaped files usually have an
+# extension, so require one.
 secrets/
 .secrets/
-credentials*
+credentials.json
+credentials.yaml
+credentials.yml
+credentials.toml
+credentials.txt
 *credential*.json
 *token*.json
 # 注意：不要用宽泛的 *secret*，否则会误伤 scripts/check_secrets.py

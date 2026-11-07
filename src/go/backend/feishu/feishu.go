@@ -24,6 +24,8 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/configstruct"
+
+	"weftsync/obscured"
 )
 
 // DefaultBaseURL is the public Feishu Open Platform endpoint.
@@ -58,59 +60,76 @@ func init() {
 		Description: "Feishu / Lark Drive",
 		NewFs:       NewFs, // Static so `backend help feishu:` can list them; the implementations live
 		// on the Fs instance (see dedupe.go).
-		CommandHelp: commandHelp(), Options: []fs.Option{
-			{
-				Name:     "app_id",
-				Help:     "Feishu application ID.\n\nFalls back to the environment variable " + EnvAppID + " when empty.",
-				Required: true,
-			},
-			{
-				Name:       "app_secret",
-				Help:       "Feishu application secret.\n\nFalls back to the environment variable " + EnvAppSecret + " when empty.",
-				Required:   true,
-				IsPassword: true,
-			},
-			{
-				Name:     "root_token",
-				Help:     "Folder token of the remote root.\n\nA full Feishu folder URL is also accepted and the token is extracted from it.",
-				Required: true,
-			},
-			{
-				Name: "state_file",
-				Help: "Path to the incremental-sync state file.\n\n" +
-					"Leave empty to derive it from the local and remote roots, which is the normal case.",
-				Advanced: true,
-			},
-			{
-				Name:     "base_url",
-				Help:     "Base URL of the Feishu Open Platform API.",
-				Default:  DefaultBaseURL,
-				Advanced: true,
-			},
-			{
-				Name: "qps",
-				Help: "Maximum API requests per second.\n\n" +
-					"Feishu limits nearly every endpoint to 5 requests/second and 10000/day; " +
-					"exceeding it returns code 1061045. Requests are spaced out rather than " +
-					"retried after the fact, so the limit is never hit in the first place.\n\n" +
-					"Set to 0 to disable (only for testing).",
-				Default:  defaultQPS,
-				Advanced: true,
-			},
-			{
-				Name: "move_per_minute",
-				Help: "Maximum move requests per minute.\n\n" +
-					"The move endpoint is limited far more tightly than the rest: 20 per minute. " +
-					"Keeping it separate means a long list of renames cannot starve ordinary " +
-					"uploads, and cannot trip the move limit.",
-				Default:  defaultMovePerMinute,
-				Advanced: true,
-			},
-		},
+		CommandHelp: commandHelp(),
+		Options:     backendOptions(),
 	})
 }
 
+// backendOptions is the remote's option table.
+//
+// A function rather than an inline literal so a test can assert on it: the
+// app_secret entry must keep IsPassword set, because that flag is what makes
+// rclone obscure the value instead of storing it in plaintext.
+func backendOptions() []fs.Option {
+	return []fs.Option{
+		{
+			Name:     "app_id",
+			Help:     "Feishu application ID.\n\nFalls back to the environment variable " + EnvAppID + " when empty.",
+			Required: true,
+		},
+		{
+			Name: "app_secret",
+			Help: "Feishu application secret.\n\n" +
+				"Stored obscured when the remote is created with rclone's own config tooling; " +
+				"a hand-written plaintext value is accepted too.\n\n" +
+				"Falls back to the environment variable " + EnvAppSecret + " when empty.",
+			Required:   true,
+			IsPassword: true,
+		},
+		{
+			Name:     "root_token",
+			Help:     "Folder token of the remote root.\n\nA full Feishu folder URL is also accepted and the token is extracted from it.",
+			Required: true,
+		},
+		{
+			Name: "state_file",
+			Help: "Path to the incremental-sync state file.\n\n" +
+				"Leave empty to derive it from the local and remote roots, which is the normal case.",
+			Advanced: true,
+		},
+		{
+			Name:     "base_url",
+			Help:     "Base URL of the Feishu Open Platform API.",
+			Default:  DefaultBaseURL,
+			Advanced: true,
+		},
+		{
+			Name: "qps",
+			Help: "Maximum API requests per second.\n\n" +
+				"Feishu limits nearly every endpoint to 5 requests/second and 10000/day; " +
+				"exceeding it returns code 1061045. Requests are spaced out rather than " +
+				"retried after the fact, so the limit is never hit in the first place.\n\n" +
+				"Set to 0 to disable (only for testing).",
+			Default:  defaultQPS,
+			Advanced: true,
+		},
+		{
+			Name: "move_per_minute",
+			Help: "Maximum move requests per minute.\n\n" +
+				"The move endpoint is limited far more tightly than the rest: 20 per minute. " +
+				"Keeping it separate means a long list of renames cannot starve ordinary " +
+				"uploads, and cannot trip the move limit.",
+			Default:  defaultMovePerMinute,
+			Advanced: true,
+		},
+	}
+}
+
 // Options holds the parsed configuration for one feishu remote.
+//
+// Only fields that map to a config key belong here: configstruct.Set walks the
+// struct by reflection and panics on an unexported field, so a derived value has
+// to be passed around some other way (see resolveEnv's return values).
 type Options struct {
 	AppID         string  `config:"app_id"`
 	AppSecret     string  `config:"app_secret"`
@@ -121,19 +140,55 @@ type Options struct {
 	MovePerMinute int     `config:"move_per_minute"`
 }
 
-// resolveEnv fills AppID / AppSecret from the environment when the config
-// values are empty, then reports which required values are still missing.
+// secretCandidates lists the forms of a stored app_secret worth trying, most likely
+// first.
+//
+// app_secret is an IsPassword option, so rclone's tooling may store it obscured
+// while a hand-written config holds plaintext, and no structural test separates the
+// two (see the obscured package). The authentication call is the only authority, so
+// both forms are offered and the caller retries with the second one.
+func secretCandidates(stored string) []string {
+	primary, fallback, _ := obscured.Forms(stored)
+	if primary == "" {
+		return nil
+	}
+	if fallback == "" {
+		return []string{primary}
+	}
+	return []string{primary, fallback}
+}
+
+// resolveEnv fills AppID / AppSecret from the environment when the config values
+// are empty, then reports which required values are still missing.
 //
 // FR-001: a missing credential MUST fail at startup naming the missing item.
-func (o *Options) resolveEnv() []string {
+//
+// The second return value lists the forms of app_secret worth trying, most likely
+// first. A value from the environment is taken literally: an environment variable
+// always holds the real secret, never an obscured one.
+func (o *Options) resolveEnv() (missing []string, secretForms []string) {
+	stored := o.AppSecret
+	singleForm := false
+	if stored == "" {
+		stored = os.Getenv(EnvAppSecret)
+		singleForm = stored != ""
+	}
 	if o.AppID == "" {
 		o.AppID = os.Getenv(EnvAppID)
 	}
-	if o.AppSecret == "" {
-		o.AppSecret = os.Getenv(EnvAppSecret)
+
+	if stored != "" {
+		if singleForm {
+			secretForms = []string{stored}
+		} else {
+			secretForms = secretCandidates(stored)
+		}
+	}
+	// Downstream code reads AppSecret; keep the most likely form there.
+	if len(secretForms) > 0 {
+		o.AppSecret = secretForms[0]
 	}
 
-	var missing []string
 	if o.AppID == "" {
 		missing = append(missing, "app_id (or "+EnvAppID+")")
 	}
@@ -143,7 +198,7 @@ func (o *Options) resolveEnv() []string {
 	if o.RootToken == "" {
 		missing = append(missing, "root_token")
 	}
-	return missing
+	return missing, secretForms
 }
 
 // NewFs constructs an Fs from the path.

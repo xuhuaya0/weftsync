@@ -44,7 +44,8 @@ type Fs struct {
 
 // newFs builds the backend, validating credentials and the root folder.
 func newFs(ctx context.Context, name, root string, opt *Options) (*Fs, error) {
-	if missing := opt.resolveEnv(); len(missing) > 0 {
+	missing, secretForms := opt.resolveEnv()
+	if len(missing) > 0 {
 		return nil, fmt.Errorf(
 			"feishu: missing required configuration: %s.\n"+
 				"Set them on the remote, or export the matching environment variables",
@@ -58,6 +59,11 @@ func newFs(ctx context.Context, name, root string, opt *Options) (*Fs, error) {
 
 	hc := &http.Client{Timeout: defaultTimeout}
 	ts := newTokenSource(opt.AppID, opt.AppSecret, opt.BaseURL, hc)
+	// The other interpretation of the stored secret, tried once if the first is
+	// rejected. Empty when there is nothing else worth trying.
+	if len(secretForms) > 1 {
+		ts.altSecret = secretForms[1]
+	}
 	c := newClient(opt.BaseURL, ts, hc)
 	c.withLimits(opt.QPS, opt.MovePerMinute)
 

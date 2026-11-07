@@ -42,6 +42,8 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/api/log", a.handleLog)
 	mux.HandleFunc("/api/log/export", a.handleLogExport)
 	mux.HandleFunc("/api/conflict/resolve", a.handleConflictResolve)
+	mux.HandleFunc("/api/credentials", a.handleCredentials)
+	mux.HandleFunc("/api/credentials/test", a.handleCredentialTest)
 	mux.HandleFunc("/api/config", a.handleConfig)
 	mux.HandleFunc("/api/autostart", a.handleAutostart)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
