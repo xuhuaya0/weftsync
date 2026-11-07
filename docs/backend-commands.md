@@ -78,7 +78,38 @@ weftsync backend dedupe 'feishu:team/docs' --feishu-state-file <state> -o confir
 
 ---
 
-## 3. 为什么这些命令在后端而不是 `weftsync run`
+## 3. `resolve` —— 处理一条冲突（只改快照）
+
+```powershell
+# 以本地为准：删掉该路径的记录，下次运行上传本地文件覆盖远端
+weftsync backend resolve 'feishu:team/docs' -o action=forget -o path=a.txt
+
+# 以云端为准：把远端 token + 本地指纹记为基线（必须先自己下载过）
+weftsync backend resolve 'feishu:team/docs' -o action=adopt `
+    -o path=a.txt -o token=XXX -o mtime=1794064076 -o size=12
+```
+
+这条命令**不会上传、移动或删除任何云端文件**。错误的点击最多让下一轮重做同样的事。
+
+| 参数 | 说明 |
+|---|---|
+| `-o action=` | `forget` 或 `adopt`，必填 |
+| `-o path=` | 相对根目录的文件路径，必填 |
+| `-o token=` / `-o mtime=` / `-o size=` | `adopt` 必填；`mtime` 是 Unix 秒 |
+
+**路径为什么用 `-o path=` 而不是位置参数**：rclone 会把位置参数当作目录（Fs）解析，
+所以 `backend resolve 'feishu:dir/a.txt'` 会被拒为 `is a file not a directory`（实测）。
+参数形式在 CLI 和 daemon 内部两条路上都成立。
+
+**`adopt` 会先校验 token 当前确实在文件夹里**。不校验的话，快照会指向一个不存在的
+东西，而冲突下一轮又回来 —— 比不改更糟。
+
+拒绝的情形（都会明确报错，不会静默不做事）：
+没有 `state_file`、快照本轮刚重建（`repair`）、`action` 未知、`token` 不在文件夹里。
+
+---
+
+## 4. 为什么这些命令在后端而不是 `weftsync run`
 
 `weftsync run` 走的是 rclone 的同步引擎，而引擎看到的目录已经折叠过同名条目 ——
 它**看不见**副本，自然也删不掉。只有后端能同时拿到原始列表和快照 token，
@@ -86,7 +117,7 @@ weftsync backend dedupe 'feishu:team/docs' --feishu-state-file <state> -o confir
 
 ---
 
-## 4. 一次性用 `dedupe` 清理别人留下的同名文件？
+## 5. 一次性用 `dedupe` 清理别人留下的同名文件？
 
 不行。`dedupe` 的判据是「这个 token 是不是我记录过的」，
 所以它只能清掉**自己造成的**重复。清理他人文件请直接在飞书客户端里操作。

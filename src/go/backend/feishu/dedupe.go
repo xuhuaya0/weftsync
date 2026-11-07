@@ -282,6 +282,10 @@ func (f *Fs) command(ctx context.Context, name string, arg []string, opt map[str
 		return f.dedupeCommand(ctx, dir, opt)
 	case "conflicts":
 		return f.conflictsCommand(ctx, dir)
+	case "resolve":
+		// The file path travels in -o path=; the positional argument would be
+		// resolved as an Fs by rclone, which cannot name a file.
+		return f.resolveCommand(ctx, arg, opt)
 	default:
 		return nil, fmt.Errorf("%w: feishu has no command %q", fs.ErrorCommandNotFound, name)
 	}
@@ -290,6 +294,34 @@ func (f *Fs) command(ctx context.Context, name string, arg []string, opt map[str
 // commandHelp documents the backend commands.
 func commandHelp() []fs.CommandHelp {
 	return []fs.CommandHelp{
+		{
+			Name:  "resolve",
+			Short: "Settle one conflicting path by editing the sync state",
+			Long: `Edits the sync state for a single path. It never uploads, moves or deletes
+anything in the folder, so a wrong click cannot destroy a cloud file: the
+worst case is that the next run does the same thing again.
+
+The path is given with -o path=<file>, relative to the remote root. It is not a
+positional argument because rclone resolves that one as a directory, so a file
+name there is rejected with "is a file not a directory".
+
+Actions (-o action=...):
+
+  forget   Drop the snapshot record for this path. The next run uploads the local
+           file over whatever is at that path: "the local copy wins".
+  adopt    Record the path's current remote token together with a local
+           fingerprint, so the next run treats the path as settled. This is only
+           truthful when the local file really does match the remote one - which
+           is why weftsync downloads first and adopts afterwards. adopt requires
+           -o token=... -o mtime=<unix seconds> -o size=<bytes>, and refuses a
+           token the folder no longer carries.
+
+Example:
+
+  rclone backend resolve remote:path -o path=a.txt -o action=forget
+
+Requires state_file.`,
+		},
 		{
 			Name:  "conflicts",
 			Short: "Report paths where the remote no longer matches the sync state",

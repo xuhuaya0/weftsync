@@ -190,9 +190,19 @@
       <strong class="grow">冲突列表</strong>
       <span class="sub" style="margin:0">来自每个作业最近一次运行</span>
     </div>
+    <div class="note" style="margin-bottom:12px">
+      这里两个按钮都不会删除任何云端文件。<strong>以本地为准</strong>改的是同步快照，
+      下次运行用本地版覆盖云端那一份；<strong>以云端为准</strong>会把云端那份
+      <strong>下载覆盖本地文件</strong>，然后记为已同步。
+      想在云端同时保留两份，请把该 pair 的冲突策略设为 <code>keep-both</code>（配置页）。
+      <div style="margin-top:6px;color:var(--muted)">
+        列表来自最近一次运行。守护进程重启后会清空 —— 到「作业」点一次
+        <strong>预览</strong> 即可重新检测（预览不会改动任何东西）。
+      </div>
+    </div>
     <table>
-      <thead><tr><th>作业</th><th>路径</th><th>类型</th><th>说明</th></tr></thead>
-      <tbody id="conflicts"><tr><td colspan="4" class="empty">暂无冲突</td></tr></tbody>
+      <thead><tr><th>作业</th><th>路径</th><th>类型</th><th>说明</th><th style="width:1%"></th></tr></thead>
+      <tbody id="conflicts"><tr><td colspan="5" class="empty">暂无冲突</td></tr></tbody>
     </table>
   </div>
 </section>
@@ -213,9 +223,20 @@
   <div class="card">
     <div class="row" style="margin-bottom:12px">
       <strong class="grow">最近日志</strong>
+      <select id="log-level">
+        <option value="">全部级别</option>
+        <option value="error">仅错误</option>
+        <option value="warning">仅警告</option>
+        <option value="info">仅信息</option>
+        <option value="debug">仅调试</option>
+      </select>
+      <input type="text" id="log-search" placeholder="搜索…" style="width:180px">
+      <a id="log-export" href="/api/log/export" download
+         style="padding:5px 12px;border:1px solid var(--line);border-radius:6px;text-decoration:none;color:var(--ink);white-space:nowrap">导出</a>
       <label class="sub" style="margin:0"><input type="checkbox" id="follow" checked> 自动滚动</label>
     </div>
     <div class="log" id="log">（暂无日志）</div>
+    <div class="sub" id="log-count" style="margin:8px 0 0"></div>
   </div>
 </section>
 
@@ -236,6 +257,7 @@ let lastSignature = "";
 let lastHistory = "";
 let lastLog = "";
 let pollTimer = 0;
+let logSearchTimer = 0;
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
@@ -467,22 +489,84 @@ function renderConflicts() {
   const tbody = document.getElementById("conflicts");
   const rows = [];
   for (const j of (snapshot && snapshot.jobs) || []) {
-    for (const r of j.last_result || []) {
-      for (const c of r.Conflicts || []) {
-        rows.push({ job: j.name, ...c });
+    // Both a real run and a preview detect conflicts. The preview is the only way
+    // to re-detect them after the daemon restarts (the results live in memory), so
+    // leaving it out would make the hint next to this table a lie.
+    const sources = [];
+    if (j.last_result) sources.push(j.last_result);
+    if (j.plan && j.plan.results) sources.push(j.plan.results);
+
+    const seen = new Set();
+    for (const results of sources) {
+      for (const r of results) {
+        // The API emits lowercase keys (job.PairResult carries json tags), so this
+        // must read "conflicts". It read "Conflicts" for a while, which was correct
+        // only while the struct had no tags - once they were added the table
+        // silently stayed empty.
+        for (const c of r.conflicts || []) {
+          // A preview after a run reports the same conflicts; showing each twice
+          // would look like there are more problems than there are.
+          const key = (r.pair || "") + "\x00" + c.path + "\x00" + c.kind;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          // The pair name travels with the conflict: a job may have several pairs,
+          // and resolving the wrong one would edit the wrong snapshot.
+          rows.push({ job: j.name, pair: r.pair || "", ...c });
+        }
       }
     }
   }
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty">暂无冲突</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无冲突</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(c => `<tr>
-    <td>${esc(c.job)}</td>
+    <td>${esc(c.job)}${c.pair ? `<div class="sub mono" style="margin:0">${esc(c.pair)}</div>` : ""}</td>
     <td class="mono">${esc(c.path)}</td>
     <td><span class="pill warn">${esc(c.kind)}</span></td>
     <td>${esc(c.detail)}</td>
+    <td class="actions">
+      <button data-resolve="push" data-job="${esc(c.job)}" data-pair="${esc(c.pair)}"
+              data-path="${esc(c.path)}" title="下次运行用本地版覆盖云端那一份">以本地为准</button>
+      <button data-resolve="pull" data-job="${esc(c.job)}" data-pair="${esc(c.pair)}"
+              data-path="${esc(c.path)}" title="下载云端那份覆盖本地文件">以云端为准</button>
+    </td>
   </tr>`).join("");
+
+  tbody.querySelectorAll("button[data-resolve]").forEach(b => {
+    b.addEventListener("click", () => resolveConflict(b));
+  });
+}
+
+// resolveConflict settles one path.
+//
+// "keep remote" downloads over the user's local file, so it asks first: that is
+// the only one of the two that can lose work the user has not uploaded yet.
+async function resolveConflict(btn) {
+  const { job, pair, path, resolve: action } = btn.dataset;
+  if (action === "pull" &&
+      !confirm(`将把云端那一份下载下来，覆盖本地文件：\n${path}\n\n继续吗？`)) {
+    return;
+  }
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "处理中…";
+  try {
+    await post("/api/conflict/resolve?job=" + encodeURIComponent(job) +
+      "&pair=" + encodeURIComponent(pair) +
+      "&path=" + encodeURIComponent(path) +
+      "&action=" + encodeURIComponent(action));
+    btn.textContent = "已处理";
+    // The conflict list comes from the last run's results, so it will only change
+    // after the next run. Saying so avoids the impression that nothing happened.
+    btn.title = "已处理；重新运行一次即可看到这条冲突消失";
+    lastHistory = "";
+    await refresh();
+  } catch (e) {
+    btn.textContent = label;
+    btn.disabled = false;
+    alert("处理失败：" + e.message);
+  }
 }
 
 async function refreshHistory() {
@@ -513,14 +597,34 @@ async function refreshHistory() {
   }).join("");
 }
 
+// refreshLog fetches the log with the current filter.
+//
+// The filter is applied on the server: the buffer is a fixed 500-line window, so
+// filtering here would mean the interesting lines can be evicted before the
+// filter ever sees them.
 async function refreshLog() {
+  const level = document.getElementById("log-level").value;
+  const q = document.getElementById("log-search").value.trim();
+  const url = "/api/log?level=" + encodeURIComponent(level) +
+    "&contains=" + encodeURIComponent(q);
+
   let data;
-  try { data = await getJSON("/api/log"); } catch { return; }
+  try { data = await getJSON(url); } catch { return; }
+
   const el = document.getElementById("log");
   const lines = data.lines || [];
   const text = lines.length
     ? lines.map(l => l.time ? (l.time + "  " + l.text) : l.text).join("\n")
-    : "（暂无日志）";
+    : (level || q ? "（没有匹配的日志）" : "（暂无日志）");
+
+  const countEl = document.getElementById("log-count");
+  if (level || q) {
+    countEl.textContent = `匹配 ${lines.length} 行` +
+      (data.last_seq ? `（缓冲区共 ${data.last_seq} 行）` : "");
+  } else {
+    countEl.textContent = lines.length ? `共 ${lines.length} 行` : "";
+  }
+
   if (text === lastLog) return;
   lastLog = text;
   el.textContent = text;
@@ -528,6 +632,34 @@ async function refreshLog() {
     el.scrollTop = el.scrollHeight;
   }
 }
+
+// syncExportLink keeps the download in step with the filter, so "export" gives a
+// file that matches what is on screen.
+function syncExportLink() {
+  const level = document.getElementById("log-level").value;
+  const q = document.getElementById("log-search").value.trim();
+  const a = document.getElementById("log-export");
+  const params = new URLSearchParams();
+  if (level) params.set("level", level);
+  if (q) params.set("contains", q);
+  const qs = params.toString();
+  a.href = "/api/log/export" + (qs ? "?" + qs : "");
+}
+
+document.getElementById("log-level").addEventListener("change", () => {
+  lastLog = "";          // force a repaint even if the text happens to match
+  syncExportLink();
+  refreshLog();
+});
+document.getElementById("log-search").addEventListener("input", () => {
+  // Debounced: a request per keystroke would spam the API for no reason.
+  clearTimeout(logSearchTimer);
+  logSearchTimer = setTimeout(() => {
+    lastLog = "";
+    syncExportLink();
+    refreshLog();
+  }, 250);
+});
 
 async function post(url) {
   const r = await fetch(url, { method: "POST" });

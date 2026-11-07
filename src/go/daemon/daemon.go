@@ -542,6 +542,34 @@ func (d *Daemon) StopJob(name string) error {
 // ErrNotRunning means a stop was requested for a job that is not running.
 var ErrNotRunning = errors.New("daemon: the job is not running")
 
+// ErrNoSuchJob is returned when a name does not match any loaded job.
+var ErrNoSuchJob = errors.New("daemon: no such job")
+
+// ErrJobRunning means the request needs the job to be idle.
+var ErrJobRunning = errors.New("daemon: the job is running; wait for it to finish")
+
+// ConfigOf returns a copy of a job's configuration for one-off operations.
+//
+// A copy, not the live pointer: callers act on it outside the lock (opening
+// remotes, editing state), and handing out the pointer would race with reload().
+func (d *Daemon) ConfigOf(name string) (*job.Config, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	for _, e := range d.entries {
+		if e.name != name {
+			continue
+		}
+		if e.running {
+			return nil, ErrJobRunning
+		}
+		cfg := *e.cfg
+		cfg.Pair = append([]job.Pair(nil), e.cfg.Pair...)
+		return &cfg, nil
+	}
+	return nil, ErrNoSuchJob
+}
+
 // Status returns a snapshot of every job.
 func (d *Daemon) Status() []JobStatus {
 	d.mu.Lock()
@@ -603,4 +631,15 @@ func (d *Daemon) logf(format string, args ...any) {
 		return
 	}
 	fmt.Fprintf(d.log, "%s %s\n", d.now().Format("2006-01-02 15:04:05"), strings.TrimRight(fmt.Sprintf(format, args...), "\n"))
+}
+
+// lastLogSeq is the newest sequence number the log buffer holds.
+//
+// The UI needs it to advance its "only give me what is new" cursor even when a
+// filter hid the lines in between.
+func (d *Daemon) lastLogSeq() int64 {
+	if d.logs == nil {
+		return 0
+	}
+	return d.logs.Seq()
 }

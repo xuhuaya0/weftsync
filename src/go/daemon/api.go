@@ -40,6 +40,8 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/api/stop", a.handleStop)
 	mux.HandleFunc("/api/history", a.handleHistory)
 	mux.HandleFunc("/api/log", a.handleLog)
+	mux.HandleFunc("/api/log/export", a.handleLogExport)
+	mux.HandleFunc("/api/conflict/resolve", a.handleConflictResolve)
 	mux.HandleFunc("/api/config", a.handleConfig)
 	mux.HandleFunc("/api/autostart", a.handleAutostart)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
