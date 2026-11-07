@@ -29,6 +29,17 @@ import (
 // DefaultBaseURL is the public Feishu Open Platform endpoint.
 const DefaultBaseURL = "https://open.feishu.cn"
 
+// Rate limits advertised by Feishu's documentation.
+//
+// Nearly every endpoint allows 5 requests/second and 10000/day. The move
+// endpoint is far tighter at 20 requests/minute. Both are applied by the client
+// before a request goes out (see api.go), so the limits are avoided rather than
+// recovered from.
+const (
+	defaultQPS           = 5.0
+	defaultMovePerMinute = 20
+)
+
 // Environment variable names accepted as a fallback for the credentials.
 const (
 	EnvAppID     = "WEFTSYNC_FEISHU_APP_ID"
@@ -76,17 +87,38 @@ func init() {
 				Default:  DefaultBaseURL,
 				Advanced: true,
 			},
+			{
+				Name: "qps",
+				Help: "Maximum API requests per second.\n\n" +
+					"Feishu limits nearly every endpoint to 5 requests/second and 10000/day; " +
+					"exceeding it returns code 1061045. Requests are spaced out rather than " +
+					"retried after the fact, so the limit is never hit in the first place.\n\n" +
+					"Set to 0 to disable (only for testing).",
+				Default:  defaultQPS,
+				Advanced: true,
+			},
+			{
+				Name: "move_per_minute",
+				Help: "Maximum move requests per minute.\n\n" +
+					"The move endpoint is limited far more tightly than the rest: 20 per minute. " +
+					"Keeping it separate means a long list of renames cannot starve ordinary " +
+					"uploads, and cannot trip the move limit.",
+				Default:  defaultMovePerMinute,
+				Advanced: true,
+			},
 		},
 	})
 }
 
 // Options holds the parsed configuration for one feishu remote.
 type Options struct {
-	AppID     string `config:"app_id"`
-	AppSecret string `config:"app_secret"`
-	RootToken string `config:"root_token"`
-	StateFile string `config:"state_file"`
-	BaseURL   string `config:"base_url"`
+	AppID         string  `config:"app_id"`
+	AppSecret     string  `config:"app_secret"`
+	RootToken     string  `config:"root_token"`
+	StateFile     string  `config:"state_file"`
+	BaseURL       string  `config:"base_url"`
+	QPS           float64 `config:"qps"`
+	MovePerMinute int     `config:"move_per_minute"`
 }
 
 // resolveEnv fills AppID / AppSecret from the environment when the config

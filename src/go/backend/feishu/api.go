@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // Retry policy (contracts/error-codes.md §2).
@@ -38,6 +40,11 @@ type client struct {
 	// listFolderFn overrides listFolder in tests that model a folder tree
 	// instead of standing up an HTTP server.
 	listFolderFn func(ctx context.Context, token string) ([]remoteEntry, error)
+
+	// limiter spaces ordinary API calls; see the qps option. nil means no limit.
+	limiter *rate.Limiter
+	// moveLimiter spaces move calls, which Feishu caps at 20/minute.
+	moveLimiter *rate.Limiter
 }
 
 func newClient(baseURL string, ts *tokenSource, hc *http.Client) *client {
@@ -51,6 +58,29 @@ func newClient(baseURL string, ts *tokenSource, hc *http.Client) *client {
 		sleep:   time.Sleep,
 		rand01:  rand.Float64,
 	}
+}
+
+// withLimits installs rate limiters.
+//
+// Burst is 1 even though Feishu allows 5 QPS: the docs say these endpoints do not
+// support concurrent calls, so a burst would spend the allowance faster than the
+// server is willing to absorb it. Spacing requests costs a little latency and
+// removes the need to recover from 1061045 at all.
+func (c *client) withLimits(qps float64, movePerMinute int) {
+	if qps > 0 {
+		c.limiter = rate.NewLimiter(rate.Limit(qps), 1)
+	}
+	if movePerMinute > 0 {
+		c.moveLimiter = rate.NewLimiter(rate.Limit(float64(movePerMinute)/60.0), 1)
+	}
+}
+
+// wait blocks until the given limiter allows one more request.
+func wait(ctx context.Context, l *rate.Limiter) error {
+	if l == nil {
+		return nil
+	}
+	return l.Wait(ctx)
 }
 
 // envelope is the common Feishu response shell.
@@ -73,6 +103,9 @@ type request struct {
 	rawResponse bool
 	// extraHeaders are added after the auth header.
 	extraHeaders map[string]string
+	// limiter, when set, is enforced in addition to the client-wide one. Used by
+	// endpoints with a tighter budget than the rest (move: 20/minute).
+	limiter *rate.Limiter
 }
 
 // result carries either a decoded data payload, or raw bytes for downloads.
@@ -145,6 +178,15 @@ func (c *client) jitter(d time.Duration) time.Duration {
 
 // once performs a single HTTP round trip and translates the outcome.
 func (c *client) once(ctx context.Context, r request) (*result, error) {
+	// Pace before touching the network. Ordering matters: a rejected or retried
+	// call still counts against the server's budget.
+	if err := wait(ctx, c.limiter); err != nil {
+		return nil, err
+	}
+	if err := wait(ctx, r.limiter); err != nil {
+		return nil, err
+	}
+
 	token, err := c.ts.Token(ctx)
 	if err != nil {
 		return nil, err

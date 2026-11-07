@@ -38,6 +38,9 @@ func (c *client) moveNode(ctx context.Context, token, kind, destFolderToken stri
 		path:        "/open-apis/drive/v1/files/" + url.PathEscape(token) + "/move",
 		body:        body,
 		contentType: "application/json; charset=utf-8",
+		// Move has its own, much tighter budget (20/minute), so it must not share
+		// the general limiter's allowance.
+		limiter: c.moveLimiter,
 	})
 	if err != nil {
 		return "", err

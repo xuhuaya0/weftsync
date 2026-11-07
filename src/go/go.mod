@@ -5,6 +5,8 @@ go 1.24.0
 require (
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/rclone/rclone v1.71.2
+	github.com/spf13/cobra v1.9.1
+	golang.org/x/time v0.12.0
 )
 
 require (
@@ -179,7 +181,6 @@ require (
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966 // indirect
 	github.com/sony/gobreaker v1.0.0 // indirect
 	github.com/spacemonkeygo/monkit/v3 v3.0.24 // indirect
-	github.com/spf13/cobra v1.9.1 // indirect
 	github.com/spf13/pflag v1.0.7 // indirect
 	github.com/stretchr/testify v1.10.0 // indirect
 	github.com/t3rm1n4l/go-mega v0.0.0-20250926104142-ccb8d3498e6c // indirect
@@ -213,7 +214,6 @@ require (
 	golang.org/x/sys v0.36.0 // indirect
 	golang.org/x/term v0.35.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
-	golang.org/x/time v0.12.0 // indirect
 	golang.org/x/tools v0.36.0 // indirect
 	google.golang.org/api v0.247.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250811230008-5f3141c8851a // indirect

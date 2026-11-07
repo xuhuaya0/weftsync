@@ -59,6 +59,7 @@ func newFs(ctx context.Context, name, root string, opt *Options) (*Fs, error) {
 	hc := &http.Client{Timeout: defaultTimeout}
 	ts := newTokenSource(opt.AppID, opt.AppSecret, opt.BaseURL, hc)
 	c := newClient(opt.BaseURL, ts, hc)
+	c.withLimits(opt.QPS, opt.MovePerMinute)
 
 	f := &Fs{
 		name:   name,
