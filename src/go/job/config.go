@@ -80,9 +80,8 @@ type Job struct {
 	Variant string   `toml:"variant"`
 	Sync    SyncSpec `toml:"sync"`
 	Pair    []Pair   `toml:"pair"`
-	// Schedule is parsed but unused until the scheduler exists (F5). It is
-	// accepted now so an existing file is not rejected for carrying it.
-	Schedule map[string]any `toml:"schedule"`
+	// Schedule is parsed and validated but only acted on by the daemon (F5).
+	Schedule ScheduleSpec `toml:"schedule"`
 }
 
 // Pair maps one local directory onto one remote directory.

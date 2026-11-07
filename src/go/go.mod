@@ -5,6 +5,7 @@ go 1.24.0
 require (
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/rclone/rclone v1.71.2
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.9.1
 	golang.org/x/time v0.12.0
 )

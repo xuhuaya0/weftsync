@@ -15,7 +15,8 @@ import (
 	_ "github.com/rclone/rclone/lib/plugin"
 
 	_ "weftsync/backend/feishu" // our backend
-	_ "weftsync/cmd/run"        // the `run` command (guarded sync)
+	_ "weftsync/cmd/daemon"     // `daemon`: scheduled runs + local API
+	_ "weftsync/cmd/run"        // `run`: guarded sync
 )
 
 func main() {
