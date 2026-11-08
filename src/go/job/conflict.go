@@ -206,9 +206,54 @@ func keepBoth(ctx context.Context, fdst, fsrc fs.Fs, conflictPath, host string, 
 	if err != nil {
 		return "", fmt.Errorf("upload %q as %q: %w", conflictPath, newRel, err)
 	}
-	fs.Logf(nil, "kept both: uploaded %q as %q (token %s)",
-		conflictPath, newRel, objectToken(dstObj))
+	// The token is diagnostics only. rclone does not always hand back an object
+	// carrying one, and printing "token ?" in a log line that otherwise reads as
+	// a success is worse than saying nothing about it.
+	if token := objectToken(dstObj); token != "?" {
+		fs.Logf(nil, "kept both: uploaded %q as %q (token %s)", conflictPath, newRel, token)
+	} else {
+		fs.Logf(nil, "kept both: uploaded %q as %q", conflictPath, newRel)
+	}
 	return newRel, nil
+}
+
+// adoptCloudCopy records the cloud copy as the baseline for a path whose local
+// file was moved aside by keep-both.
+//
+// The token comes from the caller, which already has it: a `remote-replaced`
+// conflict lists the tokens currently carrying the name. Asking the object again
+// is what D44 records as a mistake - after a replacement the object read back can
+// carry no token at all (`?`), and the local backend never does.
+func adoptCloudCopy(ctx context.Context, p *Pair, conflictPath, token string) error {
+	if token == "" || token == "?" {
+		// Without a token there is nothing to record. Saying so is better than
+		// writing `?` into the snapshot, which would make every later comparison
+		// fail and bring the conflict back forever.
+		return fmt.Errorf("no cloud token for %q, so the baseline cannot be recorded; "+
+			"the next run will report the same conflict again", conflictPath)
+	}
+
+	remotePath, err := p.RemotePath()
+	if err != nil {
+		return err
+	}
+	_ = remotePath
+	fsrc, err := fs.NewFs(ctx, p.LocalPath())
+	if err != nil {
+		return fmt.Errorf("open source %q: %w", p.LocalPath(), err)
+	}
+
+	localObj, err := fsrc.NewObject(ctx, conflictPath)
+	if err != nil {
+		return fmt.Errorf("read local %q after keep-both: %w", conflictPath, err)
+	}
+
+	return resolveFn(ctx, p, conflictPath, map[string]string{
+		"action": "adopt",
+		"token":  token,
+		"mtime":  fmt.Sprintf("%d", localObj.ModTime(ctx).Unix()),
+		"size":   fmt.Sprintf("%d", localObj.Size()),
+	})
 }
 
 // truncate shortens s for a fixed-width column.

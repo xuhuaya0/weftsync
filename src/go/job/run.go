@@ -83,9 +83,24 @@ func (r PassResult) Destructive() int64 { return r.Deleted + r.DeletedDirs }
 type ConflictError struct {
 	Pair  string
 	Count int
+	// KeptBoth marks the policy that handles the conflict instead of reporting
+	// it: the copies were kept, so the message must not claim nothing happened.
+	KeptBoth bool
 }
 
 func (e *ConflictError) Error() string {
+	// keep-both DID upload: saying "nothing was uploaded" in the same run that
+	// printed "also uploaded as ..." is a contradiction the user has no way to
+	// resolve.
+	if e.KeptBoth {
+		return fmt.Sprintf(
+			"pair %q has %d conflict(s) between the folder and the sync state. "+
+				"Your version was uploaded under a new name and the cloud version was "+
+				"left untouched; nothing was deleted or overwritten. "+
+				"This is the conflict = \"keep-both\" behaviour, so the run exits "+
+				"non-zero to make the conflicts visible",
+			e.Pair, e.Count)
+	}
 	return fmt.Sprintf(
 		"pair %q has %d conflict(s) between the folder and the sync state. "+
 			"NOTHING was uploaded, overwritten or deleted. "+
@@ -282,7 +297,10 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 			return res, err
 		}
 		if handled.abort {
-			return res, &ConflictError{Pair: p.Name, Count: len(handled.reported)}
+			return res, &ConflictError{
+				Pair: p.Name, Count: len(handled.reported),
+				KeptBoth: spec.Conflict == ConflictKeepBoth,
+			}
 		}
 		ctx = handled.ctx
 	}
@@ -449,6 +467,34 @@ func handleConflicts(
 				return out, fmt.Errorf("pair %q: keep-both: %w", p.Name, err)
 			}
 			fmt.Fprintf(w, "  kept both: %q also uploaded as %q\n", c.Path, newPath)
+
+			// Record the cloud copy as the baseline for the original path.
+			//
+			// Without this the snapshot still holds the token we uploaded two
+			// runs ago, so the very next run reports the same conflict and
+			// keep-both uploads ANOTHER copy. Measured: two consecutive runs left
+			// two extra files, and nothing would stop it until the folder hit
+			// Feishu's 1500-node limit.
+			//
+			// Adopting is deliberate even though the baseline now says "the local
+			// file is this cloud token" about a file whose content is somebody
+			// else's: keep-both means "both copies are kept, and I do not want to
+			// hear about it again". Our version lives at newPath and is in the
+			// cloud; the original stays untouched.
+			token := ""
+			if len(c.Found) > 0 {
+				token = c.Found[0]
+			}
+			if err := adoptCloudCopy(ctx, p, c.Path, token); err != nil {
+				// A backend with no resolve command has no snapshot to record a
+				// baseline in; the conflict will simply be reported again next
+				// run, which is the best that backend can do.
+				if !isResolveUnsupported(err) {
+					return out, fmt.Errorf("pair %q: keep-both: %w", p.Name, err)
+				}
+				fmt.Fprintf(w, "  kept both: %q has no recorded baseline because this "+
+					"backend keeps no snapshot\n", c.Path)
+			}
 		}
 		ctx, err := excludePaths(ctx, paths)
 		if err != nil {

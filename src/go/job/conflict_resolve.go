@@ -151,6 +151,12 @@ func isCommandUnsupported(err error) bool {
 		strings.Contains(err.Error(), "unknown backend command")
 }
 
+// isResolveUnsupported reports whether the failure means "this backend has no
+// resolve command", as opposed to a real refusal.
+func isResolveUnsupported(err error) bool {
+	return errors.Is(err, errResolveUnsupported)
+}
+
 // truncateMTime drops the sub-second part of a local file's modification time.
 func truncateMTime(localPath string) error {
 	info, err := os.Stat(localPath)
@@ -163,6 +169,14 @@ func truncateMTime(localPath string) error {
 	}
 	return nil
 }
+
+// resolveFn performs the backend resolve call.
+//
+// A variable so tests can watch what keep-both asks the backend to record without
+// standing up a Feishu backend. The local backend has no `resolve` command, so
+// the keep-both path is otherwise untestable - and that path is exactly where the
+// "one extra copy per run" bug lived. Production code never reassigns it.
+var resolveFn = callBackendResolve
 
 // callBackendResolve invokes the backend's resolve command.
 //

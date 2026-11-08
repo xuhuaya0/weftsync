@@ -2120,3 +2120,90 @@ PLAN.md 第 11 项里还写着「全局默认值」。最初我加了一个 `def
 
 再加一层全局默认意味着：新建 pair 的初始值取决于用户**当前没在看**的另一个文件。
 少点一次点击的收益，换不来这个歧义。
+
+---
+
+## D48 · keep-both 最大的问题是它「每轮都说一次」（2026-11-08）
+
+`keep-both` 是 F4 里唯一没在真实租户上跑过的策略（单测早就过了）。
+这次补跑，第一次运行就拓出三个问题，其中一个是数据增长型的。
+
+### 一、每轮都多上传一份副本
+
+第一轮之后云端：
+
+```
+a.txt                                    = CLOUD EDITED   （原件，未动）
+a (from JL-10313-hyxu 20261108-094030).txt = local v1
+```
+
+第二轮之后：
+
+```
+a.txt                                    = CLOUD EDITED
+a (from JL-10313-hyxu 20261108-094030).txt = local v1
+a (from JL-10313-hyxu 20261108-094039).txt = local v1   ← 新的
+```
+
+原因很直白：keep-both 把本地版本传成一个**新名字**，但快照里 `a.txt` 的
+token 还是**两轮前**那一个。所以下一轮冲突照旧复活，再传一份。
+没有人会每天去看云端，于是这个循环会一直转到目录撞上 1500 节点上限。
+
+修法：上传完新副本之后，把**云端那颗**记为原路径的基线。
+
+这里要承认它「说了一个善意的谎」：快照从此声称「本地的 a.txt 对应云端那颗 token」，
+而那颗的内容其实是别人的。上一份决策（D44 的第 2 条）恰好说过不能这么干 ——
+但那是 `pull` 的语境：`pull` 要求「本地内容 = 云端内容」才允许 adopt，因为它的
+承诺是「我已经采纳了云端那份」。keep-both 的承诺不一样：
+
+> 两份都留下来了，而且我不希望再被提醒第二次。
+
+在这个承诺下，「基线对齐到云端那颗」是正确的：我们的版本在 `newPath` 上、在云里，
+原件没被动过，而用户已经被明确告知过一次。
+
+### 二、一句话里两个相反的结论
+
+同一个运行里先打印：
+
+```
+kept both: "a.txt" also uploaded as "a (from …).txt"
+```
+
+再打印：
+
+```
+pair "kb" has 1 conflict(s) … NOTHING was uploaded, overwritten or deleted.
+```
+
+**明明上传了。** 这句 `NOTHING was uploaded` 原本是为 `report` 策略写的，
+在那种情况下它是真的；keep-both 复用同一种错误类型就变成了自相矛盾，
+而用户没法从两条相反的陈述里推断出到底发生了什么。
+
+修法：`ConflictError` 增加 `KeptBoth`，两种策略各说各的。
+`report` 保留强措辞（它确实什么都没做），keep-both 改成
+「你的版本已用新名字上传，云端那份没有动，什么都没删」。
+两者仍然都返回非 0 退出码 —— 冲突发生过这件事必须看得见。
+
+### 三、`(token ?)`
+
+日志里出现过 `uploaded "a.txt" as "…" (token ?)`。同样是 `objectToken` 在拿不到
+`ID()` 时返回 `?` 的老问题（D44 第 2 条）。这次的规则是：日志里要写的 token 如果
+是 `?`，就**根本不写 token 这一段** —— 一行读起来像成功的信息里跟一个问号，
+比不写更让人怀疑。
+
+### 顺带一个同类的修正
+
+`adoptCloudCopy` 最初自己去读远端对象拿 token，于是本地后端（没有 `ID()`）直接失败。
+改成**由调用方传入 token** —— 冲突报告里已经有 `found`，那正是「现在拿这个名字的
+是哪几个 token」。这跟 D44 记下的是同一条教训：能从上一份报告读到的事实，不要再问一次。
+
+后端没有 `resolve` 命令时（本地磁盘对拷）keep-both 仍然可用：上传新副本照做，
+只是没有基线可记，界面上会明说「这个后端不保留快照」。这比直接让整轮失败好。
+
+### 验证
+
+真实租户：第一轮 → 云端 2 个文件（原件内容 = 云端版，新名字内容 = 本地版）；
+**第二轮 → 无冲突、无新副本**。
+单测：`TestKeepBothRecordsTheCloudCopyAsBaseline`（检查传给 adopt 的 token 与
+本地指纹）、`TestKeepBothRefusesToRecordANonexistentToken`（空/`?` 都拒绝）、
+`TestKeepBothAdoptFailsWhenThePathIsGone`、`TestConflictErrorWordingMatchesWhatHappened`。
