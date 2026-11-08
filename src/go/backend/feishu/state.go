@@ -151,7 +151,18 @@ func (f *Fs) forgetPath(remote string) {
 	f.flushState()
 }
 
-// flushState persists the snapshot.
+// stateFlushInterval is the minimum gap between two snapshot writes.
+//
+// Trade-off measured on a real run (3,309 files, 1.16 MB snapshot, 27 minutes):
+// writing after every upload means 3,309 full rewrites (~7.6 GB with the .bak
+// copy) for 1.9 GB of actual data. At 15 s the writes drop to roughly one per 30
+// files, and the worst case if the process is killed is that the last 15 seconds
+// of uploads are re-sent next run - a redundant upload, never a lost remote file.
+//
+// A variable so tests do not have to sleep.
+var stateFlushInterval = 15 * time.Second
+
+// flushState persists the snapshot, at most once per stateFlushInterval.
 //
 // Serialised: two goroutines writing the same .tmp file at once made the rename
 // fail on Windows ("the file is being used by another process"), which lost the
@@ -163,12 +174,52 @@ func (f *Fs) flushState() {
 	f.stateMu.Lock()
 	defer f.stateMu.Unlock()
 
+	f.flushStateLocked()
+}
+
+// FlushState writes any snapshot changes still sitting in memory, ignoring the
+// throttle.
+//
+// Called once per pair when the run finishes. Without it the throttled saves
+// would leave the tail of a run unrecorded even though the files are already in
+// the cloud, and the next run would upload them again.
+func (f *Fs) FlushState() {
+	if f.st == nil || !f.storable {
+		return
+	}
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
+
+	if !f.stPending {
+		return
+	}
+	f.saveStateLocked()
+}
+
+func (f *Fs) flushStateLocked() {
+	if time.Since(f.stLastFlush) < stateFlushInterval {
+		// Too soon: a write is owed. It has to be recorded as pending here, not
+		// only when stPending was already set - otherwise the very first skipped
+		// save of a run would be silently dropped and FlushState would not know
+		// to write it.
+		f.stPending = true
+		return
+	}
+	f.saveStateLocked()
+}
+
+func (f *Fs) saveStateLocked() {
 	if err := state.Save(f.st); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"WARNING: could not save the sync state to %s: %v\n"+
 				"         The next run will re-upload files it cannot account for;\n"+
 				"         no remote file is at risk.\n", f.stPath, err)
+		// Stay pending: a later flush retries instead of giving up for the run.
+		f.stPending = true
+		return
 	}
+	f.stPending = false
+	f.stLastFlush = time.Now()
 }
 
 // deletionsAllowed reports whether this run may delete remote files.

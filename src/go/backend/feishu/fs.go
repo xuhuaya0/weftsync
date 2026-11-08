@@ -36,6 +36,17 @@ type Fs struct {
 	stPath   string
 	storable bool // false if the snapshot cannot be persisted
 
+	// Writes to the snapshot are throttled, because saving after every single
+	// upload is quadratic: the whole file is rewritten each time. Measured on a
+	// real 3,309-file run with a 1.16 MB snapshot, that was ~7.6 GB of writes for
+	// 1.9 GB of transferred data, and every one of those writes was a chance to
+	// lose the batch.
+	//
+	// stPending records that at least one save was skipped, so FlushState knows
+	// there is something left to write when the run ends.
+	stLastFlush time.Time
+	stPending   bool
+
 	// repair is true when the snapshot had to be rebuilt, which forbids all
 	// deletions for this run (contracts/state-file-format.md §5).
 	repair       bool

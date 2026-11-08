@@ -2307,3 +2307,100 @@ f.Mkdir(ctx, parent)         ->  列父目录，没找到同名子目录，创�
    在它还是只读报告时没人认真查过。
 3. **「dry run」必须是一个贯穿全层的概念**，不能是「rclone 那一层 dry」。
    两个不同的 dry-run 标志各管一半，是最容易让人放心地丢数据的组合。
+
+---
+
+## D50 · 快照每传一个文件就整份重写一遍，在真实数据上是 O(n²)（2026-11-08）
+
+第一轮真实数据同步（3,309 个文件、1.94 GB、27 分 24 秒）**功能上全对**：
+`transferred 3309 / 3309`、`errors 0`、无 1061045 限流、无超限拒绝、
+`_` 前缀内容零泄漏、无重复目录，第二次运行 `transferred 0`。
+
+但终端里刷了几十条：
+
+```
+WARNING: could not save the sync state to .../state.json:
+  state: replace ...: rename state.json.tmp state.json: Access is denied.
+```
+
+### 问题一：rename 撞上正在扫这个目录的东西，而且没有重试
+
+快照就放在被同步的目录旁边（`.scratch/jl6test/`，位于 OneDrive 同步范围内）。
+OneDrive 客户端和 Windows Defender 会短暂持有目标文件，`os.Rename` 于是报
+`Access is denied`。
+
+`state.Save` 里**没有任何重试** —— 一次瞬时失败就丢掉那一次保存。
+而 `split` 的账本早就修过同一个坑（`saveSnapshot` 重试 4 次，注释写着
+"the write was made both rarer and retried"），**这里漏了**。
+
+这一次最终没丢数据纯属运气：保存被调用了很多次，最后一次恰好成功
+（`state.json` 里 3309 条齐全）。如果最后一次失败，整轮记录全丢，
+下一轮重传 3,309 个文件、烧光当天配额。
+
+### 问题二：每上传一个文件就重写 1.16 MB，是 O(n²)
+
+`recordUpload` 每成功一个文件就调一次 `flushState()` → 整份 JSON 重写 +
+复制一份 `.bak`。实测数字：
+
+| 项 | 值 |
+|---|---|
+| 实际传输 | 1.9 GB |
+| 快照大小 | 1.16 MB |
+| 保存次数 | 3,309 |
+| 磁盘写入 | 3,309 × 2.3 MB ≈ **7.6 GB** |
+
+对完整的 74,313 个文件，快照会长到约 26 MB，每次保存 52 MB，
+写入量会到**几百 GB** 量级 —— 只为了记住「哪些文件已经传过」。
+
+### 修法
+
+**节流**：两次保存至少间隔 `stateFlushInterval`（15 秒）。被跳过的保存置
+`stPending`，本轮结束时由 `FlushState()` 强制落盘。
+`job.RunPair` 用 `defer flushStateOf(fdst, w)` 接上，覆盖全部 7 个 return 路径。
+
+**重试**：rename 重试 4 次、退避 20/40/60 ms，与 `split` 保持一致。
+`.bak` 失败**降级为警告**继续，因为 rename 是原子替换、正文不可能写坏，
+丢掉 `.bak` 只损失回退能力，而中止保存会丢掉整批记录。
+
+### 一个自己写出来又自己抓到的 bug
+
+第一版 `flushStateLocked` 是这样：
+
+```go
+if !f.stPending && time.Since(f.stLastFlush) < stateFlushInterval {
+    return          // ← 直接返回，没有设 stPending
+}
+```
+
+在**新建的 Fs** 上，`stLastFlush` 是零值，第一次「太近」判断永远不会命中，
+所以这个分支看起来安全。但一旦命中，记录既不写盘也不标记 pending，
+`FlushState` 便无事可做，这条记录就**永久消失**。正确写法是无条件置
+`stPending = true` 再返回。
+
+`TestFlushStateThrottlesButKeepsThePendingFlag` 锁住这一点；
+把 `stPending = true` 删掉，测试立刻红（已做 mutation 验证）。
+
+### 验证（都是实测，不是推断）
+
+| 验证 | 结果 |
+|---|---|
+| 3 文件 / 9 秒的真实同步，**有**收尾 flush | `entries = 3` |
+| 同一场景，**删掉** `defer flushStateOf` 重建 | `entries = 1`（只剩第 1 个） |
+| 恢复后重跑 | `entries = 3`，第二轮 `transferred 0` |
+| 3,309 文件用新 exe 回归 | `transferred 0`、`state 3309`、99 秒 |
+| 单测 | `TestFlushState*` 4 条全绿；mutation 后变红 |
+
+9 秒 < 15 秒的节流窗口，所以第 2、3 个文件**必然**走节流路径 ——
+这就是「没有收尾 flush 就会丢」的直接证据，而不是理论推演。
+
+### 教训
+
+1. **「每次变更就保存」在文件会变大的场景里是 O(n²)**，量级一旦上千就不可接受。
+   写之前先估一下 n × size。
+2. **同一个坑修过一次，要把修法做成模式去找第二次**。`split` 的注释里明明写着
+   "rarer and retried"，`state` 这边一个都没有。
+3. **静默降级成 WARNING 的错误要数一下次数**。几十条 `Access is denied`
+   出现在滚动日志里，功能又是对的，很容易被当成噪音读过去。
+4. **节流必须有收尾**。凡是「攒着最后一起写」的设计，都要能回答
+   「进程正常结束时谁来写最后一次」，否则就是把丢数据伪装成省 IO。
+

@@ -245,6 +245,12 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	if err != nil {
 		return res, fmt.Errorf("pair %q: open destination %q: %w", p.Name, remotePath, err)
 	}
+	// Flush whatever the backend buffered before returning, whichever way this
+	// pair ends. The backend throttles snapshot writes (see feishu.FlushState),
+	// so the last few uploads of a run would otherwise never reach the disk and
+	// the next run would upload them a second time.
+	defer flushStateOf(fdst, w)
+
 	fsrc, err := fs.NewFs(ctx, p.LocalPath())
 	if err != nil {
 		return res, fmt.Errorf("pair %q: open source %q: %w", p.Name, p.LocalPath(), err)
@@ -667,6 +673,30 @@ func withTrashExcluded(ctx context.Context, versioningDir string) (context.Conte
 		return ctx, fmt.Errorf("exclude %q: %w", glob, err)
 	}
 	return ctx, nil
+}
+
+// stateFlusher is implemented by backends that buffer sync records in memory
+// instead of writing them on every change.
+//
+// *feishu.Fs.FlushState is the only implementation today.
+type stateFlusher interface {
+	FlushState()
+}
+
+// flushStateOf writes any buffered sync records to disk.
+//
+// It reports a type-assertion miss instead of staying silent: if the assertion
+// ever stops matching because the backend got wrapped by rclone, the symptom is
+// a run that looks fine but silently re-uploads its tail next time, and that is
+// far harder to notice than one line here.
+func flushStateOf(f fs.Fs, w io.Writer) {
+	s, ok := f.(stateFlusher)
+	if !ok {
+		fmt.Fprintf(w, "note: %T does not expose a sync-state flush; "+
+			"records from this run may not be persisted\n", f)
+		return
+	}
+	s.FlushState()
 }
 
 // backupDirFor returns the trash folder path, or "" when deletion is permanent.
