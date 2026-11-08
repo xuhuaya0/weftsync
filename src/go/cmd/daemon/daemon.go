@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -116,13 +117,24 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 
 			// Own the lifetime context separately from the signal handler: the
 			// tray's "quit" item has to take the same shutdown path as Ctrl+C,
-			// and signal.NotifyContext cannot be triggered by anything but a
-			// signal.
+			// and a plain context cannot be triggered by anything but code.
+			//
+			// Signals are counted by hand rather than through
+			// signal.NotifyContext, because the second signal has to mean
+			// something different from the first. With NotifyContext every
+			// further Ctrl+C is swallowed, so a user whose transfer is stuck has
+			// no way out short of killing the process.
 			base, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			ctx, stopSignals := signal.NotifyContext(base,
-				os.Interrupt, syscall.SIGTERM)
+
+			ctx, stopSignals := context.WithCancel(base)
 			defer stopSignals()
+
+			var signals = make(chan os.Signal, 2)
+			signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+			defer signal.Stop(signals)
+
+			go watchSignals(w, d, signals, cancel, stopSignals)
 
 			fmt.Fprintf(w, "weftsync daemon: API listening on http://%s\n", ln.Addr())
 			d.Start(ctx)
@@ -181,11 +193,45 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 			if err := daemon.Serve(ctx, srv, ln); err != nil {
 				return err
 			}
+
+			// The message about what is being stopped was already printed by
+			// watchSignals, at the moment the signal arrived. Repeating it here
+			// would print it after the wait, which is the one time it is useless.
 			d.Stop()
 			fmt.Fprintln(w, "weftsync daemon: stopped")
 			return nil
 		})
 	},
+}
+
+// watchSignals turns the first signal into a graceful stop and the second into
+// an immediate exit.
+//
+// What the first signal actually does is worth stating precisely, because the
+// documentation used to get it wrong: it cancels the daemon's context, and a
+// running job inherits that context, so in-flight transfers are **interrupted**,
+// not finished. Stop() then waits for them to return, which is fast but not
+// instant (a multipart upload has to unwind).
+//
+// Reporting "waiting for X to finish" while also cancelling X was a lie. The
+// message now says what happens, and a second signal is a real escape hatch for a
+// stuck transfer rather than a swallowed keystroke.
+func watchSignals(w io.Writer, d *daemon.Daemon, signals <-chan os.Signal,
+	cancel, stopSignals context.CancelFunc) {
+	<-signals
+	running := d.RunningJobs()
+	if len(running) == 0 {
+		fmt.Fprintln(w, "weftsync daemon: shutting down")
+	} else {
+		fmt.Fprintf(w, "weftsync daemon: stopping %s; press Ctrl+C again to exit immediately\n",
+			strings.Join(running, ", "))
+	}
+	cancel()
+	stopSignals()
+
+	<-signals
+	fmt.Fprintln(w, "weftsync daemon: second signal, exiting without waiting")
+	os.Exit(1)
 }
 
 // autostartSpec captures how this process was started, so "enable autostart" in

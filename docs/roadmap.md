@@ -30,7 +30,7 @@
 | F2 | 分片上传 + 限流 + 重试 | R2, R9 | M3 | F1 | 🔄 分片/限速/块级长重试已完成并实测；`upload_id` 落盘不做（D45） |
 | F3 | 删除 / 更新 / 移动 + 删除保护 | R3, R15, A11, A13 | M4 | F1, F2 | ✅ |
 | F4 | 状态库 + 增量判断 + 冲突检测 | R4, R16, A5 | M4.5 | F3 | ✅ |
-| F5 | 常驻进程 + 定时调度 + 托盘 + 开机自启 | R11, R12, R14, A15–A17 | M5 | F4 | ✅ 调度/API/单实例/防重叠/开机自启/托盘已完成并实测（Linux 无托盘，已说明） |
+| F5 | 常驻进程 + 定时调度 + 托盘 + 开机自启 | R11, R12, R14, A15–A17 | M5 | F4 | ✅ 调度/API/单实例/防重叠/自启/托盘/通知（Linux 无托盘，已说明） |
 | F6 | 本地网页 UI（12 个功能） | R13, R14, R17, R18, A24 | M5.5 | F5 | ✅ 12 项全部完成 |
 | F7 | 超 1500 节点拆分向导 | A22, A23 | M6 | F6 | ✅ |
 | F8 | Linux 平台验证 | R9 | M6.5 | F1–F6 | 🔄 WSL2 实机 23/23 通过；未覆盖凭据存储与开机自启 |
@@ -356,7 +356,7 @@ Feishu 只有 `upload_prepare` / `upload_part` / `upload_finish` 三个端点，
 
 ---
 
-### F5 · 常驻进程 + 定时调度 + 托盘 + 开机自启 🔄
+### F5 · 常驻进程 + 定时调度 + 托盘 + 开机自启 ✅
 **验收**
 
 | # | 验收项 | 结果 | 证据 |
@@ -369,7 +369,7 @@ Feishu 只有 `upload_prepare` / `upload_part` / `upload_finish` 三个端点，
 | 4 | 防重叠：上一轮未结束不启动新一轮 | ✅ | 定时触发计数跳过；API 触发返回 409 |
 | 5 | 开机自启 | ✅ | 界面「设置」页签一键开关；实测写入 `HKCU\...\Run`，把那条命令**在 `C:\` 下原样执行**后 `/api/health` 返回 200、作业照常加载；Linux 侧写入 `$XDG_CONFIG_HOME/autostart/weftsync.desktop`，WSL 端到端 enable→文件→matches→disable→删除 全通过 |
 | 6 | 单实例：重复启动不起第二个进程 | ✅ | 端口即锁；第二个 daemon 报「already in use」并退出 |
-| 7 | 退出时若有同步在进行 → 提示确认 + `upload_id` 落盘 | ⬜ 部分 | 现在**等进行中的那轮跑完**再退出，无弹窗；`upload_id` 未持久化 || 8 | 系统托盘图标 | ✅ Windows 实现（纯 Go 无 cgo）：双击开控制台、右键菜单（打开控制台/ 立即运行全部/退出）、气泡通知；实测图标创建成功、`IsWindow` 为真、`Notify` 成功、进程存活；窗口被外部关掉后 **daemon 继续服务**（`/api/health` 仍 200）。Linux 明确不支持（无统一托盘协议，已说明） |
+| 7 | 退出时若有同步在进行 → 提示 | ✅ 改为「说明在停什么」+ 二次信号强制退出 | 实测（WSL）：第一次 `SIGINT` 打印 `stopping sig; press Ctrl+C again to exit immediately`，传输被中断（`Removing partially written file on error: context canceled`），进程随后退出。**原本文档说「等它跑完」是错的** —— 第一次信号就会取消作业的 ctx。`upload_id` 持久化明确不做（D45） || 8 | 系统托盘图标 | ✅ Windows 实现（纯 Go 无 cgo）：双击开控制台、右键菜单（打开控制台/ 立即运行全部/退出）、气泡通知；实测图标创建成功、`IsWindow` 为真、`Notify` 成功、进程存活；窗口被外部关掉后 **daemon 继续服务**（`/api/health` 仍 200）。Linux 明确不支持（无统一托盘协议，已说明） |
 **实现**（详见 `docs/daemon.md`）
 - `daemon` 包 + `weftsync daemon` 命令
 - 调度用单个 tick 循环而不是每作业一个定时器：cron 可以落在任意分钟，
@@ -383,14 +383,14 @@ Feishu 只有 `upload_prepare` / `upload_part` / `upload_finish` 三个端点，
 改为守护进程自己的生命周期 context，并加了回归测试
 （`TestRunSurvivesItsRequester`，回退修复后 3 条断言全红）。
 
-**未做（因此本 feature 未标 ✅）**
+**曾经列为「未做」、现已完成或明确不做**
 
-| 缺口 | 原因 |
+| 项 | 结果 |
 |---|---|
-| 系统托盘图标 | 纯 Go 无 cgo 需自己写 `Shell_NotifyIcon` 消息循环 |
-| 开机自启 | 需写注册表 / autostart 文件（会改动用户系统） |
-| 退出确认弹窗 | 当前策略是等进行中的那轮跑完，无交互 |
-| `upload_id` 持久化 | F2 遗留，需断点续传先就位 |
+| 系统托盘图标 | ✅ 纯 Go 无 cgo，自己写 `Shell_NotifyIcon` 消息循环（D36） |
+| 开机自启 | ✅ Windows 写 `HKCU\...\Run`；Linux 写 `.desktop`（D35） |
+| 退出时的提示 | ✅ 打印在停哪个作业 + 第二次信号强制退出；实测 4/4（见 `docs/daemon.md` §5）|
+| `upload_id` 持久化 | ⛔ 明确不做：Feishu 没有「已收到哪些块」的接口，落盘后也只能从第 0 块重传（D45）|
 
 ---
 

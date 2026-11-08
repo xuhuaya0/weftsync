@@ -226,6 +226,20 @@ func (d *Daemon) HistoryLen() int {
 	return d.history.len()
 }
 
+// RunningJobs names the jobs that a shutdown would have to wait for.
+//
+// Stop() waits for them, which is the right behaviour but looks like a hang if
+// nothing says so. The command line prints this list before it starts waiting.
+func (d *Daemon) RunningJobs() []string {
+	var out []string
+	for _, st := range d.Status() {
+		if st.State == StateRunning {
+			out = append(out, st.Name)
+		}
+	}
+	return out
+}
+
 // LogLen is how many log lines this process still holds.
 func (d *Daemon) LogLen() int {
 	d.mu.Lock()

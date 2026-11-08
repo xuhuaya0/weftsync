@@ -114,16 +114,34 @@ weftsync daemon is running. Stop it first, or pass a different --addr
 
 | 场景 | 行为 |
 |---|---|
-| **关掉 daemon**（`Ctrl+C` / `SIGTERM` / 托盘「退出」） | 停止调度 → **等进行中的那轮跑完** → 退出 |
-| **界面「停止」按钮**（`POST /api/stop`） | 取消**那一轮**，daemon 继续跑 |
+| **关掉 daemon**（`Ctrl+C` / `SIGTERM` / 托盘「退出」） | 停止调度 → **取消正在跑的那一轮** → 等它退出 → 退出进程 |
+| **界面「停止」按钮**（`POST /api/stop`） | 只取消那**一轮**，daemon 继续跑 |
 
-关 daemon 时不会强杀上传：飞书没有 abort 接口，分片上传断开后只能等它 24 小时自动过期。
-让它跑完比留下一个半成品更好。
+> 这两条其实走的是**同一个机制**：作业的 context 派生自 daemon 的 context，
+> 所以关 daemon 就会中断传输。早先这里写的是「等进行中的那轮跑完」—— 
+> **是错的**，2026-11-08 在 WSL 上实测确认：第一次 `SIGINT` 后日志立刻出现
+> `Removing partially written file on error: context canceled`。
+> 文档写了很久没被发现，因为它描述的是一种「看上去更安全」的行为。
 
-界面「停止」为什么可以中途取消：`job.Run` 的 context 被取消后，
-**分片上传不会走到 `upload_finish`，所以云端不会出现半截文件**（实测：停掉 24MiB
-上传后远端文件数仍为 0）。一次性 `upload_all` 本来就是整文件原子提交。
-代价是已发出去的分片白传了 —— 取消就是取消，不承诺可续。
+中断是安全的：飞书没有 abort 接口，但**分片上传不走 `upload_finish` 就不会提交**，
+所以云端不会出现半截文件（实测：停掉 24MiB 上传后远端文件数仍为 0）。
+一次性 `upload_all` 本来就是整文件原子提交。代价是已发出的分片白传了 ——
+取消就是取消，不承诺可续（D45）。
+
+### 关 daemon 时的两次信号
+
+| 次 | 行为 |
+|---|---|
+| 第一次 | 打印 `stopping <作业名>; press Ctrl+C again to exit immediately`，取消作业开始收尾 |
+| 第二次 | 打印 `second signal, exiting without waiting` 并立即 `os.Exit(1)` |
+
+用 `signal.NotifyContext` 做不到这一点：它会把后续每一个信号都吞掉，
+卡住的传输就没有出路了（只能杀进程）。所以这里手工计数信号。
+
+实测（WSL，4/4）：作业运行中 → `kill -INT` → 日志出现上面那行；
+作业确实被中断（partial 文件被清掉）；进程随后自行退出。
+**第二次信号那一条没有构造出真实的卡死场景来验证** —— 代码在，但只在传输
+真的不返回时才会走到。
 
 停止**不算失败**：`last_stopped = true`、`last_ok = true`、错误信息为空，
 历史里标「已停止」。把它记成失败会让人去找一个并不存在的问题。
