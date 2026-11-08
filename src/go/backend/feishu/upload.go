@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/rclone/rclone/fs"
 )
@@ -67,12 +68,8 @@ func (f *Fs) putChunked(ctx context.Context, in io.Reader, remote, name, parentT
 				remote, seq, want, n)
 		}
 
-		if err := f.client.uploadPart(ctx, uploadID, seq, chunk); err != nil {
-			return "", fmt.Errorf(
-				"feishu: upload of %q failed at block %d/%d. "+
-					"Feishu keeps an unfinished upload for 24 hours and offers no abort call, "+
-					"so it will expire on its own: %w",
-				remote, seq+1, wantNum, err)
+		if err := f.uploadPartRetry(ctx, remote, uploadID, seq, wantNum, chunk); err != nil {
+			return "", err
 		}
 	}
 
@@ -87,4 +84,62 @@ func (f *Fs) putChunked(ctx context.Context, in io.Reader, remote, name, parentT
 	}
 
 	return f.client.uploadFinish(ctx, uploadID, wantNum)
+}
+
+// Block-level retry budget, on top of the one inside client.do.
+//
+// client.do already retries a failed request three times, which covers a blip.
+// What it does not cover is a longer interruption - a laptop changing networks,
+// a VPN reconnecting - while a 1GB upload is at block 200 of 250. Without this
+// layer the only recovery is rclone restarting the whole file, i.e. re-sending
+// everything. Retrying the block is strictly cheaper and cannot produce a
+// different result: upload_part for a given seq either lands or does not.
+const blockRetries = 4
+
+// blockRetryBaseWait is a variable so a test can compress the backoff instead of
+// spending 30 seconds proving that it waits.
+var blockRetryBaseWait = 2 * time.Second
+
+// uploadPartRetry sends one block, retrying only what is safe to retry.
+//
+// A permanent error (bad argument, permission, quota) is returned immediately:
+// retrying it would just burn the daily 10000-request budget and delay the
+// message the user needs to see.
+func (f *Fs) uploadPartRetry(ctx context.Context, remote, uploadID string, seq, total int, block []byte) error {
+	var lastErr error
+	for attempt := 1; attempt <= blockRetries; attempt++ {
+		err := f.client.uploadPart(ctx, uploadID, seq, block)
+		if err == nil {
+			if attempt > 1 {
+				fs.Logf(f, "%s: block %d/%d succeeded on attempt %d", remote, seq+1, total, attempt)
+			}
+			return nil
+		}
+		lastErr = err
+
+		if classify(err) != classRetryable || attempt == blockRetries {
+			break
+		}
+		wait := blockRetryBaseWait << (attempt - 1)
+		fs.Logf(f, "%s: block %d/%d failed (attempt %d/%d), retrying in %v: %v",
+			remote, seq+1, total, attempt, blockRetries, wait, err)
+
+		// Sleeping with the context means a stop request takes effect at once
+		// instead of after the backoff. The block is re-sent next run anyway:
+		// nothing was committed.
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("feishu: upload of %q stopped at block %d/%d: %w",
+				remote, seq+1, total, ctx.Err())
+		case <-timer.C:
+		}
+	}
+
+	return fmt.Errorf(
+		"feishu: upload of %q failed at block %d/%d after %d attempt(s). "+
+			"Feishu keeps an unfinished upload for 24 hours and offers no abort call, "+
+			"so it will expire on its own: %w",
+		remote, seq+1, total, blockRetries, lastErr)
 }
