@@ -306,6 +306,20 @@
   </div>
 
   <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <strong class="grow">通知</strong>
+    </div>
+    <div id="set-notify" class="empty">载入中…</div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <strong class="grow">过滤规则（对所有作业生效）</strong>
+    </div>
+    <div id="set-filter" class="empty">载入中…</div>
+  </div>
+
+  <div class="card">
     <strong>开机自启</strong>
     <div id="as-body" class="empty">载入中…</div>
   </div>
@@ -929,7 +943,7 @@ document.querySelectorAll('.tabs button').forEach(btn => {
     document.getElementById('tab-' + btn.dataset.tab).classList.remove('hidden');
     if (btn.dataset.tab === 'config') { syncJobPicker(); loadConfig(); }
     if (btn.dataset.tab === 'split') { loadSplit(); }
-    if (btn.dataset.tab === 'settings') { loadInfo(); loadAutostart(); loadCredentials(); }
+    if (btn.dataset.tab === 'settings') { loadInfo(); loadSettings(); loadAutostart(); loadCredentials(); }
   });
 });
 
@@ -1286,6 +1300,93 @@ function fmtDuration(seconds) {
   const h = Math.floor(m / 60);
   if (h < 24) return h + " 小时 " + (m % 60) + " 分";
   return Math.floor(h / 24) + " 天 " + (h % 24) + " 小时";
+}
+
+// ------------------------------------------------------------------ settings: daemon settings
+// Notification switch and global exclude patterns. Both live in the daemon's own
+// settings file, not in a job file: they describe how the program behaves, not
+// what to sync.
+async function loadSettings() {
+  const notifyBox = document.getElementById("set-notify");
+  const filterBox = document.getElementById("set-filter");
+  let v;
+  try {
+    v = await getJSON("/api/settings");
+  } catch (e) {
+    notifyBox.className = "note err";
+    notifyBox.textContent = "读取设置失败：" + e.message;
+    filterBox.className = "note err";
+    filterBox.textContent = "";
+    return;
+  }
+
+  // --- notifications
+  const on = v.notify_enabled !== false;
+  const available = !!v.notifications_available;
+  notifyBox.className = "";
+  if (!available) {
+    notifyBox.innerHTML = `<div class="note">当前进程没有托盘图标（Linux 或未加 <code>--tray</code>），
+      所以没有地方弹通知。这一项在这里无法开启 —— 日志里仍会记录
+      <code>notify:</code> 行。</div>`;
+  } else {
+    notifyBox.innerHTML = `<label class="row" style="gap:8px;align-items:center">
+      <input type="checkbox" id="set-notify-on" ${on ? "checked" : ""}>
+      <span>失败 / 被闸门拦下 / 有冲突时弹托盘通知</span>
+    </label>
+    <div class="hint" style="margin-top:6px">
+      成功、预览、手动停止都不通知 —— 每次都弹等于让人关掉通知。
+    </div>`;
+    document.getElementById("set-notify-on").addEventListener("change", saveSettings);
+  }
+
+  // --- filters
+  const patterns = v.exclude || [];
+  filterBox.className = "";
+  filterBox.innerHTML = `<div class="note" style="margin-bottom:10px">
+      这里写的规则会加到<strong>每个</strong>作业上，语法与 rclone 过滤相同：
+      <code>*.tmp</code>、<code>.git/**</code>、<code>/cache/**</code>。
+      规则只能排除，不能把作业自己排除掉的文件再加回来。
+    </div>
+    <div class="field">
+      <label>规则（每行一条）</label>
+      <textarea id="set-exclude" rows="5" placeholder="*.tmp&#10;.git/**">${esc(patterns.join("\n"))}</textarea>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="set-save" class="grow">保存</button>
+      <span id="set-flash" class="hint" style="margin:0"></span>
+    </div>`;
+  document.getElementById("set-save").addEventListener("click", saveSettings);
+  filterBox.dataset.settingsFile = v.settings_file || "";
+}
+
+async function saveSettings() {
+  const flash = document.getElementById("set-flash");
+  const body = {};
+  const box = document.getElementById("set-notify-on");
+  if (box) body.notify_enabled = box.checked;
+  const ta = document.getElementById("set-exclude");
+  if (ta) {
+    body.exclude = ta.value.split("\n").map(s => s.trim()).filter(s => s !== "");
+  }
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((data && data.error) || ("HTTP " + r.status));
+    if (flash) {
+      flash.className = "hint ok";
+      flash.textContent = "已保存，立即生效";
+    }
+    await loadSettings();
+  } catch (e) {
+    if (flash) {
+      flash.className = "hint err";
+      flash.textContent = "保存失败：" + e.message;
+    }
+  }
 }
 
 // ------------------------------------------------------------------ settings: autostart

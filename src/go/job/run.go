@@ -130,6 +130,14 @@ type Options struct {
 	// MaxNodesPerDir is the direct-child count that makes a directory over-limit.
 	// Zero means split.DefaultRefuseAt.
 	MaxNodesPerDir int
+	// Exclude holds extra filter patterns applied to every pair in this run.
+	//
+	// The daemon fills this from its settings so a user can exclude "*.tmp" or
+	// ".git/**" once instead of per job. Patterns only ever exclude: there is no
+	// way for a global pattern to re-include something a job's own filters
+	// dropped, because "the job file is the authority" is easier to reason about
+	// than a precedence table.
+	Exclude []string
 }
 
 // Run executes every enabled pair in the job, in order.
@@ -284,6 +292,7 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	opts := passOptions{
 		backupDir: backupDirFor(remotePath, spec),
 		suffix:    suffixFor(spec, time.Now()),
+		exclude:   opt.Exclude,
 	}
 
 	if opts.backupDir != "" {
@@ -386,6 +395,8 @@ func refuseAt(configured int) int {
 type passOptions struct {
 	backupDir string
 	suffix    string
+	// exclude holds the daemon-level filter patterns; see Options.Exclude.
+	exclude []string
 	// maxDeleteSize is the byte ceiling rclone checks before deleting, 0 for
 	// none. It is only ever set on the dry pass; see SizeGuardError.
 	maxDeleteSize int64
@@ -484,6 +495,20 @@ func runPass(ctx context.Context, fdst, fsrc fs.Fs, opts passOptions, dryRun, de
 	ci.MaxDeleteSize = -1
 	if opts.maxDeleteSize > 0 {
 		ci.MaxDeleteSize = fs.SizeSuffix(opts.maxDeleteSize)
+	}
+
+	// Daemon-level excludes, on top of whatever filter the caller already put on
+	// the context. AddConfig appends to the existing filter rather than replacing
+	// it, which matters: the conflict and trash exclusions are already there, and
+	// building a fresh filter would silently drop them.
+	if len(opts.exclude) > 0 {
+		var fi *filter.Filter
+		ctx, fi = filter.AddConfig(ctx)
+		for _, pattern := range opts.exclude {
+			if err := fi.Add(false, pattern); err != nil {
+				return PassResult{}, fmt.Errorf("exclude %q: %w", pattern, err)
+			}
+		}
 	}
 
 	// accounting.Stats honours the group on the context and falls back to the

@@ -160,6 +160,10 @@ type Daemon struct {
 	// normal case on Linux and on a headless Windows box; every caller must
 	// tolerate it.
 	notify func(title, text string)
+
+	// settings is the daemon-level configuration read from disk at startup and
+	// replaced whenever the settings page saves. Guarded by mu like the rest.
+	settings Settings
 }
 
 // SetNotifier installs the callback used to report a run that needs attention.
@@ -177,14 +181,41 @@ func (d *Daemon) SetNotifier(fn func(title, text string)) {
 func (d *Daemon) notifyf(title, format string, args ...any) {
 	d.mu.Lock()
 	fn := d.notify
+	enabled := d.settings.NotificationsOn()
 	d.mu.Unlock()
-	if fn == nil {
+	if fn == nil || !enabled {
 		return
 	}
 	// Logged as well as shown: a balloon disappears, and "was I told about
 	// this?" is a question the log has to be able to answer.
 	d.logf("notify: %s", title)
 	fn(title, fmt.Sprintf(format, args...))
+}
+
+// HasNotifier reports whether a desktop notifier is installed.
+//
+// The settings page uses it to disable the notification switch with a reason
+// instead of offering a control that cannot do anything (no tray, Linux, or a
+// headless box).
+func (d *Daemon) HasNotifier() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.notify != nil
+}
+
+// ApplySettings installs settings that were just saved, so a change takes effect
+// without restarting the daemon.
+func (d *Daemon) ApplySettings(s Settings) {
+	d.mu.Lock()
+	d.settings = s
+	d.mu.Unlock()
+}
+
+// SettingsOf returns the settings currently in force.
+func (d *Daemon) SettingsOf() Settings {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.settings
 }
 
 // HistoryLen is how many run records this process still holds.
@@ -223,6 +254,14 @@ func New(files []string, log io.Writer) (*Daemon, error) {
 	if sink, ok := log.(interface{ Recent() []LogLine }); ok {
 		d.logs = sink.(*logSink)
 		_ = sink
+	}
+
+	// Settings are best effort at startup: a corrupt settings file must not stop
+	// the sync. Say so once and run with the defaults.
+	if s, err := LoadSettings(); err != nil {
+		fmt.Fprintf(log, "settings: %v (using defaults)\n", err)
+	} else {
+		d.settings = s
 	}
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 
@@ -404,6 +443,7 @@ func (d *Daemon) execute(ctx context.Context, e *entry, mode RunMode) {
 	results, err := d.runJob(runCtx, cfg, d.log, job.Options{
 		DryRun:     mode == ModePlan,
 		StatsGroup: tracker.Group(),
+		Exclude:    d.SettingsOf().excludePatterns(),
 	})
 
 	// A cancelled context is what our own stop request looks like. Reporting it as

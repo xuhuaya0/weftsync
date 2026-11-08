@@ -61,6 +61,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/api/config", a.handleConfig)
 	mux.HandleFunc("/api/autostart", a.handleAutostart)
 	mux.HandleFunc("/api/info", a.handleInfo)
+	mux.HandleFunc("/api/settings", a.handleSettings)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
