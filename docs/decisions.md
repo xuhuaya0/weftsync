@@ -1993,3 +1993,71 @@ POST /open-apis/drive/v1/files/upload_finish    → 收下 file_token
 如果将来真的需要跨进程续传，前置条件是先把「同一 seq 重复上传」的语义测准，
 那件事该用一个不依赖 python multipart 手写的探针来做（例如给 `uploadPart` 加一个
 带 build tag 的集成测试）。
+
+---
+
+## D46 · 多网盘：本来就支持，但有两个真实的坑（2026-11-08）
+
+F10 一直标着「可选、未做」。实测下来它**本来就工作**，因为 `pair` 的 `remote`
+就是一条 rclone 路径，后端是飞书还是本地磁盘还是 union 与同步逻辑无关。
+这一条记录实测结果和两个容易踩的坑。
+
+### 已经能用的
+
+一个 job 里两个 pair 指向完全不同的后端，各自独立：
+
+```
+to-feishu   update   1   ← feishu:FZiv.../multi/cloud
+to-disk     update   1   ← :local:<root>/.scratch/multibackend/copies
+```
+
+- 各自写自己的 state（`to-feishu` 配了 `state_file`，`to-disk` 没配 → 靠 mtime+size）
+- 第二轮两个都 `transferred 0`
+- **一个 pair 失败不阻止另一个**：把 `to-feishu` 的本地目录改成不存在 →
+  `to-feishu` 报错退出码 1，`to-disk` 仍然 `transferred 1` 正常完成
+
+`union` 后端也能用，前提是在 **rclone.conf 里声明 upstreams**：
+
+```ini
+[unionlocal]
+type = union
+upstreams = "/path/shard-a" "/path/shard-b"
+```
+
+然后 `remote = { backend = "unionlocal", root = "" }`。实测 2 个文件写进 shard-a，
+`lsf unionlocal:` 能同时列出两个 shard 的内容，第二轮跳过。
+
+### 坑一：`:union:a:b` 内联写法不成立
+
+`remote.root = ":union:/a:/b"` 会报：
+
+```
+union can't point to an empty upstream - check the value of the upstreams setting
+```
+
+union 的 upstreams 是一个配置项，不是一个路径。所以它**必须**先在 rclone.conf 里
+定义成一个远程。
+
+我没有为此放开 `remote.options` 白名单。job 文件描述的是「同步什么」，
+不是「怎么连」；连接配置（包括 union 的 upstreams）属于 rclone.conf。
+一旦开始往白名单里加业务参数，就得为每个后端的每个参数做一次「这个安全吗」的判断，
+而白名单的价值恰恰在于它很短。
+
+### 坑二：单字母远程名在 Windows 上被当成盘符
+
+第一次用 `[u]` 做 union 远程名，结果：
+
+```
+ERROR : one.txt: Failed to copy: mkdir \\?\U:\: The system cannot find the path specified.
+```
+
+rclone 把 `u:` 当成 U 盘。**这不是我们的 bug，但用户会踩**：
+一个叫 `d` 或 `e` 的远程名在 Windows 上永远不工作，而错误信息里出现的是
+`\\?\U:\` 这种和配置毫无关系的字符串，几乎无法自己推出来。
+
+所以文档里必须写：**Windows 上远程名不要用单个字母**。
+
+### 结论
+
+F10 标 ✅：验收的两条（多后端混用 / union 后端）都实测通过。
+局限写清楚：union 需要 rclone.conf 预定义；单字母远程名在 Windows 上不可用。

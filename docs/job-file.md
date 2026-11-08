@@ -189,6 +189,27 @@ mtime 猜谁更新（飞书的 mtime 就是上传时刻）。
 | 限制 | 影响 | 绕法 |
 |---|---|---|
 | `remote.options` 只支持 `state_file` | 其他后端选项只能在 `rclone.conf` 里配 | 给不同 pair 用不同远端名 |
-| 挂载/定时未实现 | 需手动 `weftsync run` | F5 |
-| `max_delete_size` 未实现 | 只能按数量限，不能按体积限 | 见 roadmap |
-| `schedule` 小节不生效 | 写了也不会自动跑 | F5 |
+| `union` 不能内联写 | `:union:/a:/b` 报「empty upstream」 | 在 `rclone.conf` 里定义 `[name]` + `upstreams = ...`，然后 `backend = "name"` |
+| **Windows 上远程名不要起单个字母** | `u:` 会被 rclone 当成 U 盘，报 `mkdir \\?\U:\: The system cannot find the path specified` | 用两个字母以上，如 `uu`、`feishu2` |
+
+### 8.1 一个 job 里可以混用不同后端
+
+每个 `pair` 的 `remote` 都是一条独立的 rclone 路径，所以下面这个是合法的：
+
+```toml
+[job]
+name = "mixed"
+
+[[pair]]
+name = "to-feishu"
+local = { root = "D:/docs" }
+remote = { backend = "feishu", root = "token/docs", options = { state_file = "..." } }
+
+[[pair]]
+name = "to-disk"
+local = { root = "D:/photos" }
+remote = { root = ":local:E:/backup/photos" }
+```
+
+两个 pair 各自写自己的 state（`to-disk` 没配 `state_file` 就靠 mtime + 大小判断），
+互不影响；**一个 pair 失败不会阻止另一个**，但整体退出码非 0。
