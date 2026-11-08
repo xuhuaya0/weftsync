@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/rclone/rclone/fs"
 )
@@ -157,6 +158,33 @@ type stageTwo struct {
 // hasWork reports whether anything was decided, for log/output purposes.
 func (s stageTwo) hasWork() bool {
 	return len(s.localDeleted)+len(s.remoteDeleted)+len(s.pullNew) > 0
+}
+
+// subtractHandled removes the paths stage two already acted on.
+//
+// Without it a run printed "deleted locally: cloud-gone.txt" and then
+// "1 conflict(s) … these paths are left untouched" about the same file.
+func subtractHandled(hold []Conflict, s stageTwo) []Conflict {
+	done := make(map[string]bool, len(s.localDeleted)+len(s.remoteDeleted)+len(s.pullNew))
+	for _, c := range s.localDeleted {
+		done[c.Path] = true
+	}
+	for _, c := range s.remoteDeleted {
+		done[c.Path] = true
+	}
+	for _, c := range s.pullNew {
+		done[c.Path] = true
+	}
+	if len(done) == 0 {
+		return hold
+	}
+	out := make([]Conflict, 0, len(hold))
+	for _, c := range hold {
+		if !done[c.Path] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // planStageTwo classifies the non-conflict paths.
@@ -316,14 +344,22 @@ func deleteCloudCopy(ctx context.Context, p *Pair, path string, tokens []string)
 	if err := obj.Remove(ctx); err != nil {
 		return fmt.Errorf("remove remote %q: %w", path, err)
 	}
+	// Explicit, even though the feishu backend's Remove already drops the entry:
+	// that is a per-backend detail, and the next run would read a stale baseline
+	// as "recorded, missing locally, missing in the cloud". forgetBaseline treats
+	// "no record" as success, so doing it twice is harmless.
 	return forgetBaseline(ctx, p, path)
 }
 
 // forgetBaseline drops a path from the snapshot.
 //
-// Used after deleting the local copy of a cloud-deleted file: keeping the entry
-// would make the next run read "recorded but missing locally" and try to delete a
-// cloud file that is already gone.
+// "No record" counts as success: the goal is "the snapshot does not mention this
+// path", and it already does not. Reporting an error there turned a completed
+// deletion into a failed run.
 func forgetBaseline(ctx context.Context, p *Pair, path string) error {
-	return resolveFn(ctx, p, path, map[string]string{"action": "forget"})
+	err := resolveFn(ctx, p, path, map[string]string{"action": "forget"})
+	if err != nil && strings.Contains(err.Error(), "no record") {
+		return nil
+	}
+	return err
 }

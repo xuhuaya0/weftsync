@@ -296,23 +296,36 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 			}
 
 			if len(plan.hold) > 0 {
-				reportConflicts(w, p.Name, plan.hold)
+				// A path stage two just acted on is no longer something a human
+				// has to decide about. Reporting it as "left alone" in the same
+				// run that deleted or downloaded it was a contradiction
+				// (measured: "deleted locally: cloud-gone.txt" immediately above
+				// "1 conflict … left alone").
+				remaining := subtractHandled(plan.hold, stage)
+				if len(remaining) > 0 {
+					reportConflicts(w, p.Name, remaining)
+				}
 				// Held paths must leave the sync set as well, otherwise the upload
 				// pass resurrects a file somebody deleted in the cloud - which is
 				// the exact opposite of "left alone", and would make the report a
 				// lie. Same rule the report policy already applies.
-				paths := make([]string, 0, len(plan.hold))
-				for _, c := range plan.hold {
+				paths := make([]string, 0, len(remaining))
+				for _, c := range remaining {
 					paths = append(paths, c.Path)
 				}
-				excluded, err := excludePaths(ctx, paths)
-				if err != nil {
-					return res, fmt.Errorf("pair %q: %w", p.Name, err)
+				if len(paths) > 0 {
+					excluded, err := excludePaths(ctx, paths)
+					if err != nil {
+						return res, fmt.Errorf("pair %q: %w", p.Name, err)
+					}
+					ctx = excluded
 				}
-				ctx = excluded
-				fmt.Fprintf(w, "  two-way: %d path(s) need a decision and were left alone "+
-					"(see docs/decisions.md D43/D49 for which switches change this)\n",
-					len(plan.hold))
+				if len(remaining) > 0 {
+					fmt.Fprintf(w, "  two-way: %d path(s) need a decision and were left alone "+
+						"(see docs/decisions.md D43/D49 for which switches change this)\n",
+						len(remaining))
+				}
+				res.Held = len(remaining)
 			}
 			// Paths whose cloud copy was just deleted must not be re-uploaded by
 			// the pass below, or the delete is undone immediately.
@@ -328,9 +341,12 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 				ctx = excluded
 			}
 			if pulled > 0 || stage.hasWork() {
+				// replaced is tracked separately rather than derived by subtraction:
+				// renaming the two counts went negative as soon as stage two pulled
+				// more files than stage one did ("-1 replaced, 1 new downloaded").
 				fmt.Fprintf(w, "  two-way: %d replaced, %d new downloaded; "+
 					"%d cloud and %d local deletion(s)\n",
-					pulled-res.NewPulled, res.NewPulled, res.LocalDeleted, res.RemoteDeleted)
+					pulled, res.NewPulled, res.LocalDeleted, res.RemoteDeleted)
 			}
 		}
 	} else {

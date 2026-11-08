@@ -279,15 +279,22 @@ func TestStageTwoPreviewChangesNothing(t *testing.T) {
 	cfg, local, remote := localPair(t, VariantTwoWay, `
 [pair.sync]
 propagate_local_delete = true
+propagate_remote_delete = true
 pull_new_files = true
 `)
 	writeFile(t, filepath.Join(remote, "localdeleted.txt"), "cloud copy")
 	writeFile(t, filepath.Join(remote, "added.txt"), "cloud only")
+	writeFile(t, filepath.Join(local, "clouddeleted.txt"), "local copy")
 
+	mt, sz := fingerprint(t, filepath.Join(local, "clouddeleted.txt"))
 	withConflicts(t, ConflictScan{
 		Available: true,
 		Matched: []Conflict{{
 			Path: "localdeleted.txt", Kind: ConflictKindUnchanged, Found: []string{"tok-1"},
+		}},
+		Conflicts: []Conflict{{
+			Path: "clouddeleted.txt", Kind: ConflictKindRemoteDeleted,
+			RecordedMTime: mt, RecordedSize: sz,
 		}},
 		RemoteAdded: []Conflict{{
 			Path: "added.txt", Kind: ConflictKindRemoteAdded, Found: []string{"tok-2"},
@@ -300,22 +307,62 @@ pull_new_files = true
 	if err != nil {
 		t.Fatalf("preview: %v", err)
 	}
-	if res.LocalDeleted != 1 || res.NewPulled != 1 {
-		t.Errorf("preview should report 1 delete and 1 download, got %d/%d",
-			res.LocalDeleted, res.NewPulled)
+	if res.LocalDeleted != 1 || res.RemoteDeleted != 1 || res.NewPulled != 1 {
+		t.Errorf("preview should report 1 cloud delete, 1 local delete and 1 download, "+
+			"got %d/%d/%d", res.LocalDeleted, res.RemoteDeleted, res.NewPulled)
 	}
+
+	// The whole point: none of it may have happened.
 	if !exists(filepath.Join(remote, "localdeleted.txt")) {
-		t.Error("a preview deleted a cloud file")
+		t.Fatal("a PREVIEW deleted a cloud file")
+	}
+	if !exists(filepath.Join(local, "clouddeleted.txt")) {
+		t.Fatal("a PREVIEW deleted a local file")
 	}
 	if exists(filepath.Join(local, "added.txt")) {
-		t.Error("a preview downloaded a file")
+		t.Fatal("a PREVIEW downloaded a file")
 	}
 	if len(*forgotten) != 0 {
 		t.Errorf("a preview dropped baselines: %v", *forgotten)
 	}
 	if !strings.Contains(out.String(), "would delete in cloud") ||
+		!strings.Contains(out.String(), "would delete locally") ||
 		!strings.Contains(out.String(), "would download new file") {
-		t.Errorf("the preview should describe both actions\n%s", out.String())
+		t.Errorf("the preview should describe all three actions\n%s", out.String())
+	}
+}
+
+// The regression that started this: rclone's GLOBAL --dry-run switched rclone's
+// own pass to a dry run while this package's deletions ran for real, so
+// `run --dry-run` deleted a cloud file. Any flag meaning "change nothing" has to
+// reach Options.DryRun; cmd/run is what maps it, and this test pins the contract
+// the mapping depends on.
+func TestDryRunNeverDeletes(t *testing.T) {
+	cfg, local, remote := localPair(t, VariantTwoWay, `
+[pair.sync]
+propagate_local_delete = true
+propagate_remote_delete = true
+`)
+	writeFile(t, filepath.Join(remote, "cloudonly.txt"), "must survive")
+	writeFile(t, filepath.Join(local, "localonly.txt"), "must survive")
+	_ = local
+
+	withConflicts(t, ConflictScan{
+		Available: true,
+		Matched: []Conflict{{
+			Path: "cloudonly.txt", Kind: ConflictKindUnchanged, Found: []string{"tok-1"},
+		}},
+	})
+	withBaseline(t)
+
+	for _, dry := range []bool{true, true} { // twice, to catch a state-dependent leak
+		if _, err := RunPair(context.Background(), cfg, &cfg.Pair[0], io.Discard,
+			Options{DryRun: dry}); err != nil {
+			t.Fatalf("preview: %v", err)
+		}
+		if !exists(filepath.Join(remote, "cloudonly.txt")) {
+			t.Fatal("the cloud file was deleted during a dry run")
+		}
 	}
 }
 

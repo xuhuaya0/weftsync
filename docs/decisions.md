@@ -2207,3 +2207,103 @@ pair "kb" has 1 conflict(s) … NOTHING was uploaded, overwritten or deleted.
 单测：`TestKeepBothRecordsTheCloudCopyAsBaseline`（检查传给 adopt 的 token 与
 本地指纹）、`TestKeepBothRefusesToRecordANonexistentToken`（空/`?` 都拒绝）、
 `TestKeepBothAdoptFailsWhenThePathIsGone`、`TestConflictErrorWordingMatchesWhatHappened`。
+
+---
+
+## D49 · 并发上传会把同一个目录创建成多份，而 F9 第二期差点因此删掉正常的本地文件（2026-11-08）
+
+这一条记录的是一次真实事故链：一个从没被测过的并发路径，一个因此产生的
+数据分裂，以及它差点让第二期的「云端删了也删本地」删掉完全正常的文件。
+
+### 现象
+
+跑 F9 第二期验证时，5 个文件上传进一个新建子目录，`transferred 5`，
+第二轮却报 3 个 `remote-deleted`：
+
+```
+f1.txt  remote-deleted   the file recorded in the snapshot is no longer in the folder
+f2.txt  remote-deleted   ...
+f3.txt  remote-deleted   ...
+```
+
+而递归列出整个云端，三个文件明明都在。
+
+### 根因：并发的「检查-然后创建」
+
+rclone 默认 8 个并发传输。每个上传都走 `resolvePutParent`：
+
+```
+resolver.resolveDir(parent)  ->  不存在
+f.Mkdir(ctx, parent)         ->  列父目录，没找到同名子目录，创建一个
+```
+
+8 个 goroutine 同时判定「不存在」，于是各建一个。真机实测（用原始 API 列出）：
+
+```
+4x folder   s2raw  token=[Uytv…, LVcu…, XIZd…, Y7sm…]
+3x folder   s2lag  token=[K3ak…, N2fB…, Rmmv…]
+3x folder   stage2 token=[Jk9T…, Scqp…, Unso…]
+```
+
+文件被分散到各个副本里。之后任何一次「按名字解析路径」只会命中**其中一份**，
+另一份里的文件对这次运行就是「不存在」——于是被报成 `remote-deleted`。
+
+**这就是为什么它一直没被发现**：之前的验证要么是扁平目录，要么目标目录已经存在
+（`resolveDir` 直接成功，根本不进 `Mkdir`）。要触发它必须同时满足
+「目标是新建子目录」+「子目录里文件数 > 1」。
+
+### 为什么它危险
+
+在这之前，`remote-deleted` 只是「报告、不动手」，最多算烦人。
+但 D43/D49 的三号开关 `propagate_remote_delete` 一旦打开，这条链路就变成：
+
+```
+列表只能看到一份副本
+  -> 另一份里的文件被判定为"云端已删除"
+  -> 本地那份被 os.Remove 删掉
+```
+
+**用户一个字都没改，本地文件就没了，而且不可恢复。**
+这正是我在给第二期加开关时必须重新验证第一期的原因：
+一个只读的误报是无害的，同一份误报接到一个写操作上就是数据丢失。
+
+### 修法
+
+`Fs.Mkdir` 加 `mkdirMu` 串行化「检查-然后创建」，并把检查改用 `listFresh`
+（不信缓存：另一个 goroutine 可能刚建好，而缓存里还是没有）。
+
+单锁足够：临界区只有一次列目录加最多一次创建，且只在目录确实不存在时才进入。
+已存在目录的上传路径根本不走 `Mkdir`，所以常见情况零成本。
+
+### 验证
+
+- 单测 `TestConcurrentUploadCreatesOneFolder`：8 个 goroutine 并发 `Put`
+  进同一个新目录，断言**恰好 1 个**目录且里面 8 个文件。
+  把锁去掉后连跑 5 次，分别创建了 5/5/4/5/3 个同名目录 —— 与真机现象一致。
+- 真机：8 文件并发上传进新目录 → `folders named 'racefix': 1`，内部 8 个文件，
+  第二轮 `transferred 0`、无幽灵删除。
+- 清理：`purge test:path` 按名字只删一份，删不掉其余副本；
+  新写了 `.scratch/cleanup_dups.py` 按名字列出**所有**副本并逐个删除。
+
+### 顺带修掉的第二个 dry-run 缺陷
+
+同一轮验证还发现：`run --dry-run` **真的删掉了云端文件**。
+
+原因是 `--dry-run` 是 rclone 的**全局** 标志，它只把 rclone 自己那一趟变成 dry run，
+并不会传给 `job.Options.DryRun`。于是出现了最坏的组合：
+
+- rclone 的同步那一趟：`would copy`，什么都没做
+- 我们自己的第二期删除：**真的执行了**
+
+修法：`cmd/run` 里 `plan := dryRun || fs.GetConfig(ctx).DryRun`，两个标志都算。
+回归测试 `TestDryRunNeverDeletes` 与 `TestStageTwoPreviewChangesNothing`
+（后者要求在 dry run 下云端、本地、下载三个方向都零变化）。
+
+### 教训
+
+1. **并发路径必须显式测**。单线程单测全绿，掩盖了 8 路并发下的检查-创建竞态。
+2. **只读误报升级成写操作之前，要重新跑一遍会喂给它数据的全部路径**。
+   `propagate_remote_delete` 吃的是 `remote-deleted`，而那个信号的可靠性
+   在它还是只读报告时没人认真查过。
+3. **「dry run」必须是一个贯穿全层的概念**，不能是「rclone 那一层 dry」。
+   两个不同的 dry-run 标志各管一半，是最容易让人放心地丢数据的组合。

@@ -15,6 +15,7 @@ import (
 	"os"
 
 	"github.com/rclone/rclone/cmd"
+	"github.com/rclone/rclone/fs"
 	"github.com/spf13/cobra"
 
 	"weftsync/job"
@@ -83,12 +84,20 @@ root = "team/docs"
 			}
 
 			w := io.Writer(os.Stdout)
-			if dryRun {
+
+			// rclone's --dry-run is a GLOBAL flag, so it never reaches
+			// job.Options on its own. It does switch rclone's own pass to a dry
+			// run, which creates a dangerous mix: the sync pass reports "would
+			// copy" while this package's own deletions and downloads run for
+			// real. Measured before the fix - `run --dry-run` deleted a cloud
+			// file. Either flag means "change nothing", so both are honoured.
+			plan := dryRun || fs.GetConfig(ctx).DryRun
+			if plan {
 				fmt.Fprintln(w, "plan mode: nothing will be changed")
 			}
 
-			results, runErr := job.Run(ctx, cfg, w, job.Options{DryRun: dryRun})
-			printSummary(w, results, dryRun)
+			results, runErr := job.Run(ctx, cfg, w, job.Options{DryRun: plan})
+			printSummary(w, results, plan)
 			return runErr
 		})
 	},

@@ -40,6 +40,20 @@ type Fs struct {
 	// deletions for this run (contracts/state-file-format.md §5).
 	repair       bool
 	repairReason string
+
+	// mkdirMu serialises "does this folder exist? if not, create it".
+	//
+	// Without it, rclone's parallel transfers race: every goroutine lists the
+	// parent, sees the target folder missing, and creates its own. Measured on the
+	// real tenant - uploading 5 files into a NEW subfolder produced 4 folders with
+	// the same name, and each one held a couple of the files. The listing side then
+	// resolves the name to a single copy and reports the others as
+	// `remote-deleted`, which with propagate_remote_delete on would delete local
+	// files that are perfectly fine.
+	//
+	// A single lock is enough: the critical section is one list plus at most one
+	// create, and it only runs for a folder that does not exist yet.
+	mkdirMu sync.Mutex
 }
 
 // newFs builds the backend, validating credentials and the root folder.
@@ -325,6 +339,11 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 		return nil // the configured root_token folder always exists
 	}
 
+	// See mkdirMu: the check-then-create below is the race, and
+	// mkdir_race_test.go fails if this lock is removed.
+	f.mkdirMu.Lock()
+	defer f.mkdirMu.Unlock()
+
 	current := f.resolver.rootToken
 	pathSoFar := ""
 
@@ -334,7 +353,10 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 		}
 		pathSoFar = joinPath(pathSoFar, segment)
 
-		entries, err := f.resolver.listCached(ctx, current)
+		// A fresh listing, not the cache: another goroutine may have created this
+		// folder after our cache was filled, and believing the cache would create
+		// a second copy of it.
+		entries, err := f.resolver.listFresh(ctx, current)
 		if err != nil {
 			return err
 		}
