@@ -336,6 +336,13 @@
       <div style="margin-top:6px;color:var(--muted)">
         字段留空 = 不修改；要清除已存的值，勾选右侧的「清除」。
       </div>
+      <div style="margin-top:8px">
+        <strong>威胁模型要说清楚：</strong>rclone 的「模糊」（obscure）是
+        <strong>混淆，不是加密</strong> —— 它用一个固定算法把明文转成不可读的串，
+        但没有密钥保护。换句话说：<strong>能读到这个配置文件的人，就能还原出 app_secret</strong>。
+        这里能保证的是「文件不给别人读」（权限 0600），以及「密钥不出现在网页上」。
+        如果需要防止本地磁盘被读，请用操作系统级的加密（BitLocker / LUKS / FileVault）。
+      </div>
     </div>
     <div id="cred-body" class="empty">载入中…</div>
   </div>
