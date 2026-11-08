@@ -132,6 +132,23 @@ type SyncSpec struct {
 	// MaxDeleteSize caps the total bytes one run may delete, e.g. "1G". An
 	// empty string means no byte limit.
 	MaxDeleteSize string `toml:"max_delete_size"`
+
+	// The three two-way propagation switches. All default to false, and each is
+	// separate because they fail very differently:
+	//
+	//	PropagateLocalDelete   local gone -> delete the cloud copy; undoable when
+	//	                       deletion = "versioning", otherwise permanent.
+	//	PropagateRemoteDelete  cloud gone -> delete the local file; NOT undoable.
+	//	PullNewFiles           cloud gained it -> download; writes cloud content
+	//	                       onto the local disk.
+	//
+	// Turning one on at a time is the only way the blast radius stays readable.
+	PropagateLocalDelete  bool `toml:"propagate_local_delete"`
+	PropagateRemoteDelete bool `toml:"propagate_remote_delete"`
+	PullNewFiles          bool `toml:"pull_new_files"`
+	// MaxPullSize bounds one downloaded new file, e.g. "100M". Empty means
+	// DefaultMaxPullSize.
+	MaxPullSize string `toml:"max_pull_size"`
 }
 
 // Load reads and validates a job file.
@@ -313,8 +330,48 @@ func (p *Pair) EffectiveSync(c *Config) (ResolvedSync, error) {
 			"pair %q: unknown conflict policy %q (expected %q, %q or %q)",
 			p.Name, out.Conflict, ConflictReport, ConflictOverwrite, ConflictKeepBoth)
 	}
+
+	// The three two-way switches. A pair can set them; the job-level values act
+	// as defaults, like every other sync setting.
+	out.PropagateLocalDelete = pickBool(p.Sync.PropagateLocalDelete, c.Job.Sync.PropagateLocalDelete)
+	out.PropagateRemoteDelete = pickBool(p.Sync.PropagateRemoteDelete, c.Job.Sync.PropagateRemoteDelete)
+	out.PullNewFiles = pickBool(p.Sync.PullNewFiles, c.Job.Sync.PullNewFiles)
+
+	if size := firstNonEmpty(p.Sync.MaxPullSize, c.Job.Sync.MaxPullSize); size != "" {
+		var parsed fs.SizeSuffix
+		if err := parsed.Set(size); err != nil {
+			return out, fmt.Errorf(
+				"pair %q: max_pull_size %q is not a size (try \"100M\" or \"1G\"): %w",
+				p.Name, size, err)
+		}
+		if parsed <= 0 {
+			return out, fmt.Errorf(
+				"pair %q: max_pull_size must be > 0; leave it unset to use the default", p.Name)
+		}
+		out.MaxPullSize = int64(parsed)
+	}
+
+	// These switches only mean something for a two-way pair. Silently ignoring
+	// them would leave somebody believing deletions are propagating when they are
+	// not, which is the worst possible misunderstanding for this feature.
+	if out.PropagateLocalDelete || out.PropagateRemoteDelete || out.PullNewFiles {
+		if v, _ := p.EffectiveVariant(c); v != VariantTwoWay {
+			return out, fmt.Errorf(
+				"pair %q: propagate_local_delete / propagate_remote_delete / pull_new_files "+
+					"only apply to variant = %q, but this pair is %q. "+
+					"Either change the variant or remove the switches",
+				p.Name, VariantTwoWay, v)
+		}
+	}
 	return out, nil
 }
+
+// pickBool lets a pair override a job-level boolean; the pair value wins only
+// when it is true, because "false" is indistinguishable from "unset" in a TOML
+// bool. That is the same trade-off max_delete avoids with a pointer, and here it
+// is the right one: these switches turn behaviour ON, so failing to see one must
+// mean "off".
+func pickBool(pair, jobLevel bool) bool { return pair || jobLevel }
 
 // ResolvedSync is the effective setting for one pair after merging defaults.
 type ResolvedSync struct {
@@ -328,6 +385,13 @@ type ResolvedSync struct {
 	// MaxDeleteSizeText is the same value as the user wrote it, so the
 	// configuration form can show "1G" instead of 1073741824.
 	MaxDeleteSizeText string
+
+	// The two-way propagation switches; see SyncSpec for what each one does.
+	PropagateLocalDelete  bool
+	PropagateRemoteDelete bool
+	PullNewFiles          bool
+	// MaxPullSize is the per-file download ceiling in bytes, 0 for the default.
+	MaxPullSize int64
 }
 
 // LocalPath is the rclone path for the local side.

@@ -49,6 +49,17 @@ const (
 	ConflictKindDuplicateName  = "duplicate-name"
 )
 
+// Kinds the job layer synthesises from the extra lists rather than receiving as
+// conflicts. They are not problems; they describe the two sides lining up, which
+// is what a two-way run needs before it can decide anything.
+const (
+	// ConflictKindUnchanged marks a path whose recorded cloud token is still in
+	// place. Its presence plus a missing local file means "deleted locally".
+	ConflictKindUnchanged = "unchanged"
+	// ConflictKindRemoteAdded marks a file the folder gained since the last sync.
+	ConflictKindRemoteAdded = "remote-added"
+)
+
 // ConflictScan is the result of asking the backend about conflicts.
 type ConflictScan struct {
 	// Available is false when there is no baseline to compare against, which is
@@ -56,6 +67,13 @@ type ConflictScan struct {
 	Available bool
 	Summary   string
 	Conflicts []Conflict
+	// Matched are the paths whose recorded cloud token is unchanged. A two-way
+	// run needs these to recognise a local deletion: "the cloud still holds what
+	// we recorded, and the local file is gone".
+	Matched []Conflict
+	// RemoteAdded are files the folder gained since the last sync. Empty on a
+	// first run, where every file would qualify.
+	RemoteAdded []Conflict
 }
 
 // detectConflictsFn is the conflict source RunPair uses.
@@ -106,6 +124,8 @@ func detectConflicts(ctx context.Context, fdst fs.Fs, dir string) (ConflictScan,
 			Found         []string `json:"found"`
 			Detail        string   `json:"detail"`
 		} `json:"conflicts"`
+		Matched     []jsonConflict `json:"matched"`
+		RemoteAdded []jsonConflict `json:"remote_added"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return ConflictScan{}, fmt.Errorf("detect conflicts: decode: %w", err)
@@ -137,7 +157,37 @@ func detectConflicts(ctx context.Context, fdst fs.Fs, dir string) (ConflictScan,
 	sort.SliceStable(scan.Conflicts, func(i, j int) bool {
 		return scan.Conflicts[i].Path < scan.Conflicts[j].Path
 	})
+
+	scan.Matched = toConflicts(parsed.Matched, ConflictKindUnchanged)
+	scan.RemoteAdded = toConflicts(parsed.RemoteAdded, ConflictKindRemoteAdded)
 	return scan, nil
+}
+
+// jsonConflict is one entry of the matched / remote_added lists.
+type jsonConflict struct {
+	Dir           string   `json:"dir"`
+	Name          string   `json:"name"`
+	Recorded      string   `json:"recorded"`
+	RecordedMTime int64    `json:"recorded_mtime"`
+	RecordedSize  int64    `json:"recorded_size"`
+	Found         []string `json:"found"`
+}
+
+// toConflicts flattens dir+name into a path and stamps the kind on.
+func toConflicts(in []jsonConflict, kind string) []Conflict {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Conflict, 0, len(in))
+	for _, c := range in {
+		out = append(out, Conflict{
+			Path: path.Join(c.Dir, c.Name), Kind: kind,
+			Recorded: c.Recorded, Found: c.Found,
+			RecordedMTime: c.RecordedMTime, RecordedSize: c.RecordedSize,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
 }
 
 // reportConflicts prints a table and returns the paths involved.

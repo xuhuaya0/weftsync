@@ -237,6 +237,11 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 
 	// Read at most cap+1 bytes so an oversized stream is detected without
 	// buffering the whole thing.
+	//
+	// The +1 is load-bearing: with a plain cap, a stream a single byte too long
+	// would be truncated to the cap and uploaded as if complete - no error, a
+	// healthy-looking token, and a file that is quietly wrong. route_test.go
+	// fails if this becomes just MaxDirectUpload.
 	limited := io.LimitReader(in, MaxDirectUpload+1)
 	content, err := io.ReadAll(limited)
 	if err != nil {

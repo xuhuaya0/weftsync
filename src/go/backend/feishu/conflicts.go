@@ -70,6 +70,20 @@ type conflictReport struct {
 	Available bool `json:"available"`
 	// Conflicts is sorted by Dir then Name.
 	Conflicts []conflictItem `json:"conflicts"`
+	// Matched lists the paths whose recorded token is still the one carrying the
+	// name.
+	//
+	// They are not conflicts, but a two-way run needs them: "the cloud still has
+	// exactly what we recorded, and the local file is gone" is how a local
+	// deletion is recognised. The backend can supply that because it has already
+	// scanned both sides; the job layer cannot see the local filesystem.
+	Matched []conflictItem `json:"matched,omitempty"`
+	// RemoteAdded lists paths that exist in the folder but never in the snapshot.
+	//
+	// Again not a conflict - it is how a file somebody put in Feishu is
+	// recognised. An empty snapshot means "first run", where every file would
+	// qualify, so RemoteAdded is only populated when the snapshot has entries.
+	RemoteAdded []conflictItem `json:"remote_added,omitempty"`
 	// Checked is how many files were compared.
 	Checked int `json:"checked"`
 	// Summary is a one-line outcome.
@@ -104,6 +118,13 @@ func (f *Fs) conflictsCommand(ctx context.Context, dir string) (*conflictReport,
 
 		tokens := remote[path]
 		switch {
+		case len(tokens) == 1 && tokens[0] == entry.RemoteToken:
+			// Still the file we uploaded: eligible for a local-deletion decision.
+			report.Matched = append(report.Matched, conflictItem{
+				Dir: parentDir(path), Name: baseName(path),
+				Recorded: entry.RemoteToken, Found: tokens,
+				RecordedMTime: entry.LocalMTime, RecordedSize: entry.LocalSize,
+			})
 		case len(tokens) == 0:
 			report.Conflicts = append(report.Conflicts, conflictItem{
 				Dir: parentDir(path), Name: baseName(path),
@@ -131,11 +152,26 @@ func (f *Fs) conflictsCommand(ctx context.Context, dir string) (*conflictReport,
 
 	// Signal 3: duplicates at paths the snapshot never recorded. Those matter too
 	// - they are somebody else's copies, and a sync would silently pick one.
+	//
+	// A file with exactly one token and no record is not a conflict, but it IS a
+	// file the cloud gained, which a two-way run may want to download.
+	snapshotEmpty := report.Checked == 0
 	for path, tokens := range remote {
-		if seen[path] || len(tokens) < 2 {
+		if seen[path] {
 			continue
 		}
 		if dir != "" && path != dir && !hasPathPrefix(path, dir) {
+			continue
+		}
+		if len(tokens) < 2 {
+			// On a first run every file is "unrecorded". Reporting them would
+			// turn the initial sync into a download of the entire cloud folder,
+			// which is the opposite of what the user asked for.
+			if !snapshotEmpty && len(tokens) == 1 {
+				report.RemoteAdded = append(report.RemoteAdded, conflictItem{
+					Dir: parentDir(path), Name: baseName(path), Found: tokens,
+				})
+			}
 			continue
 		}
 		report.Conflicts = append(report.Conflicts, conflictItem{

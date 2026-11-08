@@ -122,6 +122,12 @@ type PairResult struct {
 	Conflicts []Conflict `json:"conflicts,omitempty"`
 	// Pulled counts files downloaded because the cloud replaced them (two-way).
 	Pulled int `json:"pulled"`
+	// NewPulled counts files downloaded because the cloud gained them.
+	NewPulled int `json:"new_pulled"`
+	// LocalDeleted counts cloud copies removed because the local file was gone.
+	LocalDeleted int `json:"local_deleted"`
+	// RemoteDeleted counts local files removed because the cloud copy was gone.
+	RemoteDeleted int `json:"remote_deleted"`
 	// Held counts conflicts a two-way run left for a human: deletions and files
 	// that only exist in the cloud.
 	Held int `json:"held"`
@@ -267,6 +273,28 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 			if pullErr != nil {
 				return res, fmt.Errorf("pair %q: %w", p.Name, pullErr)
 			}
+
+			// Stage two: the three propagation switches. They come from the job file
+			// and nothing else - a second source of truth (a flag, an API field)
+			// would let `weftsync run` and the daemon disagree about whether
+			// deletions propagate, which is the one thing that must never be
+			// ambiguous here.
+			twoOpt := TwoWayOptions{
+				PropsLocalDelete:  spec.PropagateLocalDelete,
+				PropsRemoteDelete: spec.PropagateRemoteDelete,
+				PullNewFiles:      spec.PullNewFiles,
+				MaxPullSize:       spec.MaxPullSize,
+			}
+			stage := planStageTwo(ctx, fsrc, scan, twoOpt)
+			if stage.hasWork() || len(stage.skipped) > 0 {
+				dl, dr, np, applyErr := applyStageTwo(ctx, p, stage, opt.DryRun, w)
+				res.LocalDeleted, res.RemoteDeleted, res.NewPulled = dl, dr, np
+				res.Pulled += np
+				if applyErr != nil {
+					return res, fmt.Errorf("pair %q: %w", p.Name, applyErr)
+				}
+			}
+
 			if len(plan.hold) > 0 {
 				reportConflicts(w, p.Name, plan.hold)
 				// Held paths must leave the sync set as well, otherwise the upload
@@ -283,11 +311,26 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 				}
 				ctx = excluded
 				fmt.Fprintf(w, "  two-way: %d path(s) need a decision and were left alone "+
-					"(deletions and cloud-only files are not propagated; see docs/decisions.md D43)\n",
+					"(see docs/decisions.md D43/D49 for which switches change this)\n",
 					len(plan.hold))
 			}
-			if len(plan.pullable) > 0 {
-				fmt.Fprintf(w, "  two-way: downloaded %d replaced file(s)\n", pulled)
+			// Paths whose cloud copy was just deleted must not be re-uploaded by
+			// the pass below, or the delete is undone immediately.
+			var gone []string
+			for _, c := range stage.localDeleted {
+				gone = append(gone, c.Path)
+			}
+			if len(gone) > 0 && !opt.DryRun {
+				excluded, err := excludePaths(ctx, gone)
+				if err != nil {
+					return res, fmt.Errorf("pair %q: %w", p.Name, err)
+				}
+				ctx = excluded
+			}
+			if pulled > 0 || stage.hasWork() {
+				fmt.Fprintf(w, "  two-way: %d replaced, %d new downloaded; "+
+					"%d cloud and %d local deletion(s)\n",
+					pulled-res.NewPulled, res.NewPulled, res.LocalDeleted, res.RemoteDeleted)
 			}
 		}
 	} else {
