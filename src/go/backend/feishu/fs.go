@@ -68,8 +68,7 @@ type Fs struct {
 }
 
 // newFs builds the backend, validating credentials and the root folder.
-func newFs(ctx context.Context, name, root string, opt *Options) (*Fs, error) {
-	missing, secretForms := opt.resolveEnv()
+func newFs(ctx context.Context, name, root string, opt *Options) (*Fs, error) {	missing, secretForms := opt.resolveEnv()
 	if len(missing) > 0 {
 		return nil, fmt.Errorf(
 			"feishu: missing required configuration: %s.\n"+
@@ -560,4 +559,29 @@ func isNotFound(err error) bool {
 		return apiErr.Code == CodeParentNotFound
 	}
 	return errors.Is(err, fs.ErrorDirNotFound) || errors.Is(err, fs.ErrorObjectNotFound)
+}
+
+// SetAbortHook registers a function to run when the backend decides that this
+// run cannot make progress.
+//
+// The intended use is cancelling the pass context: rclone keeps walking the tree
+// after individual failures, which is right for one bad file and catastrophic
+// for a systemic one.
+func (f *Fs) SetAbortHook(fn func()) {
+	if f.client != nil {
+		f.client.onSystemic = fn
+	}
+}
+
+// SystemicFailure reports why this backend stopped being able to make progress,
+// or nil while it still can.
+//
+// Exported rather than folded into the error path because rclone reports a
+// cancelled transfer as an ordinary per-file failure: without asking the backend
+// directly, a quota exhaustion would look like thousands of unrelated errors.
+func (f *Fs) SystemicFailure() error {
+	if f.client == nil {
+		return nil
+	}
+	return f.client.systemicError()
 }

@@ -117,11 +117,17 @@ func TestBlockRetryReportsExhaustion(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected exhaustion to fail the upload")
 	}
-	// client.do already retries maxAttempts times per call, and we make
-	// blockRetries calls, so the server sees the product of the two.
-	want := int32(maxAttempts * blockRetries)
+	// The server sees maxAttempts calls per client.do exhaustion, but only until
+	// the systemic latch trips: after systemicStrikes consecutive exhaustions the
+	// client stops calling altogether (see systemic_test.go for why - the old
+	// behaviour of grinding through every remaining file cost about ten days on a
+	// real 74,313-file migration once the daily quota was gone).
+	//
+	// The block-level loop still runs all blockRetries rounds and still reports
+	// "4 attempt(s)" below; the later rounds simply fail instantly.
+	want := int32(maxAttempts * systemicStrikes)
 	if got := atomic.LoadInt32(calls); got != want {
-		t.Errorf("upload_part calls = %d, want %d", got, want)
+		t.Errorf("upload_part calls = %d, want %d (calls stop once the client latches)", got, want)
 	}
 	if !strings.Contains(err.Error(), "after 4 attempt(s)") {
 		t.Errorf("the error should report the attempt count\ngot: %v", err)

@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -23,6 +25,27 @@ const (
 	defaultTimeout  = 60 * time.Second
 	maxResponseSize = 8 << 20 // 8MB, generous for JSON listings
 )
+
+// systemicStrikes is how many calls in a row may exhaust their retry budget
+// before the run is declared unable to make progress.
+//
+// The number matters for a real migration. Measured defaults: our transport
+// retries a retryable code 3 times (~3s), and rclone retries the whole sync 3
+// more times. A full quota run is 74,313 files. If each file burned its retries
+// against a systemic failure (daily upload quota gone, network down, credentials
+// revoked) the run would spend roughly 64,000 x 3.5s x 4 passes - about ten days
+// of doing nothing but failing.
+//
+// A single per-file problem does not count: those are non-retryable and fail
+// once, immediately. Only "the server kept rejecting us after every retry"
+// counts, and three of those in a row is never a coincidence.
+const systemicStrikes = 3
+
+// ErrSystemicFailure is returned once the client has decided that no further
+// call can succeed. Retrying it is pointless: the run has to stop and resume
+// later.
+var ErrSystemicFailure = errors.New("feishu: consecutive calls still failed after every retry; " +
+	"stopping instead of retrying the remaining files")
 
 // client is a thin Feishu Open API transport.
 //
@@ -45,6 +68,19 @@ type client struct {
 	limiter *rate.Limiter
 	// moveLimiter spaces move calls, which Feishu caps at 20/minute.
 	moveLimiter *rate.Limiter
+
+	// consecutive tracks calls that exhausted their retry budget without a
+	// success in between; it is reset by any successful call. systemic latches
+	// once it reaches systemicStrikes, after which every call fails instantly
+	// instead of hammering a server that is refusing us anyway.
+	consecutive atomic.Int32
+	systemic    atomic.Bool
+	// systemicCause keeps the last underlying error, so the report can say what
+	// actually went wrong rather than only that something did.
+	systemicCause atomic.Pointer[error]
+	// onSystemic runs once, when the latch trips. RunPair uses it to cancel the
+	// pass so rclone stops instead of walking the rest of the tree.
+	onSystemic func()
 }
 
 func newClient(baseURL string, ts *tokenSource, hc *http.Client) *client {
@@ -129,9 +165,18 @@ func (c *client) do(ctx context.Context, r request) (*result, error) {
 		tokenRetried bool
 	)
 
+	// Once the latch is set, every remaining call in this run is hopeless. Fail
+	// without touching the network: a migration that runs out of daily quota has
+	// tens of thousands of files left, and giving each one three HTTP round trips
+	// is what turns an early stop into a ten-day stall.
+	if c.systemic.Load() {
+		return nil, fmt.Errorf("%s: %w", r.where, ErrSystemicFailure)
+	}
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		res, err := c.once(ctx, r)
 		if err == nil {
+			c.consecutive.Store(0)
 			return res, nil
 		}
 		lastErr = err
@@ -149,6 +194,10 @@ func (c *client) do(ctx context.Context, r request) (*result, error) {
 
 		case classRetryable:
 			if attempt == maxAttempts {
+				c.noteExhausted(err)
+				if c.systemic.Load() {
+					return nil, fmt.Errorf("%s: %w", r.where, ErrSystemicFailure)
+				}
 				return nil, fmt.Errorf("%s: giving up after %d attempts: %w", r.where, attempt, err)
 			}
 			c.sleep(c.jitter(backoff))
@@ -164,6 +213,38 @@ func (c *client) do(ctx context.Context, r request) (*result, error) {
 	}
 
 	return nil, lastErr
+}
+
+// noteExhausted records a call that failed through its whole retry budget.
+//
+// Only retryable codes reach here, so a file that the server rejects for its own
+// reasons (bad name, too large, no permission) does not count: those fail once
+// and never retry. What counts is the server repeatedly refusing something it
+// said was worth retrying.
+func (c *client) noteExhausted(err error) {
+	n := c.consecutive.Add(1)
+	if n < systemicStrikes {
+		return
+	}
+	if !c.systemic.CompareAndSwap(false, true) {
+		return // another goroutine already tripped it
+	}
+	e := err
+	c.systemicCause.Store(&e)
+	if c.onSystemic != nil {
+		c.onSystemic()
+	}
+}
+
+// systemicError reports the latched failure, or nil.
+func (c *client) systemicError() error {
+	if !c.systemic.Load() {
+		return nil
+	}
+	if p := c.systemicCause.Load(); p != nil {
+		return *p
+	}
+	return ErrSystemicFailure
 }
 
 // jitter applies +/-20% to d.

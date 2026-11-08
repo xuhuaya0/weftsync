@@ -251,6 +251,13 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	// the next run would upload them a second time.
 	defer flushStateOf(fdst, w)
 
+	// A pass that has hit a systemic failure must stop, not grind through the
+	// rest of the tree. rclone keeps going after individual failures - correct
+	// for one bad file, useless when every call is being refused.
+	ctx, abortPass := context.WithCancel(ctx)
+	defer abortPass()
+	installAbortHook(fdst, abortPass)
+
 	fsrc, err := fs.NewFs(ctx, p.LocalPath())
 	if err != nil {
 		return res, fmt.Errorf("pair %q: open source %q: %w", p.Name, p.LocalPath(), err)
@@ -409,6 +416,11 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	dry, err := runPass(ctx, fdst, fsrc, dryOpts, true, true)
 	res.DryRun = dry
 	if err != nil {
+		// A systemic stop is not a threshold trip: re-measuring would just fail
+		// again, and the caller needs the real reason.
+		if IsSystemic(err) {
+			return res, err
+		}
 		// rclone reports a byte-ceiling trip as a plain "failed to delete N
 		// files" and keeps the real cause in the log, so the error says nothing
 		// about which threshold stopped it. Re-measure with the ceiling off: a
@@ -650,7 +662,39 @@ func runPass(ctx context.Context, fdst, fsrc fs.Fs, opts passOptions, dryRun, de
 			}
 		}
 	}
+
+	// A pass that stopped because the backend can no longer make progress has to
+	// say so: rclone reports a cancelled transfer as an ordinary per-file failure,
+	// so the counts above look like scattered problems rather than one cause.
+	if serr := systemicFailureOf(fdst); serr != nil {
+		return out, &SystemicError{Transferred: out.Transferred, Errors: out.Errors, Cause: serr}
+	}
 	return out, err
+}
+
+// SystemicError reports that a pass stopped early because the destination backend
+// kept refusing calls after every retry.
+//
+// The distinction matters to the operator: this is not "some files failed", it is
+// "give up for now and run again later", and the counts say how far the run got.
+type SystemicError struct {
+	Transferred int64
+	Errors      int64
+	Cause       error
+}
+
+func (e *SystemicError) Error() string {
+	return fmt.Sprintf("stopped after %d transfer(s): the backend could not make progress; "+
+		"run again later and it will continue from the saved state (%v)", e.Transferred, e.Cause)
+}
+
+func (e *SystemicError) Unwrap() error { return e.Cause }
+
+// IsSystemic reports whether err means the run was stopped by the backend rather
+// than by ordinary per-file failures.
+func IsSystemic(err error) bool {
+	var s *SystemicError
+	return errors.As(err, &s)
 }
 
 // withTrashExcluded keeps the versioning folder out of the sync set.
@@ -697,6 +741,42 @@ func flushStateOf(f fs.Fs, w io.Writer) {
 		return
 	}
 	s.FlushState()
+}
+
+// abortHooker is implemented by backends that can tell us they are done for now.
+type abortHooker interface {
+	SetAbortHook(func())
+}
+
+// systemicReporter is implemented by backends that can explain a systemic stop.
+type systemicReporter interface {
+	SystemicFailure() error
+}
+
+// installAbortHook lets the backend cancel the pass.
+//
+// It reports a type-assertion miss instead of staying silent: a backend that
+// cannot do this still works, but a systemic failure then costs a full walk of
+// the tree instead of stopping within seconds.
+func installAbortHook(f fs.Fs, abort func()) {
+	if h, ok := f.(abortHooker); ok {
+		h.SetAbortHook(abort)
+		return
+	}
+	rcloneLogf("note: %T has no abort hook; a systemic failure will not stop the pass early", f)
+}
+
+// systemicFailureOf returns the backend's latched failure, or nil.
+func systemicFailureOf(f fs.Fs) error {
+	if r, ok := f.(systemicReporter); ok {
+		return r.SystemicFailure()
+	}
+	return nil
+}
+
+// rcloneLogf writes to rclone's log without needing a caller's writer.
+func rcloneLogf(format string, args ...any) {
+	fs.Logf(nil, format, args...)
 }
 
 // backupDirFor returns the trash folder path, or "" when deletion is permanent.

@@ -454,9 +454,16 @@ func (c *client) downloadStream(ctx context.Context, token, rangeHeader string) 
 		tokenRetried bool
 	)
 
+	// Downloads hit the same wall as uploads when the tenant is out of quota or
+	// the network is gone; see client.do for why this must not keep trying.
+	if c.systemic.Load() {
+		return nil, fmt.Errorf("%s: %w", where, ErrSystemicFailure)
+	}
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		body, partial, err := c.openDownload(ctx, token, rangeHeader)
 		if err == nil {
+			c.consecutive.Store(0)
 			return &downloadBody{Body: body, Partial: partial}, nil
 		}
 		lastErr = err
@@ -471,6 +478,10 @@ func (c *client) downloadStream(ctx context.Context, token, rangeHeader string) 
 			continue
 		case classRetryable:
 			if attempt == maxAttempts {
+				c.noteExhausted(err)
+				if c.systemic.Load() {
+					return nil, fmt.Errorf("%s: %w", where, ErrSystemicFailure)
+				}
 				return nil, fmt.Errorf("%s: giving up after %d attempts: %w", where, attempt, err)
 			}
 			c.sleep(c.jitter(backoff))
