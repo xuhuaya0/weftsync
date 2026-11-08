@@ -105,7 +105,9 @@ func tomlEscape(s string) string {
 
 func writeSyncSection(b *bytes.Buffer, name string, s SyncSpec) {
 	empty := s.Deletion == "" && s.VersioningDir == "" && s.VersioningNaming == "" &&
-		s.Conflict == "" && s.MaxDelete == nil && s.MaxDeleteSize == ""
+		s.Conflict == "" && s.MaxDelete == nil && s.MaxDeleteSize == "" &&
+		!s.PropagateLocalDelete && !s.PropagateRemoteDelete && !s.PullNewFiles &&
+		s.MaxPullSize == ""
 	if empty {
 		return
 	}
@@ -127,6 +129,20 @@ func writeSyncSection(b *bytes.Buffer, name string, s SyncSpec) {
 	}
 	if s.MaxDeleteSize != "" {
 		writeString(b, "max_delete_size", s.MaxDeleteSize)
+	}
+	// Only written when on: these are booleans whose absent value is already
+	// false, so emitting "= false" would just add noise to every file.
+	if s.PropagateLocalDelete {
+		b.WriteString("propagate_local_delete = true\n")
+	}
+	if s.PropagateRemoteDelete {
+		b.WriteString("propagate_remote_delete = true\n")
+	}
+	if s.PullNewFiles {
+		b.WriteString("pull_new_files = true\n")
+	}
+	if s.MaxPullSize != "" {
+		writeString(b, "max_pull_size", s.MaxPullSize)
 	}
 }
 
@@ -333,6 +349,11 @@ func sameSync(a, b SyncSpec) bool {
 	if a.Deletion != b.Deletion || a.VersioningDir != b.VersioningDir ||
 		a.VersioningNaming != b.VersioningNaming || a.Conflict != b.Conflict ||
 		a.MaxDeleteSize != b.MaxDeleteSize {
+		return false
+	}
+	if a.PropagateLocalDelete != b.PropagateLocalDelete ||
+		a.PropagateRemoteDelete != b.PropagateRemoteDelete ||
+		a.PullNewFiles != b.PullNewFiles || a.MaxPullSize != b.MaxPullSize {
 		return false
 	}
 	if (a.MaxDelete == nil) != (b.MaxDelete == nil) {

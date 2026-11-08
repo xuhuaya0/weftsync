@@ -72,6 +72,15 @@ type SyncView struct {
 	// MaxDeleteSizeHelp is the one-line explanation the form shows.
 	MaxDeleteSizeHelp string `json:"max_delete_size_help"`
 
+	// The three two-way propagation switches. They are meaningless for anything
+	// but variant = "two-way", so the form only shows them when it applies, and
+	// the server refuses them otherwise - a switch that looks on but does nothing
+	// is the worst possible state for a deletion feature.
+	PropagateLocalDelete  bool   `json:"propagate_local_delete"`
+	PropagateRemoteDelete bool   `json:"propagate_remote_delete"`
+	PullNewFiles          bool   `json:"pull_new_files"`
+	MaxPullSize           string `json:"max_pull_size"`
+
 	Deletions []string `json:"deletions"`
 	Namings   []string `json:"namings"`
 	Conflicts []string `json:"conflicts"`
@@ -103,7 +112,11 @@ func syncView(spec job.SyncSpec, resolved job.ResolvedSync) SyncView {
 		MaxDeleteSize:    resolved.MaxDeleteSizeText,
 		MaxDeleteSizeHelp: "单个 run 删除的总字节上限，例如 500M / 1G；留空=不限。" +
 			"按体积拦下时不删任何文件",
-		Deletions: []string{job.DeletionPermanent, job.DeletionVersioning},
+		PropagateLocalDelete:  resolved.PropagateLocalDelete,
+		PropagateRemoteDelete: resolved.PropagateRemoteDelete,
+		PullNewFiles:          resolved.PullNewFiles,
+		MaxPullSize:           resolved.MaxPullSizeText,
+		Deletions:             []string{job.DeletionPermanent, job.DeletionVersioning},
 		Namings: []string{
 			job.NamingReplace, job.NamingTimestampFile, job.NamingTimestampDir,
 		},
@@ -146,11 +159,19 @@ func ViewConfig(e *entry, raw []byte) ConfigView {
 	jobResolved := jobDefaults(cfg)
 
 	v := ConfigView{
-		Name:     e.name,
-		File:     e.file,
-		Enabled:  enabled,
-		Variant:  firstNonEmpty(cfg.Job.Variant, job.DefaultVariant),
-		Variants: []string{job.VariantUpdate, job.VariantMirror},
+		Name:    e.name,
+		File:    e.file,
+		Enabled: enabled,
+		Variant: firstNonEmpty(cfg.Job.Variant, job.DefaultVariant),
+		// two-way belongs here: without it the job-level select cannot represent a
+		// two-way job at all, so the form would submit "update" and the pair would
+		// resolve to a one-way variant while its propagation switches are still on
+		// - which the server then refuses with a message about switches the user
+		// never touched. Measured: saving that form returned 400.
+		//
+		// custom is deliberately absent: it is not implemented, and offering it
+		// would let the UI produce a file the loader rejects.
+		Variants: []string{job.VariantUpdate, job.VariantMirror, job.VariantTwoWay},
 		Schedule: ScheduleView{
 			Mode:         cfg.Job.Schedule.Mode,
 			Interval:     cfg.Job.Schedule.Interval,
@@ -230,8 +251,26 @@ func mergeSync(prev job.SyncSpec, shown, in SyncView) job.SyncSpec {
 	if in.MaxDeleteSize != shown.MaxDeleteSize {
 		out.MaxDeleteSize = strings.TrimSpace(in.MaxDeleteSize)
 	}
+	// The three switches are plain booleans with no "inherit" state: the form
+	// shows the effective value and writes back exactly what it showed or what the
+	// user toggled to.
+	if in.PropagateLocalDelete != shown.PropagateLocalDelete {
+		out.PropagateLocalDelete = in.PropagateLocalDelete
+	}
+	if in.PropagateRemoteDelete != shown.PropagateRemoteDelete {
+		out.PropagateRemoteDelete = in.PropagateRemoteDelete
+	}
+	if in.PullNewFiles != shown.PullNewFiles {
+		out.PullNewFiles = in.PullNewFiles
+	}
+	if in.MaxPullSize != shown.MaxPullSize {
+		out.MaxPullSize = strings.TrimSpace(in.MaxPullSize)
+	}
 	return out
 }
+
+// maxPullSizeText is gone: ResolvedSync.MaxPullSizeText already carries the text
+// the user wrote, which is what the form should show.
 
 // ApplyConfigView writes a submitted view back into the job file.
 //

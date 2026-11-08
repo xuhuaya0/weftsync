@@ -349,6 +349,7 @@ func (p *Pair) EffectiveSync(c *Config) (ResolvedSync, error) {
 				"pair %q: max_pull_size must be > 0; leave it unset to use the default", p.Name)
 		}
 		out.MaxPullSize = int64(parsed)
+		out.MaxPullSizeText = size
 	}
 
 	// These switches only mean something for a two-way pair. Silently ignoring
@@ -392,6 +393,9 @@ type ResolvedSync struct {
 	PullNewFiles          bool
 	// MaxPullSize is the per-file download ceiling in bytes, 0 for the default.
 	MaxPullSize int64
+	// MaxPullSizeText is the same value as the user wrote it, so the form shows
+	// "250M" instead of "250Mi".
+	MaxPullSizeText string
 }
 
 // LocalPath is the rclone path for the local side.

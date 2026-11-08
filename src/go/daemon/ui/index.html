@@ -1701,7 +1701,29 @@ function field(label, inner, hint) {
          (hint ? `<span class="hint">${esc(hint)}</span>` : "") + `</div>`;
 }
 
-function syncFields(prefix, s) {
+function syncFields(prefix, s, effectiveVariant) {
+  // The two-way switches are only rendered for a two-way pair. Showing them
+  // elsewhere would offer a control the server refuses, and a deletion switch
+  // that looks on but does nothing is the worst state this feature can be in.
+  const twoWay = effectiveVariant === "two-way"
+    ? `<div class="note" style="margin:12px 0 8px">
+        <strong>双向传播</strong>——三个开关默认全关，各自独立。
+        「删本地」不可恢复（直接删除，不进回收站）。
+      </div>` +
+      checkField(prefix + "-prop-local-del", "本地删除 → 删除云端那份",
+        s.propagate_local_delete,
+        "你只是把文件挪走（或外接盘没挂）时，云端也会没。versioning 时可撤销") +
+      checkField(prefix + "-prop-remote-del", "云端删除 → 删除本地那份",
+        s.propagate_remote_delete,
+        "不可恢复。只在本地文件自上次同步未变过时才删，改过则保留") +
+      checkField(prefix + "-pull-new", "下载云端新增的文件", s.pull_new_files,
+        "首次同步不生效（快照为空时全部算新增，会把整个云盘拉下来）") +
+      field("单个新文件上限",
+        `<input type="text" id="${prefix}-maxpull" placeholder="100M" ` +
+        `value="${esc(s.max_pull_size || "")}">`,
+        "仅 pull_new_files 生效；留空 = 100M")
+    : "";
+
   return field("删除方式", `<select id="${prefix}-deletion">${opt(s.deletions, s.deletion)}</select>`) +
     field("版本目录", `<input type="text" id="${prefix}-vdir" value="${esc(s.versioning_dir)}">`,
           "仅 versioning 生效") +
@@ -1715,7 +1737,19 @@ function syncFields(prefix, s) {
     field("删除体积上限",
           `<input type="text" id="${prefix}-maxdelsize" placeholder="不限" ` +
           `value="${esc(s.max_delete_size || "")}">`,
-          s.max_delete_size_help);
+          s.max_delete_size_help) +
+    twoWay;
+}
+
+// checkField is a checkbox with a label and an explanation.
+function checkField(id, label, checked, hint) {
+  return `<div class="field">
+    <label class="row" style="gap:8px;align-items:center">
+      <input type="checkbox" id="${id}" ${checked ? "checked" : ""}>
+      <span>${esc(label)}</span>
+    </label>
+    ${hint ? `<span class="hint">${esc(hint)}</span>` : ""}
+  </div>`;
 }
 
 function renderConfig() {
@@ -1748,7 +1782,7 @@ function renderConfig() {
     `<div class="field"><label>文件</label><span class="mono">${esc(v.file)}</span></div>` +
     field("启用", `<input type="checkbox" id="cfg-enabled"${v.enabled ? " checked" : ""}>`) +
     field("变体", `<select id="cfg-variant">${opt(v.variants, v.variant)}</select>`,
-          "update = 只增不减；mirror = 会删除") +
+          "update = 只增不减；mirror = 会删除；two-way = 云端改动也拉回本地") +
 
     `<fieldset><legend>调度</legend>` +
     field("模式", `<select id="cfg-sched-mode">${opt(v.schedule.modes, v.schedule.mode || "none")}</select>`) +
@@ -1761,7 +1795,7 @@ function renderConfig() {
     `</fieldset>` +
 
     `<fieldset><legend>默认同步设置（可被每个 pair 覆盖）</legend>` +
-    syncFields("cfg-sync", v.sync) +
+    syncFields("cfg-sync", v.sync, v.variant) +
     `</fieldset>` +
 
     `<div class="row" style="margin-bottom:8px">
@@ -1787,7 +1821,7 @@ function pairCard(p, i) {
     ${field("state_file", `<input type="text" class="p-state" value="${esc(p.state_file)}">`,
       "留空 = 不做增量，每轮重传")}
     ${field("变体覆盖", `<input type="text" class="p-variant" value="${esc(p.variant)}">`, "留空 = 用作业默认")}
-    ${syncFields("p" + i + "-sync", p.sync)}
+    ${syncFields("p" + i + "-sync", p.sync, p.effective_variant)}
   </div>`;
 }
 
@@ -1817,6 +1851,7 @@ function bindConfig() {
 function collectSync(prefix) {
   const g = id => document.getElementById(id);
   const val = (id) => (g(prefix + "-" + id) ? g(prefix + "-" + id).value : "");
+  const checked = (id) => !!(g(prefix + "-" + id) && g(prefix + "-" + id).checked);
   // An empty box means "inherit the default"; only a typed number is explicit.
   const maxdel = val("maxdel");
   return {
@@ -1827,6 +1862,12 @@ function collectSync(prefix) {
     max_delete: maxdel === "" ? 0 : Number(maxdel),
     max_delete_set: maxdel !== "",
     max_delete_size: val("maxdelsize").trim(),
+    // Absent when the pair is not two-way; false is the right default either way,
+    // because the switch being off is what "not rendered" means.
+    propagate_local_delete: checked("prop-local-del"),
+    propagate_remote_delete: checked("prop-remote-del"),
+    pull_new_files: checked("pull-new"),
+    max_pull_size: val("maxpull").trim(),
   };
 }
 
