@@ -294,6 +294,18 @@
 
 <section id="tab-settings" class="tab hidden">
   <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <strong class="grow">运行信息</strong>
+      <button id="info-refresh">刷新</button>
+    </div>
+    <div class="note" style="margin-bottom:12px">
+      这些是这个进程<strong>实际</strong>在用的东西。排查「为什么行为和预想不一样」时先看这里：
+      作业文件没被列出来，说明它压根没传给 daemon。
+    </div>
+    <div id="info-body" class="empty">载入中…</div>
+  </div>
+
+  <div class="card">
     <strong>开机自启</strong>
     <div id="as-body" class="empty">载入中…</div>
   </div>
@@ -917,7 +929,7 @@ document.querySelectorAll('.tabs button').forEach(btn => {
     document.getElementById('tab-' + btn.dataset.tab).classList.remove('hidden');
     if (btn.dataset.tab === 'config') { syncJobPicker(); loadConfig(); }
     if (btn.dataset.tab === 'split') { loadSplit(); }
-    if (btn.dataset.tab === 'settings') { loadAutostart(); loadCredentials(); }
+    if (btn.dataset.tab === 'settings') { loadInfo(); loadAutostart(); loadCredentials(); }
   });
 });
 
@@ -1226,8 +1238,60 @@ document.getElementById("sp-job").addEventListener("change", () => {
 document.getElementById("sp-check").addEventListener("click", splitCheck);
 document.getElementById("sp-refresh-snaps").addEventListener("click", refreshSnapshots);
 
+// ------------------------------------------------------------------ settings: info
+// Everything here answers a question that used to require reading the command
+// line of the running process: which binary, which job files, which config.
+async function loadInfo() {
+  const body = document.getElementById("info-body");
+  let v;
+  try {
+    v = await getJSON("/api/info");
+  } catch (e) {
+    body.className = "note err";
+    body.textContent = "读取运行信息失败：" + e.message;
+    return;
+  }
+  body.className = "";
+
+  const row = (label, value, mono) => {
+    if (!value && value !== 0) return "";
+    return `<span>${esc(label)}</span>` +
+      `<span class="${mono === false ? "" : "mono"}" style="word-break:break-all">${esc(String(value))}</span>`;
+  };
+  const jobFiles = (v.job_files || []);
+  body.innerHTML = `<div class="plan-grid">
+    ${row("版本", v.version)}
+    ${row("进程", v.goos + " / " + v.goarch + " · " + v.go_version)}
+    ${row("监听地址", v.addr)}
+    ${row("已运行", fmtDuration(v.uptime_seconds))}
+    ${row("启动于", fmtTime(v.started_at))}
+    ${row("rclone 配置", v.config_file || "（未设置，用环境变量或默认位置）")}
+    ${row("拆分账本目录", v.split_dir || "（默认：state 文件旁边）")}
+    ${row("内存中的历史", v.history_runs + " 条")}
+    ${row("内存中的日志", v.log_lines + " 行")}
+  </div>
+  <div class="note" style="margin-top:12px">
+    作业文件（${jobFiles.length}）：${jobFiles.length
+      ? `<div class="mono" style="margin-top:6px">` +
+        jobFiles.map(f => esc(f)).join("<br>") + `</div>`
+      : "一个都没有 —— 这不是正常状态"}
+  </div>`;
+}
+
+function fmtDuration(seconds) {
+  const s = Number(seconds) || 0;
+  if (s < 60) return s + " 秒";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + " 分钟";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + " 小时 " + (m % 60) + " 分";
+  return Math.floor(h / 24) + " 天 " + (h % 24) + " 小时";
+}
+
 // ------------------------------------------------------------------ settings: autostart
 let autostartView = null;
+
+document.getElementById("info-refresh").addEventListener("click", loadInfo);
 
 async function loadAutostart() {
   const body = document.getElementById("as-body");

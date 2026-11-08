@@ -187,6 +187,25 @@ func (d *Daemon) notifyf(title, format string, args ...any) {
 	fn(title, fmt.Sprintf(format, args...))
 }
 
+// HistoryLen is how many run records this process still holds.
+func (d *Daemon) HistoryLen() int {
+	if d.history == nil {
+		return 0
+	}
+	return d.history.len()
+}
+
+// LogLen is how many log lines this process still holds.
+func (d *Daemon) LogLen() int {
+	d.mu.Lock()
+	sink := d.logs
+	d.mu.Unlock()
+	if sink == nil {
+		return 0
+	}
+	return len(sink.Recent())
+}
+
 // New builds a daemon for the given job files.
 func New(files []string, log io.Writer) (*Daemon, error) {
 	if len(files) == 0 {

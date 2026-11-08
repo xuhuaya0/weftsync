@@ -37,6 +37,8 @@ type API struct {
 	// a small permanent file the operator may want on a different disk - and because
 	// a test must be able to keep them out of the real user profile.
 	SplitDir string
+	// StartedAt is when this process began serving, shown on the settings page.
+	StartedAt time.Time
 }
 
 // Routes returns the handler for the API.
@@ -58,6 +60,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/api/split/undo", a.handleSplitUndo)
 	mux.HandleFunc("/api/config", a.handleConfig)
 	mux.HandleFunc("/api/autostart", a.handleAutostart)
+	mux.HandleFunc("/api/info", a.handleInfo)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/rclone/rclone/cmd"
 	"github.com/spf13/cobra"
@@ -76,6 +77,11 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 	Run: func(command *cobra.Command, args []string) {
 		cmd.CheckArgs(1, 1e6, command, args)
 
+		// Captured before anything slow happens: the settings page shows
+		// uptime, and starting the clock after loading the config would
+		// understate it.
+		startedAt := time.Now()
+
 		cmd.Run(false, false, command, func() error {
 			w := io.Writer(os.Stdout)
 			var closer io.Closer
@@ -99,7 +105,10 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 				return err
 			}
 
-			api := &daemon.API{D: d, Addr: addr, Autostart: autostartSpec(args), SplitDir: splitDir}
+			api := &daemon.API{
+				D: d, Addr: addr, Autostart: autostartSpec(args), SplitDir: splitDir,
+				StartedAt: startedAt,
+			}
 			srv, ln, err := daemon.Listen(addr, api)
 			if err != nil {
 				return err

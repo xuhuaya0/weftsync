@@ -55,6 +55,17 @@ func newRing[T any](size int) *ring[T] {
 	return &ring[T]{items: make([]T, size)}
 }
 
+// len reports how many entries are retained, which is what "the history only
+// goes back so far" means to a user.
+func (r *ring[T]) len() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.full {
+		return len(r.items)
+	}
+	return r.next
+}
+
 func (r *ring[T]) add(v T) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
