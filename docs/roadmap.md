@@ -785,6 +785,16 @@ exit=1，目标目录 0 个文件
    }
    ```
 
+> **为什么必须自己定接口，而不是用 rclone 现成的**：已核查
+> `rclone@v1.71.2/fs/features.go` 全文，`fs.Features` 有 `CaseInsensitive`、
+> `DuplicateFiles`、`CanHaveEmptyDirectories`、`BucketBased`、`PartialUploads`、
+> `SlowModTime` 等 27 个布尔/整数字段，以及 `Mkdir`、`Move`、`Purge`、`About`
+> 等能力函数 —— **但没有任何「单目录容量上限」类字段**。
+>
+> 原因是 rclone 抽象的是**操作**（Open/List/Put/Mkdir/Move），不是**容量策略**。
+> 所以这个信息在上游无处可放，只能由我们自己的可选接口承载。
+> 这也说明：**问题不在 rclone 不够通用，而在于我把一条后端专有策略写进了共享代码。**
+
 2. `job.RunPair` 把预检**移到 `fs.NewFs` 之后**，断言该接口：
    - 后端没有实现 → **完全跳过预检**（local / SMB）
    - 实现了 → 用后端给的值当硬限，再减去余量
