@@ -81,6 +81,22 @@ type SyncView struct {
 	PullNewFiles          bool   `json:"pull_new_files"`
 	MaxPullSize           string `json:"max_pull_size"`
 
+	// Compare is the comparison strategy (R23). CompareHelp says what the chosen
+	// one costs, because "content" downloads every file it checks and that is not
+	// obvious from a dropdown.
+	Compare     string   `json:"compare"`
+	CompareHelp string   `json:"compare_help"`
+	Compares    []string `json:"compares"`
+
+	// Include / Exclude are the filter patterns as text, one per line. Held as
+	// text rather than arrays because that is how the form edits them, and a
+	// joined string is what comes back.
+	Include string `json:"include"`
+	Exclude string `json:"exclude"`
+	// FilterHelp explains the interaction, which is not self-evident: include is a
+	// whitelist, so adding one narrows what syncs.
+	FilterHelp string `json:"filter_help"`
+
 	Deletions []string `json:"deletions"`
 	Namings   []string `json:"namings"`
 	Conflicts []string `json:"conflicts"`
@@ -116,7 +132,15 @@ func syncView(spec job.SyncSpec, resolved job.ResolvedSync) SyncView {
 		PropagateRemoteDelete: resolved.PropagateRemoteDelete,
 		PullNewFiles:          resolved.PullNewFiles,
 		MaxPullSize:           resolved.MaxPullSizeText,
-		Deletions:             []string{job.DeletionPermanent, job.DeletionVersioning},
+		Compare:               resolved.Compare,
+		CompareHelp:           compareHelp(resolved.Compare),
+		Compares:              job.CompareStrategies,
+		Include:               strings.Join(spec.Filter.Include, "\n"),
+		Exclude:               strings.Join(spec.Filter.Exclude, "\n"),
+		FilterHelp: "include 是白名单：一旦写了，就只有匹配的路径会同步。" +
+			"exclude 从白名单里再挖洞。语法与 rclone 相同，每行一条。" +
+			"设置页的全局规则只支持 exclude，会叠加到每个作业上。",
+		Deletions: []string{job.DeletionPermanent, job.DeletionVersioning},
 		Namings: []string{
 			job.NamingReplace, job.NamingTimestampFile, job.NamingTimestampDir,
 		},
@@ -266,7 +290,57 @@ func mergeSync(prev job.SyncSpec, shown, in SyncView) job.SyncSpec {
 	if in.MaxPullSize != shown.MaxPullSize {
 		out.MaxPullSize = strings.TrimSpace(in.MaxPullSize)
 	}
+	if in.Compare != shown.Compare {
+		out.Compare = strings.TrimSpace(in.Compare)
+	}
+	// Filter lists arrive as text, one pattern per line. Compared as normalised
+	// lists so re-wrapping a line does not count as an edit.
+	if !samePatternText(in.Include, shown.Include) {
+		out.Filter.Include = splitPatterns(in.Include)
+	}
+	if !samePatternText(in.Exclude, shown.Exclude) {
+		out.Filter.Exclude = splitPatterns(in.Exclude)
+	}
 	return out
+}
+
+// compareHelp says what the chosen strategy costs, so the choice is informed.
+func compareHelp(strategy string) string {
+	switch strategy {
+	case job.CompareSize:
+		return "只看大小：同大小就当作没变，忽略修改时间。内容变了但长度相同时会漏传。"
+	case job.CompareContent:
+		return "比对内容：把云端那份下载回来逐字节比对。云盘无哈希（飞书返回 hash.None），" +
+			"只能这样比 —— 每个要传的文件都会下载一遍，全量数据约需数小时。"
+	default:
+		return "时间 + 大小：用同步快照记住的上次上传时的修改时间与大小判断，只读本地与状态文件，秒级。"
+	}
+}
+
+// splitPatterns turns the form's textarea into patterns, dropping blank lines.
+func splitPatterns(text string) []string {
+	var out []string
+	for _, line := range strings.Split(text, "\n") {
+		if p := strings.TrimSpace(line); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// samePatternText compares two textarea values by their patterns, so whitespace
+// and line-ending differences do not look like an edit.
+func samePatternText(a, b string) bool {
+	x, y := splitPatterns(a), splitPatterns(b)
+	if len(x) != len(y) {
+		return false
+	}
+	for i := range x {
+		if x[i] != y[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // maxPullSizeText is gone: ResolvedSync.MaxPullSizeText already carries the text

@@ -107,7 +107,8 @@ func writeSyncSection(b *bytes.Buffer, name string, s SyncSpec) {
 	empty := s.Deletion == "" && s.VersioningDir == "" && s.VersioningNaming == "" &&
 		s.Conflict == "" && s.MaxDelete == nil && s.MaxDeleteSize == "" &&
 		!s.PropagateLocalDelete && !s.PropagateRemoteDelete && !s.PullNewFiles &&
-		s.MaxPullSize == "" && s.MaxNodesPerDir == nil
+		s.MaxPullSize == "" && s.MaxNodesPerDir == nil && s.Compare == "" &&
+		len(s.Filter.Include) == 0 && len(s.Filter.Exclude) == 0
 	if empty {
 		return
 	}
@@ -150,6 +151,45 @@ func writeSyncSection(b *bytes.Buffer, name string, s SyncSpec) {
 	if s.MaxNodesPerDir != nil {
 		fmt.Fprintf(b, "max_nodes_per_dir = %d\n", *s.MaxNodesPerDir)
 	}
+	if s.Compare != "" {
+		writeString(b, "compare", s.Compare)
+	}
+	// The filter lives in a nested table, so it must be written LAST: once a
+	// [x.filter] header is emitted, every following key belongs to it and TOML
+	// cannot return to the parent table without repeating its header.
+	//
+	// Writing them as plain keys under [x] produced a file the strict parser then
+	// rejected ("fields in the document are missing in the target struct"), i.e. a
+	// save that could not be loaded back.
+	writeFilterSection(b, name+".filter", s.Filter)
+}
+
+// writeFilterSection emits a [....filter] table with its two pattern lists.
+func writeFilterSection(b *bytes.Buffer, name string, f FilterSpec) {
+	if len(f.Include) == 0 && len(f.Exclude) == 0 {
+		return
+	}
+	b.WriteString("\n[" + name + "]\n")
+	writeStringSlice(b, "include", f.Include)
+	writeStringSlice(b, "exclude", f.Exclude)
+}
+
+// writeStringSlice emits a TOML array of strings, one element per line.
+//
+// One per line rather than a single long line: filter lists are read and edited
+// by hand, and a wrapped array is the difference between a diff a person can
+// review and one they scroll past.
+func writeStringSlice(b *bytes.Buffer, key string, values []string) {
+	if len(values) == 0 {
+		return
+	}
+	b.WriteString(key + " = [\n")
+	for _, v := range values {
+		b.WriteString("  \"")
+		b.WriteString(tomlEscape(v))
+		b.WriteString("\",\n")
+	}
+	b.WriteString("]\n")
 }
 
 func writeScheduleSection(b *bytes.Buffer, name string, s ScheduleSpec) {
@@ -370,6 +410,13 @@ func sameSync(a, b SyncSpec) bool {
 	if a.MaxNodesPerDir != nil && *a.MaxNodesPerDir != *b.MaxNodesPerDir {
 		return false
 	}
+	if a.Compare != b.Compare {
+		return false
+	}
+	if !sameStrings(a.Filter.Include, b.Filter.Include) ||
+		!sameStrings(a.Filter.Exclude, b.Filter.Exclude) {
+		return false
+	}
 	if (a.MaxDelete == nil) != (b.MaxDelete == nil) {
 		return false
 	}
@@ -414,4 +461,21 @@ func writeAtomic(path string, data []byte) error {
 		return fmt.Errorf("replace %s: %w", path, err)
 	}
 	return nil
+}
+
+// sameStrings compares two string slices element by element.
+//
+// Order matters here: filter patterns are additive and order-independent to
+// rclone, but a rewrite that reordered them would still be a change the user did
+// not ask for, and a save that silently reorders is one more thing to explain.
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

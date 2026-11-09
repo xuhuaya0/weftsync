@@ -62,14 +62,29 @@ const (
 )
 
 // Row is one planned action.
+//
+// The side flags exist for the two-pane view: a comparison shows the source and
+// the destination next to each other, so each row has to say which side holds the
+// path. Without them the view would have to infer it from the action, and one
+// wrong inference prints a size for a file that does not exist there.
 type Row struct {
 	Path   string `json:"path"`
 	Action Action `json:"action"`
-	// Size is the object size in bytes when rclone reported one, 0 otherwise.
+	// Size is the object size rclone reported, 0 when it reported none. It belongs
+	// to whichever side the action reads from: the source for a copy, the
+	// destination for a delete or a download.
 	Size int64 `json:"size,omitempty"`
 	// Detail is rclone's own wording for the action, kept for the rows this
 	// package maps to Other so the UI can still say something specific.
 	Detail string `json:"detail,omitempty"`
+
+	// HasLeft / HasRight say which side holds this path.
+	HasLeft  bool `json:"has_left"`
+	HasRight bool `json:"has_right"`
+	// RightSize is the destination copy's size when known. It comes from the sync
+	// snapshot, which records the size we uploaded; the listing alone does not
+	// carry one. 0 means unknown, not zero bytes.
+	RightSize int64 `json:"right_size,omitempty"`
 }
 
 // Summary counts the rows by action.
@@ -265,6 +280,7 @@ func (c *Collector) consume(text string) {
 	if row.Path == "" {
 		return // a log line about the root: nothing to show per-path
 	}
+	setSides(&row)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -330,6 +346,36 @@ func (c *Collector) classify(line logLine) Action {
 	}
 }
 
+// setSides fills HasLeft/HasRight from the action.
+//
+// The mapping is not symmetric and cannot be guessed: a delete-remote logs the
+// *destination* object (that is what rclone removes), so the size belongs to the
+// right pane even though the left file is the one that disappeared. Getting this
+// wrong puts a size in an empty cell, which reads as "this file exists there".
+func setSides(row *Row) {
+	switch row.Action {
+	case Create:
+		// Sending a local file up; the destination has nothing yet.
+		row.HasLeft = true
+	case Update:
+		// Both sides hold it; ApplySideSizes fills in the right-hand size.
+		row.HasLeft, row.HasRight = true, true
+	case Download:
+		// Pulling the cloud copy down; nothing on the left yet.
+		row.HasRight = true
+	case DeleteRemote:
+		row.HasRight = true
+	case DeleteLocal:
+		row.HasLeft = true
+	case Mkdir, Rmdir:
+		// Directories exist on neither side in the sense the panes care about.
+	case Touch, Other:
+		// rclone logged it against one of the two; assume both hold it, because the
+		// action exists precisely because the two copies disagree.
+		row.HasLeft, row.HasRight = true, true
+	}
+}
+
 // cleanPath normalises the logged object path.
 func cleanPath(p string) string {
 	p = strings.TrimSpace(p)
@@ -382,29 +428,46 @@ func parseSizeText(s string) (int64, error) {
 	return int64(sz), nil
 }
 
+// Lookup reports what the sync snapshot remembers about a path: the size we
+// uploaded, and whether the path is known at all.
+type Lookup func(path string) (size int64, ok bool)
+
 // ApplySnapshot returns a copy of rows with the paths the sync state already
-// knows relabelled from Create to Update.
+// knows relabelled from Create to Update, and with the destination-side size
+// filled in where the snapshot can supply it.
 //
-// A copy of a path in the snapshot is an update, not a new file, and the UI asks
-// for that distinction because it decides how much attention a row deserves.
-// rclone's log does not carry it (it logs "copy" either way), so the caller
-// supplies the answer from the same snapshot the sync itself uses.
+// A copy of a path in the snapshot is an update, not a new file, and the
+// two-pane view needs that distinction plus the destination size, because the
+// cloud listing carries neither. rclone's log says "copy" either way, so the
+// caller supplies the answer from the same snapshot the sync itself uses.
 //
-// known is a function rather than a map so a 74k-entry snapshot is not turned
-// into a second copy just to label rows.
+// A Lookup rather than a map so a 74k-entry snapshot is not turned into a second
+// copy just to label rows.
 //
 // The input is not modified: an in-place version bit its own test, where a second
 // call saw the relabelled result of the first and concluded the relabelling was
 // unconditional.
-func ApplySnapshot(rows []Row, known func(path string) bool) []Row {
-	if known == nil {
+func ApplySnapshot(rows []Row, lookup Lookup) []Row {
+	if lookup == nil {
 		return rows
 	}
 	out := make([]Row, len(rows))
 	copy(out, rows)
 	for i := range out {
-		if out[i].Action == Create && known(out[i].Path) {
+		size, ok := lookup(out[i].Path)
+		if !ok {
+			continue
+		}
+		if out[i].Action == Create {
+			// Relabelling to Update also means the destination holds the file now,
+			// so the right pane must stop saying "nothing here". Forgetting that left
+			// the destination cell blank on every update - caught by
+			// TestApplySnapshotRelabelsCreatesOnly.
 			out[i].Action = Update
+			out[i].HasRight = true
+		}
+		if out[i].HasRight && out[i].RightSize == 0 {
+			out[i].RightSize = size
 		}
 	}
 	return out

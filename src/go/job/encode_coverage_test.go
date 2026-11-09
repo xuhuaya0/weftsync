@@ -39,6 +39,11 @@ func TestEncodeCoversEverySyncField(t *testing.T) {
 				PullNewFiles:          true,
 				MaxPullSize:           "250M",
 				MaxNodesPerDir:        &nodes,
+				Compare:               CompareContent,
+				Filter: FilterSpec{
+					Include: []string{"*.xlsx", "reports/**"},
+					Exclude: []string{"*.tmp", "_*"},
+				},
 			},
 		}},
 	}
@@ -61,6 +66,14 @@ func TestEncodeCoversEverySyncField(t *testing.T) {
 		`pull_new_files = true`,
 		`max_pull_size = "250M"`,
 		`max_nodes_per_dir = 900`,
+		`compare = "content"`,
+		// The filter is a nested table; writing these as plain keys produced a file
+		// the parser then rejected.
+		`[pair.sync.filter]`,
+		`include = [`,
+		`"*.xlsx"`,
+		`exclude = [`,
+		`"*.tmp"`,
 	}
 	for _, want := range wants {
 		if !strings.Contains(out, want) {
@@ -88,6 +101,17 @@ func TestEncodeCoversEverySyncField(t *testing.T) {
 	// Pointer, so a dropped field and an explicit 0 must not look alike.
 	if got.MaxNodesPerDir == nil || *got.MaxNodesPerDir != 900 {
 		t.Errorf("max_nodes_per_dir did not survive: %+v", got.MaxNodesPerDir)
+	}
+	if got.Compare != CompareContent {
+		t.Errorf("compare = %q, want %q", got.Compare, CompareContent)
+	}
+	if len(got.Filter.Include) != 2 || got.Filter.Include[0] != "*.xlsx" ||
+		got.Filter.Include[1] != "reports/**" {
+		t.Errorf("include did not survive: %v", got.Filter.Include)
+	}
+	if len(got.Filter.Exclude) != 2 || got.Filter.Exclude[0] != "*.tmp" ||
+		got.Filter.Exclude[1] != "_*" {
+		t.Errorf("exclude did not survive: %v", got.Filter.Exclude)
 	}
 }
 

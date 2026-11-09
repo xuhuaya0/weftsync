@@ -57,6 +57,32 @@ const (
 	ConflictKeepBoth = "keep-both"
 )
 
+// Compare strategies (FreeFileSync's three, R23).
+//
+// The sync itself always decides with the state snapshot, because Feishu reports
+// no size and no hash for a listing (PLAN.md §4.2) - comparing remote metadata is
+// not possible there at all. These settings exist for the *comparison view*, so the
+// user can choose how much certainty to buy before pressing sync:
+//
+//	CompareTimeSize  the default: what the snapshot remembers (fast, local only)
+//	CompareSize      ignore the timestamp, treat same-size as unchanged
+//	CompareContent   download each differing file and compare bytes
+//
+// CompareContent is expensive on a cloud backend - it downloads every file it
+// checks. It is offered anyway because the choice belongs to the user, not to us;
+// the console says what it costs so the decision is informed.
+const (
+	CompareTimeSize = "time-size"
+	CompareSize     = "size-only"
+	CompareContent  = "content"
+)
+
+// DefaultCompare is the cheapest strategy that is still correct for a snapshot.
+const DefaultCompare = CompareTimeSize
+
+// CompareStrategies lists the valid values, in the order a form should show them.
+var CompareStrategies = []string{CompareTimeSize, CompareSize, CompareContent}
+
 // Defaults. max_delete comes from the user's decision (PLAN.md A13); the variant
 // default is update because a sync tool that silently deletes is a worse failure
 // than one that keeps too much.
@@ -164,6 +190,30 @@ type SyncSpec struct {
 	// local -> local sync of 1401 files was refused for exceeding a limit that
 	// does not exist on a local disk.
 	MaxNodesPerDir *int `toml:"max_nodes_per_dir"`
+
+	// Compare decides how the comparison view decides "unchanged" (R23).
+	// Empty means DefaultCompare.
+	Compare string `toml:"compare"`
+
+	// Filter holds this pair's own filter patterns, on top of the job-level ones.
+	//
+	// Include is a whitelist: when non-empty, only matching paths are considered.
+	// Exclude removes paths. Both use rclone filter syntax, and the daemon's global
+	// patterns apply on top.
+	//
+	// Kept per pair because "which files matter" is a property of the folder, not
+	// of the job: one pair may sync only *.xlsx while another syncs everything.
+	Filter FilterSpec `toml:"filter"`
+}
+
+// FilterSpec is one pair's (or the job's) filter.
+//
+// Separate slices rather than one ordered list: rclone's filter object applies
+// include-then-exclude regardless of the order the patterns were added, so
+// preserving an interleaved order would promise a precedence that does not exist.
+type FilterSpec struct {
+	Include []string `toml:"include"`
+	Exclude []string `toml:"exclude"`
 }
 
 // Load reads and validates a job file.
@@ -392,6 +442,33 @@ func (p *Pair) EffectiveSync(c *Config) (ResolvedSync, error) {
 			"pair %q: max_nodes_per_dir must be >= 0 (0 means \"no limit\"; "+
 				"leave it unset to use the backend's own limit)", p.Name)
 	}
+
+	// The comparison strategy. Validated here so a typo is rejected when the file
+	// is saved rather than when a preview silently falls back to the default.
+	out.Compare = firstNonEmpty(p.Sync.Compare, c.Job.Sync.Compare, DefaultCompare)
+	switch out.Compare {
+	case CompareTimeSize, CompareSize, CompareContent:
+	default:
+		return out, fmt.Errorf(
+			"pair %q: unknown compare %q (expected %q, %q or %q)",
+			p.Name, out.Compare, CompareTimeSize, CompareSize, CompareContent)
+	}
+
+	// Filters: the job-level patterns come first, then the pair's own, because the
+	// pair is the more specific scope. Both are additive within a level - an
+	// include list is a whitelist, so adding one never widens what is synced.
+	out.Include = append(append([]string{}, c.Job.Sync.Filter.Include...),
+		p.Sync.Filter.Include...)
+	out.Exclude = append(append([]string{}, c.Job.Sync.Filter.Exclude...),
+		p.Sync.Filter.Exclude...)
+	for _, pat := range append(append([]string{}, out.Include...), out.Exclude...) {
+		if strings.TrimSpace(pat) == "" {
+			return out, fmt.Errorf(
+				"pair %q: empty filter pattern (remove the blank line or write the pattern)",
+				p.Name)
+		}
+	}
+
 	return out, nil
 }
 
@@ -428,6 +505,14 @@ type ResolvedSync struct {
 	// MaxNodesPerDir is the per-directory child cap resolved from the job file.
 	// nil means "ask the backend"; a non-nil 0 means "no limit, skip the check".
 	MaxNodesPerDir *int
+
+	// Compare is the resolved comparison strategy (R23).
+	Compare string
+
+	// Include / Exclude are the resolved filter patterns: the job-level ones plus
+	// this pair's own. Include is a whitelist; both use rclone filter syntax.
+	Include []string
+	Exclude []string
 }
 
 // LocalPath is the rclone path for the local side.

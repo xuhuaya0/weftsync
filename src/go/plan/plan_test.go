@@ -196,15 +196,20 @@ func TestSummarise(t *testing.T) {
 }
 
 // ApplySnapshot must relabel only creates, and only when the snapshot knows the
-// path: an update of a file the snapshot never saw is still a create.
+// path: a copy of a file the snapshot never saw is still a create.
 func TestApplySnapshotRelabelsCreatesOnly(t *testing.T) {
 	rows := []Row{
-		{Path: "known.txt", Action: Create},
-		{Path: "new.txt", Action: Create},
-		{Path: "known.txt", Action: Download},
-		{Path: "known.txt", Action: DeleteRemote},
+		{Path: "known.txt", Action: Create, HasLeft: true},
+		{Path: "new.txt", Action: Create, HasLeft: true},
+		{Path: "known.txt", Action: Download, HasRight: true},
+		{Path: "known.txt", Action: DeleteRemote, HasRight: true},
 	}
-	known := func(p string) bool { return p == "known.txt" }
+	known := func(p string) (int64, bool) {
+		if p == "known.txt" {
+			return 4242, true
+		}
+		return 0, false
+	}
 	got := ApplySnapshot(rows, known)
 
 	if got[0].Action != Update {
@@ -217,9 +222,45 @@ func TestApplySnapshotRelabelsCreatesOnly(t *testing.T) {
 		t.Errorf("non-create actions must not be relabelled: %v/%v", got[2].Action, got[3].Action)
 	}
 
+	// The snapshot's size belongs in the destination pane, and only there: the
+	// upload row is the one that has a destination copy to describe.
+	if got[0].RightSize != 4242 {
+		t.Errorf("update row destination size = %d, want the snapshot's 4242",
+			got[0].RightSize)
+	}
+	if got[1].RightSize != 0 {
+		t.Errorf("a create must not claim a destination size, got %d", got[1].RightSize)
+	}
+
 	// A nil lookup leaves everything alone rather than guessing.
 	if again := ApplySnapshot(rows, nil); again[0].Action != Create {
 		t.Errorf("nil lookup relabelled a row")
+	}
+}
+
+// setSides has to describe where each action's file actually lives; a wrong side
+// prints a size in an empty cell, which reads as "this file exists there".
+func TestSetSidesMatchesTheAction(t *testing.T) {
+	cases := []struct {
+		action            Action
+		hasLeft, hasRight bool
+	}{
+		{Create, true, false},       // sending a local file up
+		{Update, true, true},        // both sides hold it
+		{Download, false, true},     // pulling the cloud copy down
+		{DeleteRemote, false, true}, // rclone logged the destination object
+		{DeleteLocal, true, false},  // the local file is what goes
+		{Mkdir, false, false},       // a directory is not a pane row
+		{Rmdir, false, false},
+		{Touch, true, true},
+	}
+	for _, c := range cases {
+		r := Row{Action: c.action}
+		setSides(&r)
+		if r.HasLeft != c.hasLeft || r.HasRight != c.hasRight {
+			t.Errorf("%s: sides = %v/%v, want %v/%v",
+				c.action, r.HasLeft, r.HasRight, c.hasLeft, c.hasRight)
+		}
 	}
 }
 

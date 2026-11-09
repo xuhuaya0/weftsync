@@ -121,38 +121,73 @@
     border: 1px solid var(--line); color: var(--muted);
   }
 
-  /* 对比视图：先看逐文件动作，再决定执行（对齐 FreeFileSync 的逻辑）*/
-  .cmp-bar {
+  /* 对比视图：和 FreeFileSync 一样左右两栏对齐，中间一列放动作 */
+  .ffs { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .ffs-tools {
+    display: flex; gap: 8px; align-items: center;
+    padding: 6px 10px; border-bottom: 1px solid var(--line);
+  }
+  .ffs-title { font-weight: 600; font-size: 13px; }
+  .ffs-filter { width: 220px; }
+  .ffs-grid {
+    display: grid; grid-template-columns: 1fr 64px 1fr;
+    border-bottom: 1px solid var(--line);
+  }
+  .ffs-pane-head {
+    display: flex; gap: 8px; align-items: baseline;
+    padding: 5px 10px; min-width: 0;
+  }
+  .ffs-pane-head + .ffs-act-head + .ffs-pane-head { border-left: 1px solid var(--line); }
+  .ffs-side { font-weight: 600; font-size: 12px; color: var(--muted); flex: none; }
+  .ffs-path {
+    font-size: 11px; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ffs-act-head {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: var(--muted);
+    border-left: 1px solid var(--line); border-right: 1px solid var(--line);
+  }
+  .ffs-scroll { max-height: 50vh; overflow: auto; }
+  .ffs-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .ffs-table td { padding: 2px 8px; border-bottom: 1px solid var(--line); }
+  .ffs-table tr.meta { opacity: .5; }
+  .ffs-n {
+    width: 42%; word-break: break-all; vertical-align: top;
+  }
+  .ffs-s {
+    width: 58px; text-align: right; white-space: nowrap;
+    color: var(--muted); font-size: 12px;
+  }
+  .ffs-a {
+    width: 64px; text-align: center; white-space: nowrap;
+    font-family: ui-monospace, monospace; font-weight: 700;
+    border-left: 1px solid var(--line); border-right: 1px solid var(--line);
+  }
+  .ffs-a.creates { color: var(--blue); }
+  .ffs-a.updates { color: #b8860b; }
+  .ffs-a.downloads { color: #2f8f4e; }
+  .ffs-a.deletes { color: var(--bad); }
+  .ffs-a.dirs, .ffs-a.meta { color: var(--muted); }
+  .ffs-bar {
     display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
-    padding: 8px 10px; margin-bottom: 8px;
-    border: 1px solid var(--line); border-radius: 8px; background: var(--bg2, rgba(0,0,0,.02));
+    padding: 6px 10px; border-top: 1px solid var(--line);
+    background: var(--bg2, rgba(0, 0, 0, .02));
   }
-  .cmp-chip {
-    font-size: 12px; padding: 2px 9px; border-radius: 999px;
-    border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+  .ffs-cat {
+    display: inline-flex; gap: 5px; align-items: center;
+    font-size: 12px; padding: 1px 8px; border-radius: 999px;
+    border: 1px solid var(--line); margin: 0; cursor: pointer;
+    white-space: nowrap;
   }
-  .cmp-chip b { font-weight: 700; color: var(--fg, inherit); }
-  .cmp-chip.creates { border-color: var(--blue); color: var(--blue); }
-  .cmp-chip.updates { border-color: #b8860b; color: #b8860b; }
-  .cmp-chip.downloads { border-color: #2f8f4e; color: #2f8f4e; }
-  .cmp-chip.deletes { border-color: var(--bad); color: var(--bad); }
-  .cmp-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .cmp-table th {
-    text-align: left; font-weight: 600; font-size: 12px; color: var(--muted);
-    border-bottom: 1px solid var(--line); padding: 4px 6px; position: sticky; top: 0;
-    background: inherit; white-space: nowrap;
-  }
-  .cmp-table td { padding: 3px 6px; border-bottom: 1px solid var(--line); }
-  .cmp-table tr.meta { opacity: .55; }
-  .cmp-table td.path { word-break: break-all; }
-  .cmp-table td.size { text-align: right; white-space: nowrap; color: var(--muted); }
-  .cmp-act { white-space: nowrap; font-family: ui-monospace, monospace; }
-  .cmp-act.creates { color: var(--blue); }
-  .cmp-act.updates { color: #b8860b; }
-  .cmp-act.downloads { color: #2f8f4e; }
-  .cmp-act.deletes { color: var(--bad); font-weight: 600; }
-  .cmp-act.dirs, .cmp-act.meta { color: var(--muted); }
-  .cmp-scroll { max-height: 52vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+  .ffs-cat input { margin: 0; }
+  .ffs-cat.disabled { opacity: .4; cursor: default; }
+  .ffs-cat.creates { border-color: var(--blue); color: var(--blue); }
+  .ffs-cat.updates { border-color: #b8860b; color: #b8860b; }
+  .ffs-cat.downloads { border-color: #2f8f4e; color: #2f8f4e; }
+  .ffs-cat.deletes { border-color: var(--bad); color: var(--bad); }
+  .ffs-cat .sym { font-family: ui-monospace, monospace; font-weight: 700; }
+  .ffs-total { font-size: 12px; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -943,31 +978,46 @@ function planHTML(p) {
   return parts.join("");
 }
 
-// ---- 对比视图（对齐 FreeFileSync 的逻辑）----
+// ---- 对比视图（FreeFileSync 的双栏 + 流程）----
 //
-// FreeFileSync 的顺序是 对比 → 逐文件看动作 → 汇总 → 同步。原来的面板只显示
-// 计数，回答的是「有多少」，而「我能不能跑」取决于「具体是哪些」。这里的行来自
-// 后端从 rclone 自己的 dry-run 日志里读回的记录，不是另写一套比对，所以计划和
-// 真正执行不可能不一致。
-let cmpState = { rows: [], pairs: 0, showMeta: false, q: "", shown: 400 };
+// FFS 的顺序是 对比 → 逐文件看动作 → 汇总 → 同步；外观是左右两栏对齐摆放，
+// 中间一列放动作符号。这里两者都照做：
+//
+//   本地  C:/.../src        │      │ 云端  :local:.../dst
+//   report.md        16 B   │  →   │
+//   cfg/changed1.ini 10 B   │  →   │ cfg/changed1.ini  10 B
+//                           │  ✕   │ obsolete1.log
+//
+// 行对齐是这套外观的核心：同一个路径在两栏处在同一行，只有一侧存在时另一侧留空。
+// 数据来自后端从 rclone 自己的 dry-run 日志读回的记录（见 plan 包），
+// 所以计划和真正执行不可能不一致。
+let cmpState = {
+  rows: [], pairs: 0, q: "", shown: 400,
+  // 底部分类的勾选状态。取消勾选只影响显示，不影响执行 —— 这一点在界面上写明，
+  // 不能让用户以为取消勾选就不会被同步。
+  on: { creates: true, updates: true, downloads: true, deletes: true, dirs: true, meta: false },
+};
 
 const CMP_META = {
-  create:          { sym: "→", label: "新建",   cls: "creates" },
-  update:          { sym: "→", label: "更新",   cls: "updates" },
-  download:        { sym: "←", label: "下载",   cls: "downloads" },
-  "delete-remote": { sym: "✕", label: "删云端", cls: "deletes" },
-  "delete-local":  { sym: "✕", label: "删本地", cls: "deletes" },
-  mkdir:           { sym: "+", label: "建目录", cls: "dirs" },
-  rmdir:           { sym: "-", label: "删目录", cls: "dirs" },
-  touch:           { sym: "·", label: "元数据", cls: "meta" },
-  other:           { sym: "?", label: "其他",   cls: "meta" },
+  create:          { sym: "→", label: "新建",   cls: "creates",  cat: "creates" },
+  update:          { sym: "→", label: "更新",   cls: "updates",  cat: "updates" },
+  download:        { sym: "←", label: "下载",   cls: "downloads", cat: "downloads" },
+  "delete-remote": { sym: "✕", label: "删云端", cls: "deletes",  cat: "deletes" },
+  "delete-local":  { sym: "✕", label: "删本地", cls: "deletes",  cat: "deletes" },
+  mkdir:           { sym: "+", label: "建目录", cls: "dirs",     cat: "dirs" },
+  rmdir:           { sym: "-", label: "删目录", cls: "dirs",     cat: "dirs" },
+  touch:           { sym: "·", label: "元数据", cls: "meta",     cat: "meta" },
+  other:           { sym: "?", label: "其他",   cls: "meta",     cat: "meta" },
 };
 
 function cmpRows(p) {
   const rows = [];
   let pairs = 0;
+  let left = "", right = "";
   for (const r of p.results || []) {
     pairs++;
+    if (!left) left = r.local || "";
+    if (!right) right = r.remote || "";
     for (const row of (r.plan || [])) {
       rows.push({
         path: row.path || "",
@@ -975,49 +1025,60 @@ function cmpRows(p) {
         size: row.size || 0,
         detail: row.detail || "",
         pair: r.pair || "",
+        hasLeft: !!row.has_left,
+        hasRight: !!row.has_right,
+        rightSize: row.right_size || 0,
       });
     }
   }
-  return { rows, pairs };
+  return { rows, pairs, left, right };
 }
 
 function compareHTML(p) {
-  cmpState = { rows: [], pairs: 0, showMeta: false, q: "", shown: 400 };
+  cmpState = {
+    rows: [], pairs: 0, q: "", shown: 400, left: "", right: "",
+    on: { creates: true, updates: true, downloads: true, deletes: true, dirs: true, meta: false },
+  };
 
   if (p.error) return "";  // 预览失败时不该假装有对比结果
-  const { rows, pairs } = cmpRows(p);
-  cmpState.rows = rows;
-  cmpState.pairs = pairs;
+  const { rows, pairs, left, right } = cmpRows(p);
+  Object.assign(cmpState, { rows, pairs, left, right });
 
   if (!rows.length) {
     // 计划为空有两种情况，必须分清：真的没有变化，还是没采集到。
-    return `<div class="note ok" style="margin-top:10px">逐文件对比：没有需要变更的内容。</div>`;
+    return `<div class="note ok" style="margin-top:10px">对比结果：两侧一致，没有需要变更的内容。</div>`;
   }
 
-  return `<div style="margin-top:12px">
-    <div class="row" style="margin-bottom:8px">
-      <strong class="grow">逐文件对比 · ${rows.length} 行</strong>
-      <input id="cmp-q" placeholder="筛选路径…" style="width:220px">
-      <label class="sub" style="margin:0">
-        <input type="checkbox" id="cmp-meta"> 显示元数据行
-      </label>
+  return `<div class="ffs">
+    <div class="ffs-tools">
+      <strong class="ffs-title">对比结果</strong>
+      <span class="sub">${rows.length} 项</span>
+      <span class="grow"></span>
+      <input id="cmp-q" placeholder="过滤路径…" class="ffs-filter">
+      <button id="cmp-run" class="primary">同步</button>
     </div>
-    <div id="cmp-bar" class="cmp-bar"></div>
-    <div class="cmp-scroll"><table class="cmp-table">
-      <thead><tr>
-        <th style="width:1%">动作</th>
-        ${pairs > 1 ? '<th style="width:1%">对</th>' : ""}
-        <th>路径</th><th style="width:1%">大小</th>
-      </tr></thead>
-      <tbody id="cmp-rows"></tbody>
-    </table></div>
-    <div id="cmp-more" class="row" style="margin-top:8px"></div>
+    <div class="ffs-grid">
+      <div class="ffs-pane-head">
+        <span class="ffs-side">本地</span>
+        <span class="ffs-path mono" title="${esc(left)}">${esc(left)}</span>
+      </div>
+      <div class="ffs-act-head">动作</div>
+      <div class="ffs-pane-head">
+        <span class="ffs-side">云端</span>
+        <span class="ffs-path mono" title="${esc(right)}">${esc(right)}</span>
+      </div>
+    </div>
+    <div class="ffs-scroll">
+      <table class="ffs-table"><tbody id="cmp-rows"></tbody></table>
+    </div>
+    <div id="cmp-bar" class="ffs-bar"></div>
+    <div id="cmp-more" class="row" style="margin-top:6px"></div>
   </div>`;
 }
 
-// cmpCounts summarises the rows currently loaded, so the chips always agree with
-// the table beneath them. The server also sends a summary, and the two are
-// compared in the tests rather than trusted.
+// cmpCounts summarises the rows currently loaded, so the bar always agrees with
+// the panes above it. The server also sends a summary, and the two are compared
+// in the tests rather than trusted.
 function cmpCounts(rows) {
   const c = { create: 0, update: 0, download: 0, "delete-remote": 0,
               "delete-local": 0, mkdir: 0, rmdir: 0, touch: 0, other: 0, bytes: 0 };
@@ -1032,77 +1093,142 @@ function cmpCounts(rows) {
 function cmpFiltered() {
   const q = cmpState.q.trim().toLowerCase();
   return cmpState.rows.filter(r => {
-    if (!cmpState.showMeta && (r.action === "touch" || r.action === "other")) {
-      // 元数据行默认隐藏：内容相同但时间戳不同时 rclone 会计划 touch，
-      // 这类行会把真正的变更淹掉。
-      return false;
-    }
+    const m = CMP_META[r.action] || CMP_META.other;
+    if (!cmpState.on[m.cat]) return false;
     if (!q) return true;
     return r.path.toLowerCase().includes(q) || r.action.includes(q);
   });
 }
 
+// cmpSides decides what each pane shows for a row.
+//
+// A missing side prints nothing at all (not "0 B"): an empty cell means "this side
+// does not have the file", which is the whole point of putting the panes next to
+// each other. An unknown size prints "?" - the cloud listing carries no size, so a
+// number there would be invented.
+function cmpSides(r) {
+  const out = { leftName: "", leftSize: "", rightName: "", rightSize: "" };
+
+  if (r.action === "mkdir" || r.action === "rmdir") {
+    // A directory row describes the destination, which is where rclone creates or
+    // removes it.
+    out.rightName = r.path;
+    return out;
+  }
+
+  if (r.hasLeft) {
+    out.leftName = r.path;
+    out.leftSize = fmtBytes(r.size);
+  }
+  if (r.hasRight) {
+    out.rightName = r.path;
+    if (r.hasLeft) {
+      // Both sides hold it: the right size comes from the snapshot, and "?" is the
+      // honest answer when the snapshot has no record.
+      out.rightSize = r.rightSize > 0 ? fmtBytes(r.rightSize) : "?";
+    } else {
+      out.rightSize = fmtBytes(r.size);
+    }
+  }
+  return out;
+}
+
 function cmpRender() {
   const c = cmpCounts(cmpState.rows);
-  const chip = (cls, label, n, extra) =>
-    n > 0 ? `<span class="cmp-chip ${cls}">${label} <b>${n}</b>${extra || ""}</span>` : "";
-
-  const chips = [
-    chip("creates", "新建", c.create),
-    chip("updates", "更新", c.update),
-    chip("downloads", "下载", c.download),
-    chip("deletes", "删云端", c["delete-remote"]),
-    chip("deletes", "删本地", c["delete-local"]),
-    chip("dirs", "目录", c.mkdir + c.rmdir),
-    `<span class="cmp-chip">元数据 <b>${c.touch}</b></span>`,
-    c.other ? chip("dirs", "其他", c.other) : "",
-    c.bytes ? `<span class="cmp-chip">传输 <b>${fmtBytes(c.bytes)}</b></span>` : "",
-  ].filter(Boolean).join(" ");
-
-  const destructive = c["delete-remote"] + c["delete-local"] + c.rmdir;
-  const warn = destructive
-    ? `<span class="cmp-chip deletes">其中 ${destructive} 项是删除</span>`
-    : "";
-  document.getElementById("cmp-bar").innerHTML = chips + " " + warn;
-
   const list = cmpFiltered();
   const shown = list.slice(0, cmpState.shown);
+
   document.getElementById("cmp-rows").innerHTML = shown.map(r => {
     const m = CMP_META[r.action] || CMP_META.other;
-    const metaRow = (r.action === "touch" || r.action === "other") ? " class=\"meta\"" : "";
-    const size = (r.action.startsWith("delete") || r.action === "mkdir" ||
-                  r.action === "rmdir") ? "" : fmtBytes(r.size);
-    return `<tr${metaRow}>
-      <td class="cmp-act ${m.cls}" title="${esc(r.detail || r.action)}">${m.sym} ${m.label}</td>
-      ${cmpState.pairs > 1 ? `<td class="mono">${esc(r.pair)}</td>` : ""}
-      <td class="path mono">${esc(r.path)}</td>
-      <td class="size">${size}</td>
+    const s = cmpSides(r);
+    const cls = (r.action === "touch" || r.action === "other") ? " meta" : "";
+    return `<tr class="${cls.trim()}">
+      <td class="ffs-n mono">${esc(s.leftName)}</td>
+      <td class="ffs-s mono">${s.leftSize}</td>
+      <td class="ffs-a ${m.cls}" title="${esc(r.detail || m.label)}">${m.sym}</td>
+      <td class="ffs-n mono">${esc(s.rightName)}</td>
+      <td class="ffs-s mono">${s.rightSize}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="4" class="empty">没有匹配的行</td></tr>`;
+  }).join("") || `<tr><td colspan="5" class="empty">没有匹配的行</td></tr>`;
+
+  // 底部：分类开关 + 合计，和 FFS 的底部条同构。
+  const box = (cat, cls, sym, label, n) => {
+    const dis = n ? "" : " disabled";
+    const chk = cmpState.on[cat] ? " checked" : "";
+    return `<label class="ffs-cat ${cls}${dis}">
+      <input type="checkbox" data-cat="${cat}"${chk}${dis}>
+      <span class="sym">${sym}</span> ${label} <b>${n}</b></label>`;
+  };
+
+  const destructive = c["delete-remote"] + c["delete-local"] + c.rmdir;
+  document.getElementById("cmp-bar").innerHTML =
+    box("creates", "creates", "→", "新建", c.create) +
+    box("updates", "updates", "→", "更新", c.update) +
+    box("downloads", "downloads", "←", "下载", c.download) +
+    box("deletes", "deletes", "✕", "删除", c["delete-remote"] + c["delete-local"]) +
+    box("dirs", "dirs", "+", "目录", c.mkdir + c.rmdir) +
+    box("meta", "meta", "·", "元数据", c.touch + c.other) +
+    `<span class="grow"></span>` +
+    (c.bytes ? `<span class="ffs-total">合计 <b>${fmtBytes(c.bytes)}</b></span>` : "") +
+    (destructive ? `<span class="ffs-total danger">其中 ${destructive} 项会删除</span>` : "");
+
+  document.querySelectorAll("#cmp-bar input[data-cat]").forEach(el => {
+    el.addEventListener("change", () => {
+      cmpState.on[el.dataset.cat] = el.checked;
+      cmpState.shown = 400;
+      cmpRender();
+    });
+  });
 
   const more = document.getElementById("cmp-more");
   if (list.length > shown.length) {
-    more.innerHTML = `<span class="sub">显示前 ${shown.length} 行，共 ${list.length} 行</span>` +
-      `<button id="cmp-show-more">再显示 400 行</button>`;
+    more.innerHTML = `<span class="sub">显示前 ${shown.length} 项，共 ${list.length} 项</span>` +
+      `<button id="cmp-show-more">再显示 400 项</button>`;
     document.getElementById("cmp-show-more").addEventListener("click", () => {
       cmpState.shown += 400;
       cmpRender();
     });
   } else {
     more.innerHTML = list.length !== cmpState.rows.length
-      ? `<span class="sub">已列出 ${list.length} 行（共 ${cmpState.rows.length} 行，其余被筛选隐藏）</span>`
-      : "";
+      ? `<span class="sub">已列出 ${list.length} 项（共 ${cmpState.rows.length} 项，其余被分类开关或过滤隐藏）</span>`
+      : `<span class="sub">底部分类开关只控制显示，不改变执行范围。</span>`;
   }
 }
 
 function cmpWire() {
   const q = document.getElementById("cmp-q");
-  const meta = document.getElementById("cmp-meta");
-  if (!q || !meta) return;
+  if (!q) return;
   q.addEventListener("input", () => { cmpState.q = q.value; cmpState.shown = 400; cmpRender(); });
-  meta.addEventListener("change", () => {
-    cmpState.showMeta = meta.checked; cmpState.shown = 400; cmpRender();
-  });
+
+  // 同步按钮就放在对比结果里，和 FFS 一样：对比是现在这一屏，同步是它的下一步，
+  // 不需要先关掉再回列表找一个按钮。
+  const run = document.getElementById("cmp-run");
+  if (run) {
+    run.addEventListener("click", async () => {
+      const name = document.getElementById("plan-run").dataset.job;
+      if (!name) return;
+      const c = cmpCounts(cmpState.rows);
+      const destructive = c["delete-remote"] + c["delete-local"] + c.rmdir;
+      if (destructive && !confirm(
+        `这次同步会删除 ${destructive} 项，无法撤销（除非作业配置了版本目录）。\n确定继续？`)) {
+        return;
+      }
+      run.disabled = true;
+      run.textContent = "同步中…";
+      try {
+        await post("/api/run?job=" + encodeURIComponent(name));
+        closePlanPanel();
+      } catch (err) {
+        alert("启动失败：" + err.message);
+        run.disabled = false;
+        run.textContent = "同步";
+        return;
+      }
+      lastSignature = "";
+      setTimeout(refresh, 400);
+    });
+  }
+
   cmpRender();
 }
 
@@ -1936,7 +2062,19 @@ function syncFields(prefix, s, effectiveVariant) {
         "仅 pull_new_files 生效；留空 = 100M")
     : "";
 
-  return field("删除方式", `<select id="${prefix}-deletion">${opt(s.deletions, s.deletion)}</select>`) +
+  return field("比较动作", `<select id="${prefix}-compare">` +
+      s.compares.map(v => `<option value="${esc(v)}"${v === s.compare ? " selected" : ""}>` +
+        `${esc(COMPARE_LABEL[v] || v)}</option>`).join("") + `</select>`,
+      s.compare_help) +
+    field("包含（白名单）",
+      `<textarea id="${prefix}-include" rows="3" placeholder="*.xlsx&#10;reports/**">` +
+      `${esc(s.include || "")}</textarea>`,
+      "一旦写了，就只有匹配的路径会同步；留空 = 全部") +
+    field("排除",
+      `<textarea id="${prefix}-exclude" rows="3" placeholder="*.tmp&#10;_*&#10;_*/**">` +
+      `${esc(s.exclude || "")}</textarea>`,
+      s.filter_help) +
+    field("删除方式", `<select id="${prefix}-deletion">${opt(s.deletions, s.deletion)}</select>`) +
     field("版本目录", `<input type="text" id="${prefix}-vdir" value="${esc(s.versioning_dir)}">`,
           "仅 versioning 生效") +
     field("版本命名", `<select id="${prefix}-vnaming">${opt(s.namings, s.versioning_naming)}</select>`) +
@@ -1952,6 +2090,14 @@ function syncFields(prefix, s, effectiveVariant) {
           s.max_delete_size_help) +
     twoWay;
 }
+
+// COMPARE_LABEL is how each strategy reads in the dropdown. The values are the
+// job-file tokens; a raw "time-size" in a form would make the user translate.
+const COMPARE_LABEL = {
+  "time-size": "时间 + 大小（默认，秒级）",
+  "size-only": "仅大小（忽略修改时间）",
+  "content": "文件内容（下载后逐字节比对）",
+};
 
 // checkField is a checkbox with a label and an explanation.
 function checkField(id, label, checked, hint) {
@@ -2080,6 +2226,11 @@ function collectSync(prefix) {
     propagate_remote_delete: checked("prop-remote-del"),
     pull_new_files: checked("pull-new"),
     max_pull_size: val("maxpull").trim(),
+    // Filters travel as raw text; the server splits lines, so a trailing blank
+    // line is not an edit.
+    compare: val("compare"),
+    include: val("include"),
+    exclude: val("exclude"),
   };
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/accounting"
 	"github.com/rclone/rclone/fs/filter"
+	"github.com/rclone/rclone/fs/operations"
 	rsync "github.com/rclone/rclone/fs/sync"
 
 	"weftsync/plan"
@@ -145,6 +146,11 @@ type PairResult struct {
 	// PlanSummary counts Plan by action, so the page can show the header before
 	// rendering thousands of rows.
 	PlanSummary plan.Summary `json:"plan_summary"`
+
+	// ContentIdentical lists paths the content comparison proved identical, so the
+	// run skipped them (compare = "content"). The page shows them as "same"
+	// rather than leaving the user to wonder where they went.
+	ContentIdentical []string `json:"content_identical,omitempty"`
 }
 
 // Options tunes a run.
@@ -432,16 +438,39 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 
 	// The trash folder name must be identical across both passes, otherwise the
 	// dry run would be measuring a different plan from the one executed.
+	//
+	// The filter layers are combined here rather than inside runPass so the dry
+	// pass and the real pass cannot end up with different patterns.
 	opts := passOptions{
 		backupDir: backupDirFor(remotePath, spec),
 		suffix:    suffixFor(spec, time.Now()),
-		exclude:   opt.Exclude,
+		include:   spec.Include,
+		exclude:   append(append([]string{}, spec.Exclude...), opt.Exclude...),
+		sizeOnly:  spec.Compare == CompareSize,
 	}
 
 	if opts.backupDir != "" {
 		var err error
 		if ctx, err = withTrashExcluded(ctx, spec.VersioningDir); err != nil {
 			return res, fmt.Errorf("pair %q: %w", p.Name, err)
+		}
+	}
+
+	// compare = "content": read the destination copies back before deciding. Only
+	// reachable through an actual comparison, so it runs before the real pass and
+	// its findings are honoured by excluding those paths.
+	if spec.Compare == CompareContent {
+		identical, err := verifyIdenticalPaths(ctx, fdst, fsrc, opts, w)
+		if err != nil {
+			return res, fmt.Errorf("pair %q: %w", p.Name, err)
+		}
+		if len(identical) > 0 {
+			excluded, err := excludePaths(ctx, identical)
+			if err != nil {
+				return res, fmt.Errorf("pair %q: %w", p.Name, err)
+			}
+			ctx = excluded
+			res.ContentIdentical = identical
 		}
 	}
 
@@ -586,6 +615,11 @@ type passOptions struct {
 	suffix    string
 	// exclude holds the daemon-level filter patterns; see Options.Exclude.
 	exclude []string
+	// include is the pair's whitelist (sync.filter.include). Empty means "all".
+	include []string
+	// sizeOnly makes rclone compare sizes and ignore modification times
+	// (compare = "size-only").
+	sizeOnly bool
 	// maxDeleteSize is the byte ceiling rclone checks before deleting, 0 for
 	// none. It is only ever set on the dry pass; see SizeGuardError.
 	maxDeleteSize int64
@@ -695,6 +729,67 @@ type conflictOutcome struct {
 	abort bool
 }
 
+// verifyIdenticalPaths downloads the destination copy of every file this run
+// would transfer and reports the ones whose bytes already match.
+//
+// compare = "content" (R23). It is expensive by nature - the only way to compare
+// content on a backend without hashes (Feishu returns hash.None, verified in
+// M0/E3) is to read both copies - so it runs over the transfer set only, never
+// the whole tree, and the console says what it costs before it starts.
+//
+// The result is used to exclude those paths from the real pass. Excluding rather
+// than merely relabelling is deliberate: a comparison that reports "in sync"
+// while the run then re-uploads the file is exactly the drift this project
+// refuses to ship.
+func verifyIdenticalPaths(ctx context.Context, fdst, fsrc fs.Fs, opts passOptions, w io.Writer) ([]string, error) {
+	collector, err := plan.Begin(fdst, fsrc)
+	if err != nil {
+		// Another preview owns the log hook. Its rows are not ours, so this run
+		// cannot verify anything; say so rather than comparing the wrong files.
+		return nil, fmt.Errorf("content compare needs the log hook, which another "+
+			"preview is using: %w", err)
+	}
+	dry, passErr := runPass(ctx, fdst, fsrc, opts, true, false)
+	rows := collector.End()
+	if passErr != nil {
+		return nil, passErr
+	}
+
+	var total, same int
+	var identical []string
+	for _, row := range rows {
+		if row.Action != plan.Create && row.Action != plan.Update {
+			continue
+		}
+		if !row.HasRight {
+			continue // nothing on the destination: nothing to compare against
+		}
+		dstObj, err := fdst.NewObject(ctx, row.Path)
+		if err != nil {
+			continue // vanished or unreadable: let the normal pass report it
+		}
+		srcObj, err := fsrc.NewObject(ctx, row.Path)
+		if err != nil {
+			continue
+		}
+		total++
+		differ, err := operations.CheckIdenticalDownload(ctx, dstObj, srcObj)
+		if err != nil {
+			fmt.Fprintf(w, "  content compare: %q could not be read back: %v\n", row.Path, err)
+			continue
+		}
+		if !differ {
+			identical = append(identical, row.Path)
+			same++
+		}
+	}
+	if total > 0 {
+		fmt.Fprintf(w, "  content compare: %d file(s) read back, %d already identical\n", total, same)
+	}
+	_ = dry
+	return identical, nil
+}
+
 // runPass performs one sync pass and reports what it did.
 func runPass(ctx context.Context, fdst, fsrc fs.Fs, opts passOptions, dryRun, deleteExtras bool) (PassResult, error) {
 	ctx, ci := fs.AddConfig(ctx)
@@ -713,17 +808,46 @@ func runPass(ctx context.Context, fdst, fsrc fs.Fs, opts passOptions, dryRun, de
 	if opts.maxDeleteSize > 0 {
 		ci.MaxDeleteSize = fs.SizeSuffix(opts.maxDeleteSize)
 	}
+	// compare = "size-only": ignore the timestamp, treat same-size as unchanged.
+	// This is a real change of decision, not just a display option, because it is
+	// what the user asked for and rclone supports it natively.
+	ci.SizeOnly = opts.sizeOnly
 
-	// Daemon-level excludes, on top of whatever filter the caller already put on
-	// the context. AddConfig appends to the existing filter rather than replacing
-	// it, which matters: the conflict and trash exclusions are already there, and
-	// building a fresh filter would silently drop them.
-	if len(opts.exclude) > 0 {
+	// Filters, in two layers: the pair's own whitelist and removals (from the job
+	// file), then the daemon's global excludes. AddConfig appends to the filter
+	// already on the context rather than replacing it, which matters: the conflict
+	// and trash exclusions are already there, and building a fresh filter would
+	// silently drop them.
+	//
+	// Include is a whitelist: rclone treats any include pattern as "only these",
+	// so adding one can only narrow what syncs. That is why the daemon's global
+	// list is exclude-only - a global include would fight every pair's own.
+	if len(opts.include) > 0 || len(opts.exclude) > 0 {
 		var fi *filter.Filter
 		ctx, fi = filter.AddConfig(ctx)
+		for _, pattern := range opts.include {
+			if err := fi.Add(true, pattern); err != nil {
+				return PassResult{}, fmt.Errorf("include %q: %w", pattern, err)
+			}
+		}
 		for _, pattern := range opts.exclude {
 			if err := fi.Add(false, pattern); err != nil {
 				return PassResult{}, fmt.Errorf("exclude %q: %w", pattern, err)
+			}
+		}
+		// The catch-all that turns an include list into a whitelist.
+		//
+		// rclone's rule set returns "include" when nothing matches, so a bare
+		// include rule re-includes rather than restricts: adding include = ["*.xlsx"]
+		// alone still transferred every file (measured). rclone's own CLI appends
+		// this same rule after parsing --include (fs/filter/rules.go, the
+		// addImplicitExclude branch), which is why --include works there.
+		//
+		// Appended last on purpose: first match wins, so the user's excludes above
+		// can carve holes out of the whitelist before this drops the rest.
+		if len(opts.include) > 0 {
+			if err := fi.Add(false, "/**"); err != nil {
+				return PassResult{}, fmt.Errorf("apply the include whitelist: %w", err)
 			}
 		}
 	}
@@ -821,20 +945,24 @@ type stateFlusher interface {
 	FlushState()
 }
 
-// snapshotHaser is implemented by backends that keep a sync snapshot and can say
-// whether a path is in it.
+// snapshotHaser is implemented by backends that keep a sync snapshot and can report
+// what it remembers about a path.
 type snapshotHaser interface {
-	SnapshotHas(rel string) bool
+	// SnapshotEntry returns the size we uploaded for rel, and whether the snapshot
+	// knows the path at all.
+	SnapshotEntry(rel string) (size int64, ok bool)
 }
 
 // snapshotLookup adapts a backend to the lookup function plan.ApplySnapshot wants.
 //
-// It only distinguishes "the snapshot knows this path" from "it does not", which
-// is what separates an update from a new file in the plan. Returning nil when the
-// backend has no snapshot is correct: nothing is known, so every copy is a create.
-func snapshotLookup(f fs.Fs) func(string) bool {
+// It answers the two questions the two-pane view asks: whether the destination
+// already holds this path (an update rather than a new file) and, if so, how big
+// our recorded copy is - the cloud listing carries no size. Returning nil when the
+// backend has no snapshot is correct: nothing is known, so every copy is a create
+// and the destination cell stays blank instead of showing a made-up number.
+func snapshotLookup(f fs.Fs) plan.Lookup {
 	if h, ok := f.(snapshotHaser); ok {
-		return h.SnapshotHas
+		return h.SnapshotEntry
 	}
 	return nil
 }
