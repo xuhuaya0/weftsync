@@ -286,6 +286,25 @@ if c.doUpdate && c.inplace {
 同时设置安全上限：单目录超过 **2000** 条时报错（飞书硬限 1500，
 留缓冲；超限时给出 spec 中要求的可操作错误）。
 
+**上限的出处（2026-11-09 重新核对）**
+
+当时写这条决策没有留下链接，补上：
+
+| 限制 | 数字 | 错误码 |
+|---|---|---|
+| 单层节点数 | 1,500 | `1062507` |
+| 目录深度 | 15 层 | `1062506` |
+| 单树总节点 | 400,000 | `1062505` |
+
+- <https://open.feishu.cn/document/server-docs/docs/drive-v1/folder/create_folder>
+  （Limits 段逐字给出 1,500 与 400,000）
+- <https://open.feishu.cn/document/server-docs/docs/drive-v1/upload/upload_all>
+  （错误码表把三个数字各写了一遍）
+
+> 这些是**文档确认**，不是实测撞墙。`data-model.md` 里「2000 报错阈值」是
+> 当时的早期设想，实际实现改用 **1400**（`split.DefaultRefuseAt`），
+> 见 `docs/daemon.md` §10。
+
 **Rationale**
 - rclone 的 `Fs.List` 语义是"返回该目录全部条目"，必须内部分页
 - 2000 条上限防止云端异常（如数千条同名）时无限循环

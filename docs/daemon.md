@@ -405,11 +405,38 @@ Linux 上用浏览器打开同一个地址。
 而且失败点在同步中途，已经传上去的部分留在云端。F7 的做法是**在同步之前拦下**，
 让用户选一种拆法，然后按账本移动本地和云端。
 
+### 三个上限的数字来自哪里（2026-11-09 重新核对官方文档）
+
+| 限制 | 数字 | 错误码 | 官方原文 |
+|---|---|---|---|
+| 单层节点数 | **1,500** | `1062507` | "the limit of **1,500** nodes per level" |
+| 目录深度 | **15 层** | `1062506` | "My Space supports up to **15 levels** of directories" |
+| 单树总节点 | **400,000** | `1062505` | "the single tree in My Space has reached the maximum size of **400,000**" |
+
+出处：
+
+- <https://open.feishu.cn/document/server-docs/docs/drive-v1/folder/create_folder>（Limits 段：
+  "The maximum number of single-layer nodes … is 1,500"、"total limit … is 400,000"）
+- <https://open.feishu.cn/document/server-docs/docs/drive-v1/upload/upload_all>（错误码表，
+  三个数字各自出现在 1062507 / 1062506 / 1062505 的描述里）
+
+> 这三个数字是**文档确认**，不是我们实测撞墙得到的。74,314 个文件那次同步
+> 每个目录都远未接近 1500，因此没有真机触发过 1062507。代码侧已具备处理：
+> `CodeTooManyNodes` / `CodeDepthExceeded` 都在 `codeTable` 里，归为
+> `classInvalidArgument`（不可重试），并有单测覆盖。
+
 ### 上限取 1400，不是 1500
 
 硬限是飞书定的，我们按 1400 拦。留 100 的余量是因为检查和执行不是同一瞬间：
 预检看到 1450 项、你点确认、它真的开始移文件，中间照样可能有新文件落地。
 余量为 0 时会出现「检查通过、同步却报超限」这种最难解释的情况。
+
+**这个余量的实际防御力有限**，不要高估：目录若在检查后增长 100 个以上文件，
+照样会撞 1062507 并在中途失败。真正兜底的是「预检失败则整轮不传」这个语义
+（错误信息里的 `NOTHING was uploaded`），而不是 100 这个具体数字。
+
+拆分桶的 1400（`DefaultMaxPerBucket`）理由不同、也更实在：**按 1500 切的桶会立刻
+重新超限** —— 第二天目录里多一个文件就又是 1500+，等于白拆。
 
 ### 四条接口
 
