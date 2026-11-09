@@ -120,6 +120,39 @@
     display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px;
     border: 1px solid var(--line); color: var(--muted);
   }
+
+  /* 对比视图：先看逐文件动作，再决定执行（对齐 FreeFileSync 的逻辑）*/
+  .cmp-bar {
+    display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+    padding: 8px 10px; margin-bottom: 8px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--bg2, rgba(0,0,0,.02));
+  }
+  .cmp-chip {
+    font-size: 12px; padding: 2px 9px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+  }
+  .cmp-chip b { font-weight: 700; color: var(--fg, inherit); }
+  .cmp-chip.creates { border-color: var(--blue); color: var(--blue); }
+  .cmp-chip.updates { border-color: #b8860b; color: #b8860b; }
+  .cmp-chip.downloads { border-color: #2f8f4e; color: #2f8f4e; }
+  .cmp-chip.deletes { border-color: var(--bad); color: var(--bad); }
+  .cmp-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .cmp-table th {
+    text-align: left; font-weight: 600; font-size: 12px; color: var(--muted);
+    border-bottom: 1px solid var(--line); padding: 4px 6px; position: sticky; top: 0;
+    background: inherit; white-space: nowrap;
+  }
+  .cmp-table td { padding: 3px 6px; border-bottom: 1px solid var(--line); }
+  .cmp-table tr.meta { opacity: .55; }
+  .cmp-table td.path { word-break: break-all; }
+  .cmp-table td.size { text-align: right; white-space: nowrap; color: var(--muted); }
+  .cmp-act { white-space: nowrap; font-family: ui-monospace, monospace; }
+  .cmp-act.creates { color: var(--blue); }
+  .cmp-act.updates { color: #b8860b; }
+  .cmp-act.downloads { color: #2f8f4e; }
+  .cmp-act.deletes { color: var(--bad); font-weight: 600; }
+  .cmp-act.dirs, .cmp-act.meta { color: var(--muted); }
+  .cmp-scroll { max-height: 52vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
 </style>
 </head>
 <body>
@@ -836,6 +869,9 @@ function openPlanPanel(name) {
 
   document.getElementById("plan-job").textContent = name;
   document.getElementById("plan-body").innerHTML = planHTML(job.plan);
+  // The table is injected as a string, so its filter controls need wiring after
+  // the fact. Doing it here (not in planHTML) keeps planHTML a pure formatter.
+  cmpWire();
   const runBtn = document.getElementById("plan-run");
   runBtn.dataset.job = name;
   // "Run it" makes no sense for a preview that could not be built.
@@ -901,7 +937,173 @@ function planHTML(p) {
       </div>
     </div>`);
   }
+
+  // 逐文件动作表：这是「对比」和「只看数字」的分界。
+  parts.push(compareHTML(p));
   return parts.join("");
+}
+
+// ---- 对比视图（对齐 FreeFileSync 的逻辑）----
+//
+// FreeFileSync 的顺序是 对比 → 逐文件看动作 → 汇总 → 同步。原来的面板只显示
+// 计数，回答的是「有多少」，而「我能不能跑」取决于「具体是哪些」。这里的行来自
+// 后端从 rclone 自己的 dry-run 日志里读回的记录，不是另写一套比对，所以计划和
+// 真正执行不可能不一致。
+let cmpState = { rows: [], pairs: 0, showMeta: false, q: "", shown: 400 };
+
+const CMP_META = {
+  create:          { sym: "→", label: "新建",   cls: "creates" },
+  update:          { sym: "→", label: "更新",   cls: "updates" },
+  download:        { sym: "←", label: "下载",   cls: "downloads" },
+  "delete-remote": { sym: "✕", label: "删云端", cls: "deletes" },
+  "delete-local":  { sym: "✕", label: "删本地", cls: "deletes" },
+  mkdir:           { sym: "+", label: "建目录", cls: "dirs" },
+  rmdir:           { sym: "-", label: "删目录", cls: "dirs" },
+  touch:           { sym: "·", label: "元数据", cls: "meta" },
+  other:           { sym: "?", label: "其他",   cls: "meta" },
+};
+
+function cmpRows(p) {
+  const rows = [];
+  let pairs = 0;
+  for (const r of p.results || []) {
+    pairs++;
+    for (const row of (r.plan || [])) {
+      rows.push({
+        path: row.path || "",
+        action: row.action || "other",
+        size: row.size || 0,
+        detail: row.detail || "",
+        pair: r.pair || "",
+      });
+    }
+  }
+  return { rows, pairs };
+}
+
+function compareHTML(p) {
+  cmpState = { rows: [], pairs: 0, showMeta: false, q: "", shown: 400 };
+
+  if (p.error) return "";  // 预览失败时不该假装有对比结果
+  const { rows, pairs } = cmpRows(p);
+  cmpState.rows = rows;
+  cmpState.pairs = pairs;
+
+  if (!rows.length) {
+    // 计划为空有两种情况，必须分清：真的没有变化，还是没采集到。
+    return `<div class="note ok" style="margin-top:10px">逐文件对比：没有需要变更的内容。</div>`;
+  }
+
+  return `<div style="margin-top:12px">
+    <div class="row" style="margin-bottom:8px">
+      <strong class="grow">逐文件对比 · ${rows.length} 行</strong>
+      <input id="cmp-q" placeholder="筛选路径…" style="width:220px">
+      <label class="sub" style="margin:0">
+        <input type="checkbox" id="cmp-meta"> 显示元数据行
+      </label>
+    </div>
+    <div id="cmp-bar" class="cmp-bar"></div>
+    <div class="cmp-scroll"><table class="cmp-table">
+      <thead><tr>
+        <th style="width:1%">动作</th>
+        ${pairs > 1 ? '<th style="width:1%">对</th>' : ""}
+        <th>路径</th><th style="width:1%">大小</th>
+      </tr></thead>
+      <tbody id="cmp-rows"></tbody>
+    </table></div>
+    <div id="cmp-more" class="row" style="margin-top:8px"></div>
+  </div>`;
+}
+
+// cmpCounts summarises the rows currently loaded, so the chips always agree with
+// the table beneath them. The server also sends a summary, and the two are
+// compared in the tests rather than trusted.
+function cmpCounts(rows) {
+  const c = { create: 0, update: 0, download: 0, "delete-remote": 0,
+              "delete-local": 0, mkdir: 0, rmdir: 0, touch: 0, other: 0, bytes: 0 };
+  for (const r of rows) {
+    if (c[r.action] === undefined) c.other++;
+    else c[r.action]++;
+    if (!/^(delete-|mkdir$|rmdir$|touch$)/.test(r.action)) c.bytes += r.size;
+  }
+  return c;
+}
+
+function cmpFiltered() {
+  const q = cmpState.q.trim().toLowerCase();
+  return cmpState.rows.filter(r => {
+    if (!cmpState.showMeta && (r.action === "touch" || r.action === "other")) {
+      // 元数据行默认隐藏：内容相同但时间戳不同时 rclone 会计划 touch，
+      // 这类行会把真正的变更淹掉。
+      return false;
+    }
+    if (!q) return true;
+    return r.path.toLowerCase().includes(q) || r.action.includes(q);
+  });
+}
+
+function cmpRender() {
+  const c = cmpCounts(cmpState.rows);
+  const chip = (cls, label, n, extra) =>
+    n > 0 ? `<span class="cmp-chip ${cls}">${label} <b>${n}</b>${extra || ""}</span>` : "";
+
+  const chips = [
+    chip("creates", "新建", c.create),
+    chip("updates", "更新", c.update),
+    chip("downloads", "下载", c.download),
+    chip("deletes", "删云端", c["delete-remote"]),
+    chip("deletes", "删本地", c["delete-local"]),
+    chip("dirs", "目录", c.mkdir + c.rmdir),
+    `<span class="cmp-chip">元数据 <b>${c.touch}</b></span>`,
+    c.other ? chip("dirs", "其他", c.other) : "",
+    c.bytes ? `<span class="cmp-chip">传输 <b>${fmtBytes(c.bytes)}</b></span>` : "",
+  ].filter(Boolean).join(" ");
+
+  const destructive = c["delete-remote"] + c["delete-local"] + c.rmdir;
+  const warn = destructive
+    ? `<span class="cmp-chip deletes">其中 ${destructive} 项是删除</span>`
+    : "";
+  document.getElementById("cmp-bar").innerHTML = chips + " " + warn;
+
+  const list = cmpFiltered();
+  const shown = list.slice(0, cmpState.shown);
+  document.getElementById("cmp-rows").innerHTML = shown.map(r => {
+    const m = CMP_META[r.action] || CMP_META.other;
+    const metaRow = (r.action === "touch" || r.action === "other") ? " class=\"meta\"" : "";
+    const size = (r.action.startsWith("delete") || r.action === "mkdir" ||
+                  r.action === "rmdir") ? "" : fmtBytes(r.size);
+    return `<tr${metaRow}>
+      <td class="cmp-act ${m.cls}" title="${esc(r.detail || r.action)}">${m.sym} ${m.label}</td>
+      ${cmpState.pairs > 1 ? `<td class="mono">${esc(r.pair)}</td>` : ""}
+      <td class="path mono">${esc(r.path)}</td>
+      <td class="size">${size}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="4" class="empty">没有匹配的行</td></tr>`;
+
+  const more = document.getElementById("cmp-more");
+  if (list.length > shown.length) {
+    more.innerHTML = `<span class="sub">显示前 ${shown.length} 行，共 ${list.length} 行</span>` +
+      `<button id="cmp-show-more">再显示 400 行</button>`;
+    document.getElementById("cmp-show-more").addEventListener("click", () => {
+      cmpState.shown += 400;
+      cmpRender();
+    });
+  } else {
+    more.innerHTML = list.length !== cmpState.rows.length
+      ? `<span class="sub">已列出 ${list.length} 行（共 ${cmpState.rows.length} 行，其余被筛选隐藏）</span>`
+      : "";
+  }
+}
+
+function cmpWire() {
+  const q = document.getElementById("cmp-q");
+  const meta = document.getElementById("cmp-meta");
+  if (!q || !meta) return;
+  q.addEventListener("input", () => { cmpState.q = q.value; cmpState.shown = 400; cmpRender(); });
+  meta.addEventListener("change", () => {
+    cmpState.showMeta = meta.checked; cmpState.shown = 400; cmpRender();
+  });
+  cmpRender();
 }
 
 document.getElementById("plan-run").addEventListener("click", async (e) => {

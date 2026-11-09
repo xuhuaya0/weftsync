@@ -457,7 +457,10 @@ func (d *Daemon) execute(ctx context.Context, e *entry, mode RunMode) {
 	results, err := d.runJob(runCtx, cfg, d.log, job.Options{
 		DryRun:     mode == ModePlan,
 		StatsGroup: tracker.Group(),
-		Exclude:    d.SettingsOf().excludePatterns(),
+		// A preview collects the per-path plan; a real run has no dry-run log to
+		// read, and the console shows the plan only for previews.
+		CollectPlan: mode == ModePlan,
+		Exclude:     d.SettingsOf().excludePatterns(),
 	})
 
 	// A cancelled context is what our own stop request looks like. Reporting it as

@@ -32,3 +32,18 @@ func (f *Fs) MaxChildrenPerDir() int { return FeishuMaxChildrenPerDir }
 
 // MaxDirDepth implements split.LimitReporter.
 func (f *Fs) MaxDirDepth() int { return FeishuMaxDirDepth }
+
+// SnapshotHas reports whether the sync snapshot already knows this path.
+//
+// The preview uses it to tell an update from a new file: rclone's dry-run log says
+// "copy" for both, and only the snapshot knows whether we uploaded this path
+// before. Safe on a nil snapshot (stateless pairs), which answers false.
+func (f *Fs) SnapshotHas(rel string) bool {
+	if f.st == nil {
+		return false
+	}
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
+	_, ok := f.st.Lookup(rel)
+	return ok
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/rclone/rclone/fs/filter"
 	rsync "github.com/rclone/rclone/fs/sync"
 
+	"weftsync/plan"
 	"weftsync/split"
 )
 
@@ -134,6 +135,16 @@ type PairResult struct {
 	// OverLimit names directories holding more direct children than the backend
 	// accepts, so the run was refused before anything was uploaded.
 	OverLimit []string `json:"over_limit,omitempty"`
+
+	// Plan is what a preview would do, one row per path, read back out of
+	// rclone's own dry-run logging. Only filled when Options.CollectPlan is set.
+	//
+	// Deliberately not a second comparison implementation: the plan and the run
+	// have to agree, and two implementations drift.
+	Plan []plan.Row `json:"plan,omitempty"`
+	// PlanSummary counts Plan by action, so the page can show the header before
+	// rendering thousands of rows.
+	PlanSummary plan.Summary `json:"plan_summary"`
 }
 
 // Options tunes a run.
@@ -152,6 +163,12 @@ type Options struct {
 	// file (sync.max_nodes_per_dir) and otherwise comes from the backend, because
 	// a Go-level default was how Feishu's number ended up applied to a local disk.
 	// See ResolvedSync.MaxNodesPerDir for the three states.
+
+	// CollectPlan records what the dry pass would do, path by path (see
+	// PairResult.Plan). Meaningful only with DryRun, which is the only mode that
+	// must not change anything.
+	CollectPlan bool
+
 	// Exclude holds extra filter patterns applied to every pair in this run.
 	//
 	// The daemon fills this from its settings so a user can exclude "*.tmp" or
@@ -191,8 +208,13 @@ func Run(ctx context.Context, cfg *Config, w io.Writer, opt Options) ([]PairResu
 }
 
 // RunPair runs one pair, applying the delete guard when the variant deletes.
-func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options) (PairResult, error) {
-	res := PairResult{Pair: p.Name}
+//
+// The results are named so a deferred plan collection can fill res.Plan on every
+// return path. There are several of them (guard trips, conflict aborts, backend
+// errors) and a plan that is missing exactly when the run went wrong is the least
+// useful version of it.
+func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options) (res PairResult, err error) {
+	res = PairResult{Pair: p.Name}
 
 	variant, err := p.EffectiveVariant(cfg)
 	if err != nil {
@@ -275,6 +297,23 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	fsrc, err := fs.NewFs(ctx, p.LocalPath())
 	if err != nil {
 		return res, fmt.Errorf("pair %q: open source %q: %w", p.Name, p.LocalPath(), err)
+	}
+
+	// The per-path plan comes from rclone's own dry-run logging, so it is collected
+	// around the passes rather than computed separately - see package plan for why.
+	// The deferred fill runs on every return path, including the guard and conflict
+	// aborts: "the run was refused" is exactly when the user wants the list.
+	if opt.CollectPlan && opt.DryRun {
+		if c, perr := plan.Begin(fdst, fsrc); perr == nil {
+			defer func() {
+				res.Plan = plan.ApplySnapshot(c.End(), snapshotLookup(fdst))
+				res.PlanSummary = plan.Summarise(res.Plan)
+			}()
+		} else {
+			// A second preview of a different job is running. Say so instead of
+			// returning rows that belong to both.
+			fmt.Fprintf(w, "note: pair %q: %v\n", p.Name, perr)
+		}
 	}
 
 	// Conflicts come first: if the remote no longer matches the snapshot, running
@@ -780,6 +819,24 @@ func withTrashExcluded(ctx context.Context, versioningDir string) (context.Conte
 // *feishu.Fs.FlushState is the only implementation today.
 type stateFlusher interface {
 	FlushState()
+}
+
+// snapshotHaser is implemented by backends that keep a sync snapshot and can say
+// whether a path is in it.
+type snapshotHaser interface {
+	SnapshotHas(rel string) bool
+}
+
+// snapshotLookup adapts a backend to the lookup function plan.ApplySnapshot wants.
+//
+// It only distinguishes "the snapshot knows this path" from "it does not", which
+// is what separates an update from a new file in the plan. Returning nil when the
+// backend has no snapshot is correct: nothing is known, so every copy is a create.
+func snapshotLookup(f fs.Fs) func(string) bool {
+	if h, ok := f.(snapshotHaser); ok {
+		return h.SnapshotHas
+	}
+	return nil
 }
 
 // flushStateOf writes any buffered sync records to disk.
