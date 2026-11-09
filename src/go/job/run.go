@@ -104,7 +104,7 @@ func (e *ConflictError) Error() string {
 	return fmt.Sprintf(
 		"pair %q has %d conflict(s) between the folder and the sync state. "+
 			"NOTHING was uploaded, overwritten or deleted. "+
-			"Review the report above, then either fix the folder in Feishu, "+
+			"Review the report above, then either fix the folder in the destination, "+
 			"run `weftsync backend dedupe` for duplicate copies, "+
 			"or set conflict = \"overwrite\" / \"keep-both\" for this pair",
 		e.Pair, e.Count)
@@ -148,9 +148,10 @@ type Options struct {
 	// file" can name a file from the other job. Empty means global, which is what
 	// the command line wants.
 	StatsGroup string
-	// MaxNodesPerDir is the direct-child count that makes a directory over-limit.
-	// Zero means split.DefaultRefuseAt.
-	MaxNodesPerDir int
+	// The per-directory child cap is deliberately NOT here. It lives in the job
+	// file (sync.max_nodes_per_dir) and otherwise comes from the backend, because
+	// a Go-level default was how Feishu's number ended up applied to a local disk.
+	// See ResolvedSync.MaxNodesPerDir for the three states.
 	// Exclude holds extra filter patterns applied to every pair in this run.
 	//
 	// The daemon fills this from its settings so a user can exclude "*.tmp" or
@@ -212,35 +213,16 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	// into the web console.
 	res.Remote = p.RemoteDisplay()
 
-	// Pre-flight: refuse a directory holding more direct children than the backend
-	// accepts. Feishu answers 1062507 for those, but only on the call that creates
-	// or uploads into the folder - by which time part of the run has happened. A
-	// local walk costs nothing in comparison, and it lets the run stop with a
-	// message naming the directory instead of a bare API error.
+	// Pre-flight: refuse a directory holding more direct children than the
+	// destination accepts. Those backends answer with an error only on the call
+	// that creates or uploads into the folder - by which time part of the run has
+	// happened. A local walk costs nothing in comparison, and it lets the run stop
+	// with a message naming the directory instead of a bare API error.
 	//
-	// A preview does not fail on this: its job is to report what a real run would
-	// do, and the answer is "be refused". The directories are listed either way so
-	// the plan panel and the error agree.
-	findings, err := split.Precheck(p.LocalPath(), split.PrecheckOptions{
-		RefuseAt: opt.MaxNodesPerDir,
-	})
-	if err != nil {
-		return res, fmt.Errorf("pair %q: pre-flight check: %w", p.Name, err)
-	}
-	if len(findings) > 0 {
-		for _, f := range findings {
-			res.OverLimit = append(res.OverLimit, f.RelPath)
-		}
-		limitErr := &split.OverLimitError{
-			Root: p.LocalPath(), Limit: refuseAt(opt.MaxNodesPerDir), Findings: findings,
-		}
-		if opt.DryRun {
-			fmt.Fprintf(w, "note: pair %q: %v\n", p.Name, limitErr)
-		} else {
-			return res, fmt.Errorf("pair %q: %w", p.Name, limitErr)
-		}
-	}
-
+	// This runs AFTER the destination is open, because the limit belongs to the
+	// backend: Feishu caps a folder at 1500, a local disk does not cap it at all.
+	// Running it before (with Feishu's number compiled in) refused a local ->
+	// local sync of 1401 files with a message about Feishu.
 	fdst, err := fs.NewFs(ctx, remotePath)
 	if err != nil {
 		return res, fmt.Errorf("pair %q: open destination %q: %w", p.Name, remotePath, err)
@@ -258,6 +240,38 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	defer abortPass()
 	installAbortHook(fdst, abortPass)
 
+	refuseAt, backendLimit, backend := nodeLimit(fdst, spec, p)
+	if refuseAt > 0 {
+		// A preview does not fail on this: its job is to report what a real run
+		// would do, and the answer is "be refused". The directories are listed
+		// either way so the plan panel and the error agree.
+		_, depth := split.LimitOf(fdst)
+		findings, err := split.Precheck(p.LocalPath(), split.PrecheckOptions{
+			RefuseAt: refuseAt,
+			MaxDepth: depth,
+		})
+		if err != nil {
+			return res, fmt.Errorf("pair %q: pre-flight check: %w", p.Name, err)
+		}
+		if len(findings) > 0 {
+			for _, f := range findings {
+				res.OverLimit = append(res.OverLimit, f.RelPath)
+			}
+			limitErr := &split.OverLimitError{
+				Root:         p.LocalPath(),
+				Limit:        refuseAt,
+				Backend:      backend,
+				BackendLimit: backendLimit,
+				Findings:     findings,
+			}
+			if opt.DryRun {
+				fmt.Fprintf(w, "note: pair %q: %v\n", p.Name, limitErr)
+			} else {
+				return res, fmt.Errorf("pair %q: %w", p.Name, limitErr)
+			}
+		}
+	}
+
 	fsrc, err := fs.NewFs(ctx, p.LocalPath())
 	if err != nil {
 		return res, fmt.Errorf("pair %q: open source %q: %w", p.Name, p.LocalPath(), err)
@@ -274,9 +288,9 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 			return res, fmt.Errorf("pair %q: %w", p.Name, scanErr)
 		}
 		if !scan.Available {
-			fmt.Fprintf(w, "note: pair %q: conflicts cannot be checked (%s); "+
+			fmt.Fprintf(w, "note: pair %q: conflicts cannot be checked%s; "+
 				"two-way needs a state_file, so this run can only upload\n",
-				p.Name, scan.Summary)
+				p.Name, parenIf(scan.Summary))
 		} else {
 			plan := planPulls(ctx, fsrc, scan.Conflicts)
 			pulled, pullErr := pullRemoteChanges(ctx, p, plan, opt.DryRun, w)
@@ -479,12 +493,53 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	return res, nil
 }
 
-// refuseAt resolves the configured threshold.
-func refuseAt(configured int) int {
-	if configured > 0 {
-		return configured
+// nodeLimit resolves the per-directory child threshold for this run.
+//
+// The order is: the job file wins, otherwise the backend declares its own hard
+// limit and we refuse split.Headroom below it. A backend that declares nothing
+// reports 0, which means no limit at all, and the caller must skip the check.
+//
+// This is the whole of F12: the limit is a property of the destination, so it is
+// asked of the destination. Baking Feishu's number in here is what refused a
+// local -> local sync of 1401 files.
+func nodeLimit(f fs.Fs, spec ResolvedSync, p *Pair) (refuseAt, backendLimit int, backend string) {
+	backendLimit, _ = split.LimitOf(f)
+	backend = RemoteKind(p)
+	if spec.MaxNodesPerDir != nil {
+		return *spec.MaxNodesPerDir, backendLimit, backend
 	}
-	return split.DefaultRefuseAt
+	return split.RefuseAtFor(backendLimit), backendLimit, backend
+}
+
+// RemoteKind names the destination backend for messages, without leaking paths or
+// options.
+//
+// fs.ParseRemote resolves "<remote>:<path>" to its backend type, so a pair
+// pointing at a remote called "test" is reported as "feishu" - the word that
+// explains which limit applies. fs.Find would NOT work here: it only matches a
+// backend type name, not a remote path (verified against rclone v1.71.2).
+//
+// Falling back to the remote name, then the inline scheme, keeps it working when
+// the config is not loaded (unit tests with an on-the-fly :local: path).
+//
+// Exported because the split wizard needs the same word in its response, and two
+// implementations would eventually disagree.
+func RemoteKind(p *Pair) string {
+	if disp := strings.TrimSpace(p.RemoteDisplay()); disp != "" {
+		if ri, _, _, _, err := fs.ParseRemote(disp); err == nil && ri != nil && ri.Name != "" {
+			return ri.Name
+		}
+	}
+	if b := strings.TrimSpace(p.Remote.Backend); b != "" {
+		return b
+	}
+	root := strings.TrimSpace(p.Remote.Root)
+	if strings.HasPrefix(root, ":") {
+		if i := strings.Index(root[1:], ":"); i >= 0 {
+			return root[1 : 1+i]
+		}
+	}
+	return "local"
 }
 
 type passOptions struct {
@@ -515,8 +570,8 @@ func handleConflicts(
 		// Not being able to check is not a failure. Say so once and carry on;
 		// blocking the run here would make the default configuration (no
 		// state_file) unusable.
-		fmt.Fprintf(w, "note: pair %q: conflicts cannot be checked (%s)\n",
-			p.Name, conflicts.Summary)
+		fmt.Fprintf(w, "note: pair %q: conflicts cannot be checked%s\n",
+			p.Name, parenIf(conflicts.Summary))
 		return conflictOutcome{ctx: ctx}, nil
 	}
 	if len(conflicts.Conflicts) == 0 {
@@ -736,8 +791,11 @@ type stateFlusher interface {
 func flushStateOf(f fs.Fs, w io.Writer) {
 	s, ok := f.(stateFlusher)
 	if !ok {
-		fmt.Fprintf(w, "note: %T does not expose a sync-state flush; "+
-			"records from this run may not be persisted\n", f)
+		// Debug, not a note: most backends have no snapshot at all, so this is
+		// the normal case for a local disk or union, not something to explain on
+		// every run. -vv still surfaces it when the assertion is suspected of
+		// drifting.
+		fs.Debugf(f, "no sync-state flush (this backend keeps no snapshot)")
 		return
 	}
 	s.FlushState()
@@ -763,7 +821,10 @@ func installAbortHook(f fs.Fs, abort func()) {
 		h.SetAbortHook(abort)
 		return
 	}
-	rcloneLogf("note: %T has no abort hook; a systemic failure will not stop the pass early", f)
+	// Debug, not a note: a backend without the hook works fine, it just stops
+	// slower in the rare systemic-failure case. Printing this on every run of
+	// every non-Feishu pair would train the user to ignore notes.
+	fs.Debugf(f, "no abort hook; a systemic failure will not stop the pass early")
 }
 
 // systemicFailureOf returns the backend's latched failure, or nil.
@@ -774,9 +835,13 @@ func systemicFailureOf(f fs.Fs) error {
 	return nil
 }
 
-// rcloneLogf writes to rclone's log without needing a caller's writer.
-func rcloneLogf(format string, args ...any) {
-	fs.Logf(nil, format, args...)
+// parenIf wraps a non-empty reason in parentheses, so a message does not end in
+// an empty "()" when the backend gave no explanation.
+func parenIf(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return ""
+	}
+	return " (" + s + ")"
 }
 
 // backupDirFor returns the trash folder path, or "" when deletion is permanent.

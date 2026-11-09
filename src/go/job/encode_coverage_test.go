@@ -16,6 +16,7 @@ import (
 // the next field cannot be forgotten without a red test.
 func TestEncodeCoversEverySyncField(t *testing.T) {
 	limit := int64(7)
+	nodes := 900
 	cfg := &Config{
 		Job: Job{Name: "j"},
 		Pair: []Pair{{
@@ -37,6 +38,7 @@ func TestEncodeCoversEverySyncField(t *testing.T) {
 				PropagateRemoteDelete: true,
 				PullNewFiles:          true,
 				MaxPullSize:           "250M",
+				MaxNodesPerDir:        &nodes,
 			},
 		}},
 	}
@@ -58,6 +60,7 @@ func TestEncodeCoversEverySyncField(t *testing.T) {
 		`propagate_remote_delete = true`,
 		`pull_new_files = true`,
 		`max_pull_size = "250M"`,
+		`max_nodes_per_dir = 900`,
 	}
 	for _, want := range wants {
 		if !strings.Contains(out, want) {
@@ -81,6 +84,38 @@ func TestEncodeCoversEverySyncField(t *testing.T) {
 	}
 	if got.MaxPullSize != "250M" {
 		t.Errorf("max_pull_size = %q", got.MaxPullSize)
+	}
+	// Pointer, so a dropped field and an explicit 0 must not look alike.
+	if got.MaxNodesPerDir == nil || *got.MaxNodesPerDir != 900 {
+		t.Errorf("max_nodes_per_dir did not survive: %+v", got.MaxNodesPerDir)
+	}
+}
+
+// An explicit 0 is meaningful ("this backend has no per-directory limit"), so the
+// writer has to emit it rather than treating 0 as "unset" and dropping it. Dropping
+// it would silently restore the backend's own limit on the next load.
+func TestEncodeKeepsAnExplicitZeroNodeLimit(t *testing.T) {
+	zero := 0
+	cfg := &Config{
+		Job: Job{Name: "j"},
+		Pair: []Pair{{
+			Name:   "p",
+			Local:  Endpoint{Root: "/tmp/l"},
+			Remote: Endpoint{Root: ":local:/tmp/r"},
+			Sync:   SyncSpec{MaxNodesPerDir: &zero},
+		}},
+	}
+
+	raw, err := Encode(cfg)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if !strings.Contains(string(raw), "max_nodes_per_dir = 0") {
+		t.Fatalf("Encode dropped the explicit zero:\n%s", raw)
+	}
+	got := mustLoad(t, string(raw)).Pair[0].Sync
+	if got.MaxNodesPerDir == nil || *got.MaxNodesPerDir != 0 {
+		t.Fatalf("loaded max_nodes_per_dir = %+v, want an explicit 0", got.MaxNodesPerDir)
 	}
 }
 

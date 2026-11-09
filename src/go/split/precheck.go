@@ -10,10 +10,14 @@ import (
 
 // Pre-flight check.
 //
-// Feishu rejects a folder with more than 1500 direct children, and it does so when
-// the create/upload call arrives - which is in the middle of a run, after some
-// files are already across. The point of checking first is to fail before anything
-// has moved, with a message that names the offending directory.
+// A backend that caps a folder's direct children (Feishu: 1500) rejects the
+// create/upload call in the middle of a run, after some files are already across.
+// The point of checking first is to fail before anything has moved, with a
+// message that names the offending directory.
+//
+// The limit itself comes from the backend (see LimitReporter in limits.go), not
+// from this package: a local disk has no such cap, and refusing a local sync over
+// a Feishu number was a real bug.
 
 // Finding is one directory that is at or over the limit.
 type Finding struct {
@@ -39,12 +43,22 @@ type OverLimitError struct {
 	Root string
 	// Limit is the threshold that was exceeded.
 	Limit int
+	// Backend names the destination for the message, e.g. "feishu". Empty when
+	// the caller does not know it, in which case the message stays generic.
+	Backend string
+	// BackendLimit is the backend's documented hard limit, for context. 0 means
+	// unknown, and is then left out.
+	BackendLimit int
 	// Findings is every over-limit directory, largest first.
 	Findings []Finding
 }
 
 func (e *OverLimitError) Error() string {
 	if len(e.Findings) == 0 {
+		if e.Backend != "" {
+			return fmt.Sprintf("a directory under %q exceeds the %s limit of %d entries",
+				e.Root, e.Backend, e.Limit)
+		}
 		return fmt.Sprintf("a directory under %q exceeds the %d-entry limit", e.Root, e.Limit)
 	}
 	f := e.Findings[0]
@@ -52,42 +66,58 @@ func (e *OverLimitError) Error() string {
 	if where == "" {
 		where = "(根目录)"
 	}
+
+	// Naming the backend matters: the same message used to say "飞书" for a pair
+	// whose destination was a local disk.
+	var exceeded string
+	switch {
+	case e.Backend != "" && e.BackendLimit > 0:
+		exceeded = fmt.Sprintf(
+			"超过后端 %q 的单目录上限（我们按 %d 拦截，后端硬限 %d）",
+			e.Backend, e.Limit, e.BackendLimit)
+	case e.Backend != "":
+		exceeded = fmt.Sprintf("超过后端 %q 的单目录上限（按 %d 拦截）", e.Backend, e.Limit)
+	default:
+		exceeded = fmt.Sprintf("超过单目录上限（按 %d 拦截）", e.Limit)
+	}
+
 	msg := fmt.Sprintf(
-		"目录 %q 有 %d 个直接子项，超过飞书单层上限（我们按 %d 拦截，飞书硬限 %d）。"+
+		"目录 %q 有 %d 个直接子项，%s。"+
 			"NOTHING was uploaded. 请先拆分该目录（界面「拆分」或 weftsync split 命令）",
-		where, f.Total(), e.Limit, FeishuLimit)
+		where, f.Total(), exceeded)
 	if len(e.Findings) > 1 {
 		msg += fmt.Sprintf("。另有 %d 个目录也超限", len(e.Findings)-1)
 	}
 	return msg
 }
 
-// DefaultRefuseAt is where a sync is refused.
-//
-// 1400 rather than 1500 on purpose: a directory sitting exactly on the hard limit
-// starts failing as soon as one file is added, and a run that dies halfway is far
-// worse than an early, clear refusal that names the directory.
-const DefaultRefuseAt = 1400
-
 // PrecheckOptions tunes the scan.
 type PrecheckOptions struct {
-	// RefuseAt is the direct-child count that makes a directory over-limit.
+	// RefuseAt is the direct-child count that makes a directory over-limit. It
+	// must be positive: "no limit" is expressed by not calling Precheck at all,
+	// which is decided from the backend's declaration (see LimitOf/RefuseAtFor).
+	//
+	// Requiring it rather than defaulting is deliberate. A default here is how a
+	// Feishu number ended up applied to every backend.
 	RefuseAt int
-	// MaxDepth stops the walk. Feishu also limits directory depth to 15, and a
-	// local tree deeper than that will fail for a different reason, so there is
-	// no point walking further looking for entry-count problems.
+	// MaxDepth stops the walk, counting the pair root as 1. The backend's own
+	// depth limit (Feishu: 15) is the natural value: a local tree deeper than the
+	// backend allows will fail for a different reason, so there is no point
+	// walking further looking for entry-count problems. 0 means the default 15.
 	MaxDepth int
 }
 
 // Precheck scans a local tree for directories holding too many direct children.
 //
-// Only direct children are counted, matching what Feishu limits. It returns nil
-// when every directory is within the limit; a non-nil error means the scan itself
-// failed (a permission problem, a vanished directory), which must not be reported
-// as "within limits".
+// Only direct children are counted, matching what the backends with a limit
+// enforce. It returns nil when every directory is within the limit; a non-nil
+// error means the scan itself failed (a permission problem, a vanished
+// directory), which must not be reported as "within limits".
 func Precheck(root string, opts PrecheckOptions) ([]Finding, error) {
 	if opts.RefuseAt <= 0 {
-		opts.RefuseAt = DefaultRefuseAt
+		return nil, fmt.Errorf(
+			"precheck: the refuse threshold must be positive (skip the scan instead " +
+				"when the backend declares no limit)")
 	}
 	if opts.MaxDepth <= 0 {
 		opts.MaxDepth = 15

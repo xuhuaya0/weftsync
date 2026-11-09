@@ -156,9 +156,9 @@ func TestFlushStateKeepsPendingWhenSaveFails(t *testing.T) {
 // TestFlushStateWithoutSnapshotIsHarmless covers the no-state_file configuration.
 func TestFlushStateWithoutSnapshotIsHarmless(t *testing.T) {
 	for _, f := range []*Fs{
-		{},                        // no snapshot at all
-		{st: state.New("p")},      // snapshot present but not storable
-		{storable: true},          // storable but no snapshot
+		{},                   // no snapshot at all
+		{st: state.New("p")}, // snapshot present but not storable
+		{storable: true},     // storable but no snapshot
 	} {
 		f.flushState()
 		f.FlushState()

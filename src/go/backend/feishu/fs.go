@@ -68,7 +68,8 @@ type Fs struct {
 }
 
 // newFs builds the backend, validating credentials and the root folder.
-func newFs(ctx context.Context, name, root string, opt *Options) (*Fs, error) {	missing, secretForms := opt.resolveEnv()
+func newFs(ctx context.Context, name, root string, opt *Options) (*Fs, error) {
+	missing, secretForms := opt.resolveEnv()
 	if len(missing) > 0 {
 		return nil, fmt.Errorf(
 			"feishu: missing required configuration: %s.\n"+

@@ -2499,4 +2499,106 @@ run again later and it will continue from the saved state
 4. **熔断要能被复位**。计数被成功清零、锁存只在进程内有效，
    才不至于一次尖峰毁掉整个进程。
 
+---
+
+## D52 · 后端的上限必须由后端声明，不能写进共享代码（2026-11-09）
+
+用户看到 F11 的记录后问了一句：「这个分桶是飞书独有的哦，如果以后我把 feishu 云盘
+换成 smb 之类的，这个功能其实是不必要的」。
+
+顺着这条核实，发现**不用等到换后端，现在就已经错了**。
+
+### 实测：本地同步被飞书的上限拒绝
+
+```
+local -> local，源目录 1401 个文件，全程没有飞书参与
+exit=1，目标目录 0 个文件
+报错：目录 "(根目录)" 有 1401 个直接子项，超过飞书单层上限
+      （我们按 1400 拦截，飞书硬限 1500）。NOTHING was uploaded。
+```
+
+本地文件系统没有单层 1500 的限制。这是一次**误拒绝**。
+
+### 插拔本来是好的，错的是我放错的那一层
+
+先确认不是「没预留插拔」：
+
+- `main.go` 里 `_ "github.com/rclone/rclone/backend/all"` 注册了**全部上游后端**
+- `split.Remote` / `split.StateMover` 本来就是接口，`NewRcloneRemote(fs.Fs)` 接受任意后端
+- 除 `backend/feishu` 外，只有 `main.go` 一处空 import；通用层里的「feishu」字样
+  全是注释和一条文案
+- F10 实测过同一个 job 跑**飞书 + 本地磁盘 + union**，各自增量正确
+
+问题精确地在一处：**rclone 抽象的是「操作」，不是「容量」**。核查
+`rclone@v1.71.2/fs/features.go` 全文，`fs.Features` 有 27 个能力标志
+（`CaseInsensitive`、`DuplicateFiles`、`CanHaveEmptyDirectories`、`BucketBased`、
+`PartialUploads`、`SlowModTime`…）和能力函数（`Mkdir`、`Move`、`Purge`、`About`…），
+**没有任何「一个目录最多放多少条」的字段**。这条信息在上游无处可放。
+
+而我把这条后端专有策略写进了共享的预检，还：
+
+1. 对**每个 pair 无条件**执行（`job/run.go:224`）
+2. 在 `fs.NewFs` **之前**（那时根本不知道后端是谁）
+3. job 文件里**没有任何开关**能关掉它（`Options.MaxNodesPerDir` 只有 Go 调用方能设，
+   取 0 就落到 1400，**没有任何办法表达「不限」**）
+
+### 修法
+
+| 改动 | 说明 |
+|---|---|
+| 新增 `split.LimitReporter` | 后端声明 `MaxChildrenPerDir()` / `MaxDirDepth()`，0 = 无上限 |
+| 新增 `split.LimitOf(fs.Fs)` | 断言接口；不实现就是「无上限」 |
+| 飞书实现它 | `backend/feishu/limits.go`：1500 / 15，附官方出处 |
+| 预检**移到打开后端之后** | 先问目的地，再决定要不要检查 |
+| 后端没声明 → **完全跳过预检** | 不是「用默认值」，是根本不扫 |
+| job 文件新增 `max_nodes_per_dir` | **三态**：不写=后端、`0`=不限、`n`=覆盖 |
+| 错误文案去飞书化 | 报真实后端类型（`fs.ParseRemote` 解析，如 `feishu`），不再写死 |
+| 拆分桶上限由后端推出 | `MaxPerBucketFor(后端硬限)`，与拦截阈值同一个数 |
+| 拆分向导接口 | `feishu_limit` → `backend_limit` + `backend`；无上限时不报 finding |
+
+### 三个自己踩到的坑（都是先测后改，不是推演）
+
+1. **`fs.Find` 不能解析远端路径**。我先用了它，跑真机仍然显示「后端 test」。
+   读 `rclone/fs/registry.go:401` 才发现 `Find` 只匹配**后端类型名**
+   （`feishu`/`local`），不解析 `test:path`。正确的是 `fs.ParseRemote`
+   —— 换掉之后真机输出变成 `后端 "feishu"`。
+2. **测试里的「本地后端」其实一直是错的**。`daemon/split_test.go` 用 `:local:`
+   却断言「飞书硬限 1500」；`job/precheck_test.go` 用 `localPair` 却测飞书限制。
+   两个测试**自己就证明了这个 bug**：它们把飞书行为当成通用行为来断言。
+   改法是让它们走 job 文件的 `max_nodes_per_dir`（真实用户路径），
+   并新增一条「本地后端应当报 0 findings」的反向断言。
+3. **顺手修的噪音**：`flushStateOf` / `installAbortHook` 的类型断言失败提示
+   原本是 `note:`，对每个非飞书后端每轮都打一遍。改成 `fs.Debugf`。
+   另外 `conflicts cannot be checked ()` 的空括号也修了 —— 后者是既有瑕疵。
+
+### 验证
+
+| 验证 | 结果 |
+|---|---|
+| 单测：`LimitOf(不实现接口的后端)` = 0/0 | 通过 |
+| 单测：`RefuseAtFor` 覆盖 0 / 负数 / <Headroom / 1500 / 2000 | 通过 |
+| 单测：`nodeLimit` 优先级（job 文件 > 后端 > 无） | 通过 |
+| 单测：本地后端 1401 个文件不再被拒绝 | 通过（3.8s） |
+| 单测：`max_nodes_per_dir = 0` 真的不限 | 通过 |
+| 单测：负数被拒绝且错误信息点名该设置 | 通过 |
+| 单测：`max_nodes_per_dir` 经过编码器能读回 | 通过 |
+| mutation A：`LimitOf` 硬编码 1500/15 | 测试报 `OverLimit = [], want none`，红 |
+| mutation B：编码器丢掉该字段 | 测试报 `Encode dropped the explicit zero`，红 |
+| **真机**：local→local 1401 个文件 | `transferred 1401`，exit=0（修复前 exit=1、0 个文件） |
+| **真机**：同样数据 → 真实飞书 | 仍拒绝，报 `后端 "feishu"`、1400/1500、`NOTHING was uploaded`，云端 0 条目 |
+| 全量测试 + Linux 交叉编译 + gofmt | 全绿 |
+
+### 教训
+
+1. **「这个限制是哪个层级的」要在写代码前问一次**。数据约束（容量、命名规则、
+   mtime 精度）是后端的；同步策略（删不删、留不留版本）是我们的。
+   把前者的数字写进后者，一旦换后端就是误拒绝。
+2. **测试用错了后端，等于给 bug 盖了章**。两个测试都用本地目录断言飞书数字，
+   全绿，所以一直没人发现。**测试里的后端必须和断言里的限制属于同一类**。
+3. **「没实现」和「默认值」必须能区分**。用 0 表示「用默认」的地方，
+   就再也表达不出「不要这个行为」。三态指针（不写/0/正值）是这里唯一安全的形状。
+4. **先核实工具再改代码**：`fs.Find` 那次如果只看函数名就下手，
+   真机输出会一直是「后端 test」，而我可能把它当成「够用了」收工。
+
+
 

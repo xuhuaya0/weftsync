@@ -107,7 +107,7 @@ func writeSyncSection(b *bytes.Buffer, name string, s SyncSpec) {
 	empty := s.Deletion == "" && s.VersioningDir == "" && s.VersioningNaming == "" &&
 		s.Conflict == "" && s.MaxDelete == nil && s.MaxDeleteSize == "" &&
 		!s.PropagateLocalDelete && !s.PropagateRemoteDelete && !s.PullNewFiles &&
-		s.MaxPullSize == ""
+		s.MaxPullSize == "" && s.MaxNodesPerDir == nil
 	if empty {
 		return
 	}
@@ -143,6 +143,12 @@ func writeSyncSection(b *bytes.Buffer, name string, s SyncSpec) {
 	}
 	if s.MaxPullSize != "" {
 		writeString(b, "max_pull_size", s.MaxPullSize)
+	}
+	// Written even when 0: 0 is the meaningful "no limit here" and differs from
+	// "absent = ask the backend". Dropping it would silently restore Feishu's
+	// number on a backend that has none.
+	if s.MaxNodesPerDir != nil {
+		fmt.Fprintf(b, "max_nodes_per_dir = %d\n", *s.MaxNodesPerDir)
 	}
 }
 
@@ -354,6 +360,14 @@ func sameSync(a, b SyncSpec) bool {
 	if a.PropagateLocalDelete != b.PropagateLocalDelete ||
 		a.PropagateRemoteDelete != b.PropagateRemoteDelete ||
 		a.PullNewFiles != b.PullNewFiles || a.MaxPullSize != b.MaxPullSize {
+		return false
+	}
+	// Pointer semantics: absent, 0 and n are three different settings here, so a
+	// dropped field cannot be caught by comparing the dereferenced values.
+	if (a.MaxNodesPerDir == nil) != (b.MaxNodesPerDir == nil) {
+		return false
+	}
+	if a.MaxNodesPerDir != nil && *a.MaxNodesPerDir != *b.MaxNodesPerDir {
 		return false
 	}
 	if (a.MaxDelete == nil) != (b.MaxDelete == nil) {

@@ -37,7 +37,7 @@
 | F9 | 双向同步 | R5 | M7 | F4 | ✅ 两期均完成（传播开关默认全关） |
 | F10 | 多网盘（union / 多 pair） | R6, R7 | M8 | F4 | ✅ |
 | F11 | 拆分不破坏文件引用（**待设计**） | R19 | — | F7 | ⬜ 需求已记录，方案未定；用户 2026-11-09 明确「先不动」 |
-| F12 | 后端限制由后端声明（**缺陷**） | R20 | — | F7 | ⬜ 误拒绝已实测复现；待定何时修 |
+| F12 | 后端限制由后端声明 | R20 | — | F7 | ✅ 已修：预检移到开完后端之后，无上限的后端直接跳过 |
 
 ---
 
@@ -735,7 +735,7 @@ F7 的拆分是**纯按数量/类型/首字母/年份分桶**，不理解文件�
 
 ---
 
-### F12 · 后端限制由后端声明 ⬜ 待修
+### F12 · 后端限制由后端声明 ✅
 
 > 用户 2026-11-09：「这个分桶是飞书独有的哦，如果以后我把 feishu 云盘换成 smb
 > 之类的，这个功能其实是不必要的。」
@@ -772,16 +772,17 @@ exit=1，目标目录 0 个文件
 分桶策略（按类型/首字母/年份/数量）也是通用的。真正耦合的只有「什么时候该拦」
 这一个判断。
 
-**建议的修法（待确认，未实施）**
+**修法（已实施，详见 D52）**
 
 后端声明自己的限制，通用路径只做转发：
 
 1. 加一个可选接口，与既有的 `stateFlusher` / `abortHooker`（`job/run.go`）同一模式：
 
    ```go
-   // dirLimmiter 由知道「一个目录最多放多少条」的后端实现。0 表示没有限制。
-   type dirLimiter interface {
+   // split/limits.go：由知道「一个目录最多放多少条」的后端实现。0 表示没有限制。
+   type LimitReporter interface {
        MaxChildrenPerDir() int
+       MaxDirDepth() int
    }
    ```
 
@@ -797,28 +798,49 @@ exit=1，目标目录 0 个文件
 
 2. `job.RunPair` 把预检**移到 `fs.NewFs` 之后**，断言该接口：
    - 后端没有实现 → **完全跳过预检**（local / SMB）
-   - 实现了 → 用后端给的值当硬限，再减去余量
-3. job 文件增 `[pair.sync] max_nodes_per_dir`，语义需要三态（未设置=用后端默认、
-   `0`=显式不限、正数=覆盖），不能沿用现在「0 即默认」的二态。
-4. 文案与字段去飞书化：`FeishuLimit` → `BackendLimit`，错误里写后端名。
-5. 深度限制（15 层）同样归后端；`PrecheckOptions.MaxDepth` 现在是写死的 15。
+   - 实现了 → 用后端给的值当硬限，再减去 `split.Headroom`
+3. job 文件增 `[pair.sync] max_nodes_per_dir`，三态（未设置=后端默认、
+   `0`=显式不限、正数=覆盖），不再沿用「0 即默认」的二态。
+4. 文案与字段去飞书化：`FeishuLimit` → `BackendLimit`，错误里写真实后端类型。
+5. 深度限制（15 层）同样归后端；`PrecheckOptions.MaxDepth` 由它提供。
 
-**为什么还没动手**
+**实施结果**
 
-- 用户 2026-11-09 对拆分相关改动的指示是「先不动」
-- 移动预检位置会改变错误顺序（先开后端再报超限），属于行为变化
-- job 文件新增项要同步 `job/save.go` 的编码器与 `sameSync`（D33 的坑：手写 TOML
-  编码器漏字段会静默丢数据），改之前要补字段覆盖测试
-
-**修完的验收标准**
-
-| # | 验收项 |
+| 改动 | 结果 |
 |---|---|
-| 1 | `local → local` 1,401 个文件能正常同步，不再报飞书上限 |
-| 2 | `feishu` 后端仍然在 1400 拦下并给出可操作提示 |
-| 3 | 错误文案不出现「飞书」（除非后端确实是飞书） |
-| 4 | job 文件能显式写「不限」，并有测试证明它真的不限 |
-| 5 | 新字段保存后能读回（`TestEncodeCoversEverySyncField` 覆盖） |
+| `split.LimitReporter` | 新增；`MaxChildrenPerDir()` / `MaxDirDepth()`，0 = 无上限 |
+| `split.LimitOf(fs.Fs)` | 新增；不实现接口的后端报 0/0 |
+| 飞书实现 | `backend/feishu/limits.go`：1500 / 15，附官方出处；`limits_test.go` 钉住数值 |
+| 预检位置 | 移到 `fs.NewFs` **之后**；后端不声明就**完全跳过** |
+| `[pair.sync] max_nodes_per_dir` | 新增，**三态**指针；负数报错 |
+| 文案 | `fs.ParseRemote` 解析真实后端类型（`feishu`），不再写死 |
+| 拆分向导 | `feishu_limit` → `backend_limit` + `backend`；无上限时不报 finding |
+| 拆分桶上限 | `MaxPerBucketFor(后端硬限)` 推出 |
+| 顺带修的噪音 | 两条类型断言提示降为 `fs.Debugf`；`conflicts cannot be checked ()` 的空括号 |
+
+**验收**
+
+| # | 验收项 | 结果 |
+|---|---|---|
+| 1 | `local → local` 1,401 个文件能正常同步，不再报飞书上限 | ✅ 真机 `transferred 1401`、`dst 1401 个文件`、exit=0 |
+| 2 | `feishu` 后端仍然在 1400 拦下并给出可操作提示 | ✅ 真机报「后端 "feishu"、1400/1500、NOTHING was uploaded」，云端 0 条目 |
+| 3 | 错误文案不出现「飞书」（除非后端确实是飞书） | ✅ 本地报「单目录上限」或真实后端名 |
+| 4 | job 文件能显式写「不限」，并有测试证明它真的不限 | ✅ `max_nodes_per_dir = 0` + 单测 |
+| 5 | 新字段保存后能读回（`TestEncodeCoversEverySyncField` 覆盖） | ✅ 另加 `TestEncodeKeepsAnExplicitZeroNodeLimit` |
+
+**mutation 验证（双向）**
+
+| mutation | 结果 |
+|---|---|
+| `LimitOf` 硬编码回 1500/15（旧行为） | `TestLocalPairIsNotRefusedForFeishuLimits` 红：`OverLimit = [], want none` |
+| 编码器丢掉 `max_nodes_per_dir` | `TestEncodeKeepsAnExplicitZeroNodeLimit` 红：`Encode dropped the explicit zero` |
+
+**两个测试本身就是错的**
+
+`daemon/split_test.go` 用 `:local:` 后端却断言「飞书硬限 1500」；
+`job/precheck_test.go` 用 `localPair` 却测飞书限制。两个测试**自己就证明了这个 bug**
+—— 它们把飞书行为当成通用行为来断言，所以一直是绿的。现在改为走 job 文件的
+`max_nodes_per_dir`（真实用户路径），并新增「本地后端应当报 0 findings」的反向断言。
 
 ---
 
@@ -848,4 +870,4 @@ exit=1，目标目录 0 个文件
 | 2026-11-08 | **首次真实数据同步**（`C:\Users\Jlsemi-62\Downloads\_test_log\JL6xxx`，排除 `_` 前缀内容）：**3,309 个文件 / 1.94 GiB 全部上传，27 分 24 秒，0 错误，0 次 1061045，无超限拒绝，`_` 内容零泄漏，无重复目录**；第二次运行 `transferred 0`，增量成立。测试暴露并修掉两个 `state` 缺陷（D50）：**每传一个文件就整份重写快照**（1.9 GB 数据换来约 7.6 GB 写入，O(n²)）、**rename 无重试**（OneDrive 目录里反复 `Access is denied`，一次失败就丢掉整批记录） |
 | 2026-11-08 | **系统性故障熔断**（D51）：按已确认的默认值（本层重试 3 次、rclone `retries=3`、日配额 10,000、数据集 74,313 个文件）推算，配额用完后会**空转约 10 天**。改为「连续 3 次重试耗尽的调用 → 锁存并取消本轮」，锁存后立即返回不再发请求；不可重试错误不计入，任何成功都清零。单测 6 条 + mutation 双向验证，真机健康跑 `transferred 0`、日志 0 条熔断字样 |
 | 2026-11-09 | **新增 R19 / F11（待设计）**：用户指出拆分超限目录会破坏数据依赖（Excel 链接），方案未定，明确「先不动」。实测核实：9,111 个 xlsx 中 8 个含相对链接，**全部指向同目录兄弟文件** → 存在「链接感知分桶」的可行解，无需改写 xlsx；当前 5 个超限目录**不含 xlsx**（只有自包含 html + 无引用 txt），拆分它们不会断链接。同时核实飞书上限来自官方文档（1500/层、15 层、40 万总量，错误码 1062507/1062506/1062505） |
-| 2026-11-09 | **新增 R20 / F12（缺陷，待修）**：用户指出分桶是飞书独有的、换 SMB 后不该存在。核实发现**不用等换后端，现在就已经错**：`local → local` 1,401 个文件的同步被飞书单层限制误拒绝（exit=1，目标 0 文件，报错写「超过飞书单层上限」）。根因是预检对每个 pair 无条件调用、且在打开后端之前，同时 job 文件没有任何办法表达「不限」。执行层本身是干净的（`Remote`/`StateMover` 已是接口，接受任意 rclone 后端），耦合只在这一处判断 |
+| 2026-11-09 | **R20 / F12 修复完成**：用户指出分桶是飞书独有的、换 SMB 后不该存在。核实发现**不用等换后端，现在就已经错** —— `local → local` 1,401 个文件被飞书单层限制误拒绝（exit=1、目标 0 文件）。改为后端声明限制（`split.LimitReporter`，飞书 1500/15，其余后端不实现即跳过），预检移到打开后端之后，job 文件新增三态 `max_nodes_per_dir`。真机复现：local 1401 个文件 `transferred 1401` exit=0；同一数据打到真实飞书仍拒绝且报「后端 feishu」，云端 0 条目。两条 mutation 双向验证。顺带发现两个测试本身就用本地后端断言飞书数字 —— 它们一直是绿的，正是这个 bug 的帮凶 |

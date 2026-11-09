@@ -1044,10 +1044,20 @@ async function splitCheck() {
 
 function renderSplitCheck(data) {
   const body = document.getElementById("sp-body");
+  // The limit comes from the destination backend, not from a constant: a local
+  // disk has none, and the page must not claim a "Feishu" number for it.
+  const limitNote = data.refuse_at > 0
+    ? (data.backend_limit > 0
+        ? `（本工具按 ${data.refuse_at} 拦截，后端 ${esc(data.backend || "")} 硬限 ${data.backend_limit}）`
+        : `（本工具按 ${data.refuse_at} 拦截，后端 ${esc(data.backend || "")} 未声明硬限）`)
+    : "";
   if (!(data.findings || []).length) {
     body.className = "";
-    body.innerHTML = `<div class="note ok">没有目录超过上限（本工具按 ${data.refuse_at} 拦截，
-      飞书硬限 ${data.feishu_limit}）。</div>`;
+    body.innerHTML = data.refuse_at > 0
+      ? `<div class="note ok">没有目录超过上限${limitNote}。</div>`
+      : `<div class="note ok">目标后端（${esc(data.backend || "")}）没有单目录数量上限，
+          无需拆分。若要强制按某个阈值检查，可在作业文件里设
+          <code>[pair.sync] max_nodes_per_dir = 1400</code>。</div>`;
     return;
   }
   body.className = "";

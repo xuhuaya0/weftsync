@@ -149,6 +149,21 @@ type SyncSpec struct {
 	// MaxPullSize bounds one downloaded new file, e.g. "100M". Empty means
 	// DefaultMaxPullSize.
 	MaxPullSize string `toml:"max_pull_size"`
+
+	// MaxNodesPerDir overrides how many direct children one destination directory
+	// may hold before the run is refused.
+	//
+	// A pointer because there are three distinct meanings and two of them are 0-ish:
+	//
+	//	absent  -> ask the backend (Feishu: 1500, refused at 1400)
+	//	0       -> no limit at all; skip the pre-flight check
+	//	n > 0   -> refuse above n
+	//
+	// The third state is the point. Without it there was no way to say "this
+	// backend has no limit", so the Feishu number applied to every pair - and a
+	// local -> local sync of 1401 files was refused for exceeding a limit that
+	// does not exist on a local disk.
+	MaxNodesPerDir *int `toml:"max_nodes_per_dir"`
 }
 
 // Load reads and validates a job file.
@@ -364,6 +379,19 @@ func (p *Pair) EffectiveSync(c *Config) (ResolvedSync, error) {
 				p.Name, VariantTwoWay, v)
 		}
 	}
+
+	// The per-directory cap. Negative is rejected rather than clamped: it would
+	// otherwise read as "no limit" (any <= 0 hits that branch), which is the least
+	// safe possible interpretation of a typo in a safety setting.
+	out.MaxNodesPerDir = p.Sync.MaxNodesPerDir
+	if out.MaxNodesPerDir == nil {
+		out.MaxNodesPerDir = c.Job.Sync.MaxNodesPerDir
+	}
+	if out.MaxNodesPerDir != nil && *out.MaxNodesPerDir < 0 {
+		return out, fmt.Errorf(
+			"pair %q: max_nodes_per_dir must be >= 0 (0 means \"no limit\"; "+
+				"leave it unset to use the backend's own limit)", p.Name)
+	}
 	return out, nil
 }
 
@@ -396,6 +424,10 @@ type ResolvedSync struct {
 	// MaxPullSizeText is the same value as the user wrote it, so the form shows
 	// "250M" instead of "250Mi".
 	MaxPullSizeText string
+
+	// MaxNodesPerDir is the per-directory child cap resolved from the job file.
+	// nil means "ask the backend"; a non-nil 0 means "no limit, skip the check".
+	MaxNodesPerDir *int
 }
 
 // LocalPath is the rclone path for the local side.

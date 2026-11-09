@@ -33,10 +33,16 @@ type SplitView struct {
 	Pair string `json:"pair"`
 	// Dir is the directory that would be split, relative to the pair root.
 	Dir string `json:"dir"`
-	// RefuseAt is the threshold this build uses.
+	// RefuseAt is the threshold that will actually be used; 0 means this backend
+	// declares no per-directory limit and nothing was configured, so no directory
+	// is over the limit.
 	RefuseAt int `json:"refuse_at"`
-	// FeishuLimit is the backend's documented limit, for context.
-	FeishuLimit int `json:"feishu_limit"`
+	// BackendLimit is the backend's own documented limit, for context. 0 means the
+	// backend declares none (a local disk, an SMB share).
+	BackendLimit int `json:"backend_limit"`
+	// Backend names the destination, so the page can say which limit applies
+	// without assuming Feishu.
+	Backend string `json:"backend"`
 	// Findings is every over-limit directory, largest first.
 	Findings []SplitFinding `json:"findings"`
 }
@@ -137,7 +143,33 @@ func statusFor(err error) int {
 	return http.StatusBadRequest
 }
 
-// handleSplitPrecheck reports directories that are over the limit.
+// pairLimit resolves the per-directory cap for a pair.
+//
+// The wizard asks the same question a run does, and gets the same answer: the job
+// file wins, otherwise the destination backend declares its own limit, otherwise
+// there is no limit. Opening the Fs is what makes that possible, and it is the same
+// cached Fs the sync path uses.
+func (a *API) pairLimit(ctx context.Context, cfg *job.Config, p *job.Pair) (refuseAt, backendLimit, depth int, err error) {
+	remotePath, err := p.RemotePath()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	fdst, err := fs.NewFs(ctx, remotePath)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("打开云端 %q: %w", remotePath, err)
+	}
+	spec, err := p.EffectiveSync(cfg)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	backendLimit, depth = split.LimitOf(fdst)
+	refuseAt = split.RefuseAtFor(backendLimit)
+	if spec.MaxNodesPerDir != nil {
+		refuseAt = *spec.MaxNodesPerDir
+	}
+	return refuseAt, backendLimit, depth, nil
+}
+
 func (a *API) handleSplitPrecheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "GET only")
@@ -149,7 +181,8 @@ func (a *API) handleSplitPrecheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	findings, err := split.Precheck(p.LocalPath(), split.PrecheckOptions{})
+	refuseAt, backendLimit, depth, err := a.pairLimit(
+		context.WithoutCancel(r.Context()), cfg, p)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -157,8 +190,26 @@ func (a *API) handleSplitPrecheck(w http.ResponseWriter, r *http.Request) {
 
 	view := SplitView{
 		Job: cfg.Job.Name, Pair: p.Name,
-		RefuseAt:    split.DefaultRefuseAt,
-		FeishuLimit: split.FeishuLimit,
+		RefuseAt:     refuseAt,
+		BackendLimit: backendLimit,
+		Backend:      job.RemoteKind(p),
+	}
+
+	// refusAt == 0 means "no limit": either the backend declares none (a local
+	// disk) or the job file says max_nodes_per_dir = 0. Either way nothing is over
+	// a limit, and saying "0 findings" is the honest answer.
+	if refuseAt <= 0 {
+		writeJSON(w, http.StatusOK, view)
+		return
+	}
+
+	findings, err := split.Precheck(p.LocalPath(), split.PrecheckOptions{
+		RefuseAt: refuseAt,
+		MaxDepth: depth,
+	})
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
 	}
 	for _, f := range findings {
 		view.Findings = append(view.Findings, SplitFinding{
@@ -190,7 +241,15 @@ func (a *API) handleSplitPlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := buildSplitPlan(p, dir, scheme)
+	// The bucket size has to satisfy the same backend limit the split is working
+	// around, so it is derived from what the backend declares rather than from a
+	// constant that only fits Feishu.
+	_, backendLimit, _, err := a.pairLimit(context.WithoutCancel(r.Context()), cfg, p)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	plan, err := buildSplitPlan(p, dir, scheme, split.MaxPerBucketFor(backendLimit))
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -216,7 +275,11 @@ func splitParams(r *http.Request) (string, split.Scheme, error) {
 }
 
 // buildSplitPlan reads one directory and builds a plan.
-func buildSplitPlan(p *job.Pair, dir string, scheme split.Scheme) (*split.Plan, error) {
+//
+// maxPerBucket comes from the backend's declared limit (see pairLimit). Passing 0
+// falls back to split.DefaultMaxPerBucket, which is only right for a caller that
+// could not ask the backend.
+func buildSplitPlan(p *job.Pair, dir string, scheme split.Scheme, maxPerBucket int) (*split.Plan, error) {
 	entries, err := split.Entries(p.LocalPath(), dir)
 	if err != nil {
 		return nil, err
@@ -224,7 +287,7 @@ func buildSplitPlan(p *job.Pair, dir string, scheme split.Scheme) (*split.Plan, 
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("目录 %q 是空的，没有可拆分的内容", displayDir(dir))
 	}
-	return split.BuildPlan(dir, entries, scheme, split.Options{})
+	return split.BuildPlan(dir, entries, scheme, split.Options{MaxPerBucket: maxPerBucket})
 }
 
 // planView formats a plan for the page.
@@ -305,7 +368,12 @@ func (a *API) handleSplitExecute(w http.ResponseWriter, r *http.Request) {
 	}
 	defer a.D.endSplit(cfg.Job.Name)
 
-	plan, err := buildSplitPlan(p, dir, scheme)
+	_, backendLimit, _, err := a.pairLimit(context.WithoutCancel(r.Context()), cfg, p)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	plan, err := buildSplitPlan(p, dir, scheme, split.MaxPerBucketFor(backendLimit))
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return

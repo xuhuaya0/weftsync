@@ -114,19 +114,18 @@ func (p *Plan) Bytes() int64 {
 
 // Options tunes plan generation.
 type Options struct {
-	// MaxPerBucket is the largest number of entries a bucket may hold. Feishu's
-	// hard limit is 1500; callers normally pass 1400 to leave headroom.
+	// MaxPerBucket is the largest number of entries a bucket may hold. Callers
+	// that know the backend pass MaxPerBucketFor(its declared limit); the default
+	// below is only a fallback for callers that do not.
 	MaxPerBucket int
 }
 
-const (
-	// FeishuLimit is the documented maximum number of direct children in one
-	// folder.
-	FeishuLimit = 1500
-	// DefaultMaxPerBucket leaves 100 of headroom under FeishuLimit: a split that
-	// lands exactly on the limit fails again the next time one file is added.
-	DefaultMaxPerBucket = 1400
-)
+// DefaultMaxPerBucket is the fallback bucket size.
+//
+// It is the value Feishu needs (1500 - Headroom), kept as a default for callers
+// that build a plan without asking the backend. The number itself is not Feishu's
+// business to own: see limits.go for why the limit lives with the backend.
+const DefaultMaxPerBucket = 1400
 
 // BuildPlan groups entries into subdirectories according to scheme.
 //

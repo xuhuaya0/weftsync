@@ -20,8 +20,16 @@ import (
 	_ "github.com/rclone/rclone/backend/local"
 )
 
-// splitJob builds a job whose local root holds n files.
+// splitJob builds a job whose local root holds n files, with a 1400 limit.
 func splitJob(t *testing.T, name string, n int) (*Daemon, *API, string) {
+	return splitJobWithSync(t, name, n, "\n[pair.sync]\nmax_nodes_per_dir = 1400\n")
+}
+
+// splitJobWithSync builds the same job but with a caller-chosen [pair.sync] body.
+//
+// The sync body is the only way to give this job a limit: its destination is a
+// local directory, and a local disk declares no per-folder limit at all.
+func splitJobWithSync(t *testing.T, name string, n int, syncBody string) (*Daemon, *API, string) {
 	t.Helper()
 	dir := t.TempDir()
 	local := filepath.Join(dir, "local")
@@ -44,6 +52,11 @@ func splitJob(t *testing.T, name string, n int) (*Daemon, *API, string) {
 	// No pair options either: a bare remote path cannot carry them (the job layer
 	// refuses that combination). The undo ledger location is set through
 	// API.SplitDir instead, which also keeps this test out of the real user profile.
+	//
+	// max_nodes_per_dir is explicit because a local destination has no per-folder
+	// limit of its own: the wizard asks the backend, a local disk answers "none",
+	// and nothing would ever be reported as over a limit. Setting it here exercises
+	// the same path a user with a non-Feishu backend would use.
 	body := `
 [job]
 name = "` + name + `"
@@ -54,7 +67,7 @@ name = "p"
 root = "` + filepath.ToSlash(local) + `"
 [pair.remote]
 root = ":local:` + filepath.ToSlash(filepath.Join(dir, "remote")) + `"
-`
+` + syncBody
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write job: %v", err)
 	}
@@ -341,8 +354,54 @@ func TestSplitPrecheckReportsFindings(t *testing.T) {
 	if view.Dir != "big" {
 		t.Errorf("default dir = %q, want the offending one", view.Dir)
 	}
-	if view.FeishuLimit != 1500 || view.RefuseAt != 1400 {
-		t.Errorf("limits reported = %d/%d", view.RefuseAt, view.FeishuLimit)
+	if view.BackendLimit != 0 || view.RefuseAt != 1400 {
+		t.Errorf("limits reported = backend %d / refuse %d, want 0/1400",
+			view.BackendLimit, view.RefuseAt)
+	}
+	if view.Backend != "local" {
+		t.Errorf("backend = %q, want the on-the-fly scheme \"local\"", view.Backend)
+	}
+}
+
+// A destination that declares no per-directory limit must not produce findings.
+//
+// This is the wizard's half of F12. It used to report directories as over a
+// "Feishu" limit even when the destination was a local directory.
+func TestSplitPrecheckReportsNoLimitForLocalBackend(t *testing.T) {
+	_, api, local := splitJobWithSync(t, "s", 2, "")
+
+	big := filepath.Join(local, "big")
+	if err := os.MkdirAll(big, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for i := 0; i < 1410; i++ {
+		name := filepath.Join(big, "f"+itoa(i)+".txt")
+		if err := os.WriteFile(name, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	q := url.Values{}
+	q.Set("job", "s")
+	rec := httptest.NewRecorder()
+	api.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		splitURL("/api/split/precheck", q), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var view SplitView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(view.Findings) != 0 {
+		t.Errorf("findings = %+v, want none: a local disk has no per-folder limit",
+			view.Findings)
+	}
+	if view.RefuseAt != 0 || view.BackendLimit != 0 {
+		t.Errorf("limits = %d/%d, want 0/0 (no limit)", view.RefuseAt, view.BackendLimit)
+	}
+	if view.Dir != "" {
+		t.Errorf("dir = %q, want empty when nothing is over the limit", view.Dir)
 	}
 }
 

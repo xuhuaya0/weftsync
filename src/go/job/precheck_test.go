@@ -12,6 +12,13 @@ import (
 	"weftsync/split"
 )
 
+// lowLimit makes a pair refuse above 5 direct children. Small enough that a test
+// does not have to create 1400 files; the behaviour is identical at 1400.
+const lowLimit = `
+[pair.sync]
+max_nodes_per_dir = 5
+`
+
 // makeManyFiles writes n files into dir.
 func makeManyFiles(t *testing.T, dir string, n int) {
 	t.Helper()
@@ -41,13 +48,15 @@ func itoa(i int) string {
 // A directory over the limit must stop the run before anything is uploaded, with an
 // error that names the directory. Feishu only complains on the create/upload call,
 // which is halfway through the run.
+//
+// The threshold comes from the job file, which is also how a backend without a limit
+// turns the check off. The remote side here is a local directory, so nothing about
+// this test depends on Feishu.
 func TestOverLimitDirectoryRefusesTheRun(t *testing.T) {
-	cfg, local, remote := localPair(t, VariantUpdate, "")
+	cfg, local, remote := localPair(t, VariantUpdate, lowLimit)
 	makeManyFiles(t, local, 8)
 
-	// A low threshold keeps the test quick; the behaviour is the same at 1400.
-	opt := Options{MaxNodesPerDir: 5}
-	res, err := RunPair(context.Background(), cfg, &cfg.Pair[0], io.Discard, opt)
+	res, err := RunPair(context.Background(), cfg, &cfg.Pair[0], io.Discard, Options{})
 	if err == nil {
 		t.Fatal("an over-limit directory must stop the run")
 	}
@@ -59,7 +68,7 @@ func TestOverLimitDirectoryRefusesTheRun(t *testing.T) {
 	if len(res.OverLimit) != 1 {
 		t.Errorf("OverLimit = %v, want the one offending directory", res.OverLimit)
 	}
-	if !strings.Contains(err.Error(), "1400") && !strings.Contains(err.Error(), "5") {
+	if !strings.Contains(err.Error(), "5") {
 		t.Errorf("the error should name the limit, got: %v", err)
 	}
 
@@ -77,11 +86,11 @@ func TestOverLimitDirectoryRefusesTheRun(t *testing.T) {
 // real run would do, and the answer is "be refused". The finding has to reach the
 // caller either way, so the plan panel and the error agree.
 func TestOverLimitIsReportedByPreviewWithoutFailing(t *testing.T) {
-	cfg, local, _ := localPair(t, VariantUpdate, "")
+	cfg, local, _ := localPair(t, VariantUpdate, lowLimit)
 	makeManyFiles(t, local, 8)
 
 	res, err := RunPair(context.Background(), cfg, &cfg.Pair[0], io.Discard,
-		Options{DryRun: true, MaxNodesPerDir: 5})
+		Options{DryRun: true})
 	if err != nil {
 		t.Fatalf("a preview must not fail on an over-limit directory: %v", err)
 	}
@@ -95,23 +104,23 @@ func TestOverLimitIsReportedByPreviewWithoutFailing(t *testing.T) {
 // The boundary matters: 1400 entries is the recommended maximum, so refusing 1400
 // would make the documented advice unusable.
 func TestDirectoryAtLimitIsAllowed(t *testing.T) {
-	cfg, local, _ := localPair(t, VariantUpdate, "")
+	cfg, local, _ := localPair(t, VariantUpdate, lowLimit)
 	makeManyFiles(t, local, 5)
 
 	if _, err := RunPair(context.Background(), cfg, &cfg.Pair[0], io.Discard,
-		Options{DryRun: true, MaxNodesPerDir: 5}); err != nil {
+		Options{DryRun: true}); err != nil {
 		t.Fatalf("a directory exactly at the limit must be allowed: %v", err)
 	}
 }
 
 // A nested over-limit directory must be found too, not only the root.
 func TestNestedOverLimitDirectoryIsFound(t *testing.T) {
-	cfg, local, _ := localPair(t, VariantUpdate, "")
+	cfg, local, _ := localPair(t, VariantUpdate, lowLimit)
 	deep := filepath.Join(local, "a", "b")
 	makeManyFiles(t, deep, 8)
 
 	res, err := RunPair(context.Background(), cfg, &cfg.Pair[0], io.Discard,
-		Options{DryRun: true, MaxNodesPerDir: 5})
+		Options{DryRun: true})
 	if err != nil {
 		t.Fatalf("preview: %v", err)
 	}
@@ -123,12 +132,12 @@ func TestNestedOverLimitDirectoryIsFound(t *testing.T) {
 // The versioning folder is excluded from sync, so counting it would refuse a run
 // over files that are never uploaded.
 func TestVersioningFolderIsNotCounted(t *testing.T) {
-	cfg, local, _ := localPair(t, VariantUpdate, "")
+	cfg, local, _ := localPair(t, VariantUpdate, lowLimit)
 	makeManyFiles(t, local, 2)
 	makeManyFiles(t, filepath.Join(local, "_weftsync_trash"), 20)
 
 	if _, err := RunPair(context.Background(), cfg, &cfg.Pair[0], io.Discard,
-		Options{DryRun: true, MaxNodesPerDir: 5}); err != nil {
+		Options{DryRun: true}); err != nil {
 		t.Fatalf("the trash folder must not count towards the limit: %v", err)
 	}
 }
@@ -137,7 +146,7 @@ func TestVersioningFolderIsNotCounted(t *testing.T) {
 // within limits: that would send the run into the very error this check prevents.
 func TestPrecheckFailureIsReported(t *testing.T) {
 	if _, err := split.Precheck(filepath.Join(t.TempDir(), "does-not-exist"),
-		split.PrecheckOptions{}); err == nil {
+		split.PrecheckOptions{RefuseAt: 1400}); err == nil {
 		t.Fatal("a missing root must be an error")
 	}
 }
