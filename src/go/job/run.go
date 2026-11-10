@@ -175,6 +175,17 @@ type Options struct {
 	// must not change anything.
 	CollectPlan bool
 
+	// OnlyPaths restricts this run to the listed paths, relative to the pair root.
+	//
+	// This is how "untick a row in the comparison, then synchronise" works: the
+	// daemon turns the ticked rows into an include list. Empty means "everything".
+	//
+	// Worth knowing what it implies: an include list also limits what counts as an
+	// extra file, so a path the user unticked cannot be deleted by this run either.
+	// That is the behaviour the hand-edited list asks for - unticked means "do not
+	// touch" - and it fails safe.
+	OnlyPaths []string
+
 	// Exclude holds extra filter patterns applied to every pair in this run.
 	//
 	// The daemon fills this from its settings so a user can exclude "*.tmp" or
@@ -312,8 +323,16 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	if opt.CollectPlan && opt.DryRun {
 		if c, perr := plan.Begin(fdst, fsrc); perr == nil {
 			defer func() {
-				res.Plan = plan.ApplySnapshot(c.End(), snapshotLookup(fdst))
-				res.PlanSummary = plan.Summarise(res.Plan)
+				rows := plan.ApplySnapshot(c.End(), snapshotLookup(fdst))
+				// Anything still marked "create" that the destination actually has
+				// is an update. The snapshot answers this for a backend that keeps
+				// one, but a local -> local pair has no snapshot at all, and without
+				// this second question every changed file was labelled "new" while
+				// sitting on both sides - visibly wrong, and it also blanked the
+				// destination pane for files that were right there.
+				rows = markExistingAsUpdates(ctx, fdst, rows)
+				res.Plan = rows
+				res.PlanSummary = plan.Summarise(rows)
 			}()
 		} else {
 			// A second preview of a different job is running. Say so instead of
@@ -444,7 +463,7 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	opts := passOptions{
 		backupDir: backupDirFor(remotePath, spec),
 		suffix:    suffixFor(spec, time.Now()),
-		include:   spec.Include,
+		include:   append(append([]string{}, spec.Include...), onlyInclude(opt.OnlyPaths)...),
 		exclude:   append(append([]string{}, spec.Exclude...), opt.Exclude...),
 		sizeOnly:  spec.Compare == CompareSize,
 	}
@@ -788,6 +807,52 @@ func verifyIdenticalPaths(ctx context.Context, fdst, fsrc fs.Fs, opts passOption
 	}
 	_ = dry
 	return identical, nil
+}
+
+// markExistingAsUpdates relabels plan rows the destination already holds.
+//
+// It only asks about rows still marked Create, so the cost is one existence check
+// per planned upload - not a walk of either tree. Backends that keep a snapshot
+// have already answered, which is why those rows are skipped.
+//
+// A failure to check is not a failure of the preview: the row keeps its label and
+// the run reports whatever is really wrong with it.
+func markExistingAsUpdates(ctx context.Context, fdst fs.Fs, rows []plan.Row) []plan.Row {
+	for i := range rows {
+		if rows[i].Action != plan.Create || rows[i].HasRight {
+			continue
+		}
+		if _, err := fdst.NewObject(ctx, rows[i].Path); err != nil {
+			continue
+		}
+		rows[i].Action = plan.Update
+		rows[i].HasRight = true
+	}
+	return rows
+}
+
+// onlyInclude turns a path selection into rclone include patterns.
+//
+// The paths come from the comparison table, so they are exact files. rclone's
+// filter treats a bare glob as "match at any depth", which would be wrong here:
+// "data/config.ini" must name that file, not every file with that name. A leading
+// "/" anchors the pattern to the root, which is what "this path" means.
+//
+// A selection with nothing in it returns nil rather than an empty list, because
+// "no patterns" and "no paths selected" have opposite meanings downstream.
+func onlyInclude(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		p = strings.TrimSpace(strings.TrimPrefix(p, "/"))
+		if p == "" {
+			continue
+		}
+		out = append(out, "/"+p)
+	}
+	return out
 }
 
 // runPass performs one sync pass and reports what it did.

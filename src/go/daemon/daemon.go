@@ -44,11 +44,14 @@ const (
 
 // JobStatus is the observable state of one job.
 type JobStatus struct {
-	Name      string     `json:"name"`
-	File      string     `json:"file"`
-	State     RunState   `json:"state"`
-	Enabled   bool       `json:"enabled"`
-	Pairs     int        `json:"pairs"`
+	Name    string   `json:"name"`
+	File    string   `json:"file"`
+	State   RunState `json:"state"`
+	Enabled bool     `json:"enabled"`
+	Pairs   int      `json:"pairs"`
+	// PairNames lists the pairs by name so the console can offer one session per
+	// pair. A count alone cannot address the second pair of a multi-pair job.
+	PairNames []string   `json:"pair_names,omitempty"`
 	Schedule  string     `json:"schedule"`
 	NextRun   *time.Time `json:"next_run,omitempty"`
 	LastRun   *time.Time `json:"last_run,omitempty"`
@@ -109,9 +112,11 @@ type entry struct {
 	// another job's.
 	tracker *job.Tracker
 
-	name      string
-	enabled   bool
-	pairs     int
+	name    string
+	enabled bool
+	pairs   int
+	// pairNames mirrors the job file's pair names, in order.
+	pairNames []string
 	nextRun   time.Time
 	lastRun   time.Time
 	lastOK    bool
@@ -300,17 +305,30 @@ func New(files []string, log io.Writer) (*Daemon, error) {
 			name = f
 		}
 		d.entries = append(d.entries, &entry{
-			file:     f,
-			cfg:      cfg,
-			schedule: sched,
-			name:     name,
-			enabled:  cfg.Enabled(),
-			pairs:    len(cfg.Pair),
-			nextRun:  d.computeNext(sched, d.now()),
-			tracker:  job.NewTracker(statsGroupFor(name)),
+			file:      f,
+			cfg:       cfg,
+			schedule:  sched,
+			name:      name,
+			enabled:   cfg.Enabled(),
+			pairs:     len(cfg.Pair),
+			pairNames: pairNamesOf(cfg),
+			nextRun:   d.computeNext(sched, d.now()),
+			tracker:   job.NewTracker(statsGroupFor(name)),
 		})
 	}
 	return d, nil
+}
+
+// pairNamesOf lists the pairs in file order.
+//
+// The console addresses one session per pair, so it needs the names; a bare count
+// cannot tell it which pair the user picked.
+func pairNamesOf(cfg *job.Config) []string {
+	out := make([]string, 0, len(cfg.Pair))
+	for i := range cfg.Pair {
+		out = append(out, cfg.Pair[i].Name)
+	}
+	return out
 }
 
 // computeNext is the single place "when does this run next" is decided.
@@ -419,13 +437,13 @@ func (d *Daemon) runDue(ctx context.Context) {
 		d.wg.Add(1)
 		go func(e *entry) {
 			defer d.wg.Done()
-			d.execute(ctx, e, ModeRun)
+			d.execute(ctx, e, ModeRun, nil)
 		}(e)
 	}
 }
 
 // execute runs one job and records the outcome.
-func (d *Daemon) execute(ctx context.Context, e *entry, mode RunMode) {
+func (d *Daemon) execute(ctx context.Context, e *entry, mode RunMode, only []string) {
 	start := d.now()
 	if mode == ModePlan {
 		d.logf("job %q: building a preview (nothing will be changed)", e.name)
@@ -460,7 +478,9 @@ func (d *Daemon) execute(ctx context.Context, e *entry, mode RunMode) {
 		// A preview collects the per-path plan; a real run has no dry-run log to
 		// read, and the console shows the plan only for previews.
 		CollectPlan: mode == ModePlan,
-		Exclude:     d.SettingsOf().excludePatterns(),
+		// only is the console's row selection. A scheduled run never sets it.
+		OnlyPaths: only,
+		Exclude:   d.SettingsOf().excludePatterns(),
 	})
 
 	// A cancelled context is what our own stop request looks like. Reporting it as
@@ -584,7 +604,15 @@ func (d *Daemon) Stop() {
 // The run uses the daemon's lifetime context, not the caller's: an API request
 // that returns immediately must not take the transfer down with it.
 func (d *Daemon) Trigger(_ context.Context, name string) error {
-	return d.start(name, ModeRun)
+	return d.start(name, ModeRun, nil)
+}
+
+// TriggerPaths starts a run restricted to the listed paths.
+//
+// The console sends the rows the user left ticked, which is what makes the
+// comparison editable instead of merely readable. Empty means "everything".
+func (d *Daemon) TriggerPaths(_ context.Context, name string, paths []string) error {
+	return d.start(name, ModeRun, paths)
 }
 
 // TriggerPlan builds a preview: it measures what a run would change and changes
@@ -595,10 +623,10 @@ func (d *Daemon) Trigger(_ context.Context, name string) error {
 // count would be meaningless, so "one thing at a time per job" is the useful rule
 // even for a read-only pass.
 func (d *Daemon) TriggerPlan(_ context.Context, name string) error {
-	return d.start(name, ModePlan)
+	return d.start(name, ModePlan, nil)
 }
 
-func (d *Daemon) start(name string, mode RunMode) error {
+func (d *Daemon) start(name string, mode RunMode, only []string) error {
 	d.mu.Lock()
 	var target *entry
 	for _, e := range d.entries {
@@ -630,7 +658,7 @@ func (d *Daemon) start(name string, mode RunMode) error {
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
-		d.execute(runCtx, target, mode)
+		d.execute(runCtx, target, mode, only)
 	}()
 	return nil
 }
@@ -709,6 +737,7 @@ func (d *Daemon) Status() []JobStatus {
 			File:       e.file,
 			Enabled:    e.enabled,
 			Pairs:      e.pairs,
+			PairNames:  e.pairNames,
 			Schedule:   e.schedule.String(),
 			Skipped:    e.skipped,
 			LastResult: e.lastRes,

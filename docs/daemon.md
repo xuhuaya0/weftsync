@@ -48,9 +48,11 @@ align_to_start = true
 | GET | `/api/status` | 每个作业的状态、调度、下次/上次运行、上次结果、**当前进度** |
 | POST | `/api/run?job=名称` | 立刻启动一个作业 |
 | POST | `/api/run?job=名称&plan=true` | **只预览**：测出会改什么，什么都不改 |
+| POST | `/api/run?job=名称&only=["相对路径",…]` | 只处理列出的是这些路径（URL 编码的 JSON 数组）。格式不对回 400，**不会**退化成「全跑」|
 | POST | `/api/run` | 启动所有启用的作业 |
 | POST | `/api/stop?job=名称` | 请求停止正在跑的那一轮（202；没在跑时 409） |
 | GET | `/api/config?job=名称` | 读取可编辑的配置视图 |
+| GET | `/api/browse?path=路径` | 列出子目录（只列目录，不列文件），用于网页上的文件夹选择；`path` 省略时给盘符/根列表 |
 | GET | `/api/log?level=&contains=&limit=&since=` | 日志（服务端过滤） |
 | GET | `/api/log/export?level=&contains=` | 把过滤后的日志作为文本附件下载 |
 | POST | `/api/conflict/resolve?job=&pair=&path=&action=push\|pull` | 处理一条冲突 |
@@ -204,10 +206,11 @@ daemon **只决定什么时候跑**，不改变任何一个 pair 的安全规则
 | `GET /api/status` | 作业状态 + 上次结果 + 当前进度 + 最近一次预览 |
 | `GET /api/history` | 运行历史（环形缓冲，最近 100 条） |
 | `GET /api/log` | 最近日志（环形缓冲，最近 500 行） |
-| `POST /api/run` | 立即运行（`&plan=true` 则只预览） |
+| `POST /api/run` | 立即运行（`&plan=true` 则只预览；`&only=["路径",…]` 只跑勾选的） |
 | `POST /api/stop` | 停止运行中的那一轮 |
-| `GET /api/config?job=` | 可编辑的配置视图 |
-| `POST /api/config?job=` | 保存配置 |
+| GET `/api/browse?path=` | 列出子目录，供网页选择同步根 |
+| GET `/api/config?job=` | 可编辑的配置视图 |
+| POST `/api/config?job=` | 保存配置 |
 | `GET /api/log?level=&contains=&limit=&since=` | 日志（服务端过滤，级别由文本推断） |
 | `GET /api/log/export?level=&contains=` | 过滤后的日志，作为 `attachment` 文本下载 |
 | `POST /api/conflict/resolve?job=&pair=&path=&action=` | 处理一条冲突（`push` / `pull`） || GET | `/api/credentials` | 配置文件里的远程、字段、使用它的作业（**永不返回密钥**） |

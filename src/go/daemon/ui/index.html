@@ -24,7 +24,7 @@
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 24px; background: var(--bg); color: var(--ink);
+    margin: 0; padding: 0; background: var(--bg); color: var(--ink);
     font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
   }
   h1 { font-size: 18px; margin: 0 0 4px; }
@@ -130,8 +130,12 @@
   .ffs-title { font-weight: 600; font-size: 13px; }
   .ffs-filter { width: 220px; }
   .ffs-grid {
-    display: grid; grid-template-columns: 1fr 64px 1fr;
+    display: grid; grid-template-columns: 30px 1fr 64px 1fr;
     border-bottom: 1px solid var(--line);
+  }
+  .ffs-pick-head {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: var(--muted);
   }
   .ffs-pane-head {
     display: flex; gap: 8px; align-items: baseline;
@@ -152,6 +156,43 @@
   .ffs-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   .ffs-table td { padding: 2px 8px; border-bottom: 1px solid var(--line); }
   .ffs-table tr.meta { opacity: .5; }
+  .ffs-table td.cmp-box { width: 26px; text-align: center; padding-right: 0; }
+  .ffs-table tr.unticked td.ffs-n, .ffs-table tr.unticked td.ffs-s { opacity: .4; }
+  .ffs-table tr.unticked td.ffs-a { opacity: .3; }
+  /* A sticky header is what makes a long result list readable, and clicking it to
+     sort is what every file comparison tool does. FreeFileSync sorts on the column
+     header too, so this is not an invented interaction. */
+  .ffs-table thead th {
+    position: sticky; top: 0; z-index: 1;
+    background: var(--card); color: var(--muted);
+    font-size: 11px; font-weight: 600; text-align: left;
+    padding: 4px 8px; border-bottom: 1px solid var(--line);
+    cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  .ffs-table thead th:hover { color: var(--ink); }
+  .ffs-table thead th[data-on="1"] { color: var(--ink); }
+  .ffs-table thead th.ffs-s { text-align: right; }
+  .ffs-table thead th.ffs-a { text-align: center; }
+  .ffs-table thead th .sarrow { opacity: .5; font-size: 10px; margin-left: 3px; }
+  .ffs-table tbody tr:hover { background: rgba(128, 128, 128, .12); }
+  /* Right-click menu on a result row, mirroring the per-file actions
+     FreeFileSync puts there. */
+  .row-menu {
+    position: fixed; z-index: 80; min-width: 170px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: 0 10px 26px rgba(0, 0, 0, .28); padding: 4px;
+  }
+  .row-menu button {
+    display: block; width: 100%; text-align: left; background: none;
+    border: none; color: var(--ink); padding: 6px 10px; border-radius: 6px;
+    cursor: pointer; font-size: 13px;
+  }
+  .row-menu button:hover { background: rgba(128, 128, 128, .18); }
+  .row-menu .sep { height: 1px; background: var(--line); margin: 4px 2px; }
+  .row-menu .head {
+    padding: 4px 10px 6px; font-size: 11px; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px;
+  }
   .ffs-n {
     width: 42%; word-break: break-all; vertical-align: top;
   }
@@ -172,7 +213,7 @@
   .ffs-bar {
     display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
     padding: 6px 10px; border-top: 1px solid var(--line);
-    background: var(--bg2, rgba(0, 0, 0, .02));
+    background: var(--card);
   }
   .ffs-cat {
     display: inline-flex; gap: 5px; align-items: center;
@@ -188,31 +229,286 @@
   .ffs-cat.deletes { border-color: var(--bad); color: var(--bad); }
   .ffs-cat .sym { font-family: ui-monospace, monospace; font-weight: 700; }
   .ffs-total { font-size: 12px; color: var(--muted); }
+
+  /* ---- 主界面：一个同步会话（对齐 FreeFileSync 的结构）---- */
+  .topbar {
+    display: flex; gap: 10px; align-items: center;
+    padding: 10px 16px; border-bottom: 1px solid var(--line);
+    background: var(--card); flex-wrap: wrap;
+  }
+  .brand { font-size: 17px; font-weight: 700; letter-spacing: .3px; }
+  .topbar select { min-width: 200px; }
+  .icon-btn {
+    padding: 3px 9px; font-size: 15px; line-height: 1.2;
+    background: none; border: 1px solid transparent; border-radius: 6px; cursor: pointer;
+  }
+  .icon-btn:hover { border-color: var(--line); }
+
+  .session { padding: 14px 16px; max-width: 1200px; }
+
+  .paths { display: grid; grid-template-columns: 1fr 40px 1fr; gap: 10px; align-items: end; }
+  .path-side { min-width: 0; }
+  .path-side label {
+    display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px;
+  }
+  .path-side input {
+    width: 100%; font-family: ui-monospace, monospace; font-size: 12px;
+    background: var(--card);
+  }
+  .path-arrow {
+    text-align: center; font-size: 18px; color: var(--muted);
+    padding-bottom: 6px;
+  }
+
+  .tuning {
+    display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+    margin-top: 12px;
+  }
+  .tune { display: flex; gap: 6px; align-items: center; font-size: 13px; margin: 0; }
+  .tune select { min-width: 130px; }
+
+  /* :not(.hidden) rather than a bare .filter-panel: both selectors have the same
+     specificity as .hidden, so a bare rule would win by source order and the panel
+     would always be open. */
+  .filter-panel:not(.hidden) {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    margin-top: 10px; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  .filter-col { display: flex; flex-direction: column; gap: 4px; }
+  .filter-col label { font-size: 12px; color: var(--muted); }
+  .filter-col textarea { font-family: ui-monospace, monospace; font-size: 12px; }
+
+  .actions {
+    display: flex; gap: 10px; align-items: center; margin: 14px 0 4px;
+    flex-wrap: wrap;
+  }
+  button.big { padding: 7px 22px; font-size: 14px; font-weight: 600; }
+  #s-sync-btn { border-color: var(--bad); color: var(--bad); }
+  #s-sync-btn:hover { background: var(--bad); color: #fff; }
+
+  /* ---- 抽屉 ---- */
+  .drawer-mask {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, .28); z-index: 40;
+  }
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(860px, 94vw);
+    background: var(--bg, #fff); z-index: 50;
+    box-shadow: -6px 0 24px rgba(0, 0, 0, .18);
+    transform: translateX(102%); transition: transform .18s ease-out;
+    display: flex; flex-direction: column;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer-head {
+    display: flex; gap: 10px; align-items: center;
+    padding: 10px 14px; border-bottom: 1px solid var(--line);
+  }
+  .drawer-head strong { font-size: 15px; }
+  .drawer-head .icon-btn { margin-left: auto; }
+  .drawer-nav {
+    display: flex; gap: 4px; flex-wrap: wrap;
+    padding: 8px 14px; border-bottom: 1px solid var(--line);
+  }
+  .drawer-nav button {
+    padding: 3px 11px; font-size: 13px; background: none;
+    border: 1px solid var(--line); border-radius: 999px; cursor: pointer; color: var(--muted);
+  }
+  .drawer-nav button[aria-selected="true"] {
+    border-color: var(--blue); color: var(--blue); font-weight: 600;
+  }
+  #drawer-body { overflow: auto; padding: 12px 14px; flex: 1; }
+  #drawer-body .tab:not(.hidden) { display: block; }
+
+  /* ---- 文件夹对列表（FreeFileSync 的一行一对）---- */
+  .pair-head {
+    display: flex; gap: 8px; align-items: baseline;
+    margin: 16px 0 6px; font-size: 12px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .4px;
+  }
+  .pair-row {
+    display: grid;
+    grid-template-columns: 1fr 40px 1fr auto;
+    gap: 8px; align-items: center;
+    padding: 8px 10px; margin-bottom: 6px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--card);
+  }
+  .pair-row .side { display: flex; gap: 6px; min-width: 0; }
+  .pair-row .side input {
+    flex: 1; min-width: 0;
+    font-family: ui-monospace, monospace; font-size: 12px;
+  }
+  .pair-row .mid { text-align: center; font-size: 17px; }
+  .pair-row .p-swap {
+    background: none; border: none; color: var(--muted); font-size: 17px;
+    line-height: 1; padding: 2px 4px; cursor: pointer; border-radius: 5px;
+  }
+  .pair-row .p-swap:hover { color: var(--ink); background: rgba(128, 128, 128, .16); }
+  .pair-row .ops { display: flex; gap: 4px; align-items: center; }
+  .pair-row select { font-size: 12px; max-width: 118px; }
+  .pair-row .filters { grid-column: 1 / -1; margin-top: 6px; }
+  .pair-row .filters.hidden { display: none; }
+  .pair-row .filters .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .pair-row .filters label { font-size: 11px; color: var(--muted); display: block; }
+  .pair-row .filters textarea { font-family: ui-monospace, monospace; font-size: 12px; width: 100%; }
+  .pair-row.disabled { opacity: .45; }
+
+  .filter-hint {
+    grid-column: 1 / -1; font-size: 12px; color: var(--muted);
+    border-top: 1px solid var(--line); padding-top: 6px;
+  }
+
+  /* ---- 目录浏览对话框 ---- */
+  /* :not(.hidden) so the .hidden rule wins. A bare .browse-dlg rule has the same
+     specificity as .hidden and comes later, so the dialog would never close. */
+  .browse-dlg:not(.hidden) {
+    position: fixed; z-index: 60; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(620px, 92vw); max-height: 78vh;
+    display: flex; flex-direction: column;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .28);
+  }
+  .browse-head {
+    display: flex; gap: 8px; align-items: center;
+    padding: 10px 12px; border-bottom: 1px solid var(--line);
+  }
+  .browse-path {
+    display: flex; gap: 6px; align-items: center;
+    padding: 8px 12px; border-bottom: 1px solid var(--line);
+  }
+  .browse-path input {
+    flex: 1; font-family: ui-monospace, monospace; font-size: 12px;
+    background: var(--bg);
+  }
+  .browse-roots { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 12px 0; }
+  .browse-roots:empty { display: none; }
+  .browse-list {
+    overflow: auto; flex: 1; min-height: 120px; padding: 6px 8px;
+  }
+  .browse-list button {
+    display: block; width: 100%; text-align: left;
+    padding: 4px 8px; border: 1px solid transparent; border-radius: 6px;
+    background: none; cursor: pointer; font-size: 13px;
+  }
+  .browse-list button:hover { background: var(--bg); border-color: var(--line); }
+  .browse-list .none { color: var(--muted); font-style: italic; padding: 8px; }
+  .browse-foot {
+    display: flex; gap: 8px; align-items: center;
+    padding: 10px 12px; border-top: 1px solid var(--line);
+  }
 </style>
 </head>
 <body>
 
-<h1>weftsync</h1>
-<div class="sub">
-  本地同步控制台 ·
-  <span id="now">—</span> ·
+<!-- 顶栏：选作业 + 齿轮。主界面是一个作业的全部文件夹对，其余功能都收进齿轮里。 -->
+<div class="topbar">
+  <span class="brand">weftsync</span>
+  <select id="session-pick" title="选择要处理的作业"><option value="">（没有作业）</option></select>
+  <span class="grow"></span>
   <span id="conn" class="idle">连接中…</span>
+  <span id="now" class="sub" style="margin:0"></span>
+  <button id="menu-btn" class="icon-btn" title="更多功能">⚙</button>
 </div>
 
-<div class="tabs" role="tablist">
-  <button role="tab" aria-selected="true"  data-tab="jobs">作业</button>
-  <button role="tab" aria-selected="false" data-tab="config">配置</button>
-  <button role="tab" aria-selected="false" data-tab="conflicts">冲突</button>
-  <button role="tab" aria-selected="false" data-tab="history">历史</button>
-  <button role="tab" aria-selected="false" data-tab="log">日志</button>
-  <button role="tab" aria-selected="false" data-tab="split">拆分</button>
-  <button role="tab" aria-selected="false" data-tab="settings">设置</button>
+<div class="session" id="tab-session">
+  <!-- 全局设置：作用到这个作业的所有文件夹对 -->
+  <div class="tuning">
+    <label class="tune">比较
+      <select id="s-compare">
+        <option value="time-size">时间 + 大小</option>
+        <option value="size-only">仅大小</option>
+        <option value="content">文件内容</option>
+      </select>
+    </label>
+    <label class="tune">同步
+      <select id="s-variant">
+        <option value="two-way">双向</option>
+        <option value="mirror">镜像（会删）</option>
+        <option value="update">更新（只增）</option>
+      </select>
+    </label>
+    <button id="s-filter-btn">全局过滤…</button>
+    <span id="s-filter-summary" class="sub" style="margin:0"></span>
+  </div>
+
+  <div id="s-filter-panel" class="filter-panel hidden">
+    <div class="filter-col">
+      <label>包含（白名单：写了就只同步匹配的）</label>
+      <textarea id="s-include" rows="3" placeholder="*.xlsx&#10;reports/**"></textarea>
+    </div>
+    <div class="filter-col">
+      <label>排除</label>
+      <textarea id="s-exclude" rows="3" placeholder="*.tmp&#10;_*&#10;_*/**"></textarea>
+    </div>
+    <div class="filter-hint">
+      这里的规则作用于<strong>所有</strong>文件夹对。要只作用于某一对，用该行的「过滤…」。
+    </div>
+  </div>
+
+  <!-- 文件夹对列表：一行一对，和 FreeFileSync 一样 -->
+  <div class="pair-head">
+    <span>文件夹对</span>
+    <span class="grow"></span>
+    <span class="sub" style="margin:0">路径可以手输，也可以点「…」浏览</span>
+  </div>
+  <div id="pair-rows"></div>
+  <div class="row" style="margin-top:8px">
+    <button id="pair-add">+ 添加文件夹对</button>
+  </div>
+
+  <div class="actions">
+    <button id="s-compare-btn" class="primary big">比较</button>
+    <button id="s-sync-btn" class="big">同步</button>
+    <button id="s-stop-btn" class="big" disabled>停止</button>
+    <span id="s-status" class="sub" style="margin:0"></span>
+  </div>
+
+  <div class="card" id="plan-card" style="display:none">
+    <div class="row" style="margin-bottom:12px">
+      <strong class="grow">对比结果 · <span id="plan-job" class="mono"></span></strong>
+      <button id="plan-run" class="primary">按此执行</button>
+      <button id="plan-close">关闭</button>
+    </div>
+    <div id="plan-body"></div>
+  </div>
 </div>
+
+<!-- 目录浏览对话框：网页拿不到本地路径，只能由 daemon 列出来点选 -->
+<div id="browse-mask" class="drawer-mask hidden"></div>
+<div id="browse-dlg" class="browse-dlg hidden">
+  <div class="browse-head">
+    <strong>选择文件夹</strong>
+    <span id="browse-side" class="badge"></span>
+    <span class="grow"></span>
+    <button id="browse-close" class="icon-btn" title="关闭">✕</button>
+  </div>
+  <div class="browse-path">
+    <button id="browse-up" title="上一层">↑</button>
+    <input type="text" id="browse-current" readonly>
+  </div>
+  <div id="browse-roots" class="browse-roots"></div>
+  <div id="browse-list" class="browse-list"></div>
+  <div class="browse-foot">
+    <span id="browse-err" class="sub danger" style="margin:0"></span>
+    <span class="grow"></span>
+    <button id="browse-cancel">取消</button>
+    <button id="browse-pick" class="primary">选这个文件夹</button>
+  </div>
+</div>
+
+<!-- 抽屉：日志、拆分、冲突、历史、作业列表、全局设置、凭据。 -->
+<div id="drawer-mask" class="drawer-mask hidden"></div>
+<aside id="drawer" class="drawer">
+  <div class="drawer-head">
+    <strong id="drawer-title">更多</strong>
+    <button id="drawer-close" class="icon-btn" title="关闭">✕</button>
+  </div>
+  <div id="drawer-body">
 
 <section id="tab-jobs" class="tab">
   <div class="card">
     <div class="row" style="margin-bottom:12px">
-      <strong class="grow">作业列表</strong>
+      <strong class="grow">所有会话</strong>
       <label class="sub" style="margin:0">
         <input type="checkbox" id="skip-preview"> 跳过预览
       </label>
@@ -228,15 +524,6 @@
       </thead>
       <tbody id="jobs"><tr><td colspan="7" class="empty">载入中…</td></tr></tbody>
     </table>
-  </div>
-
-  <div class="card" id="plan-card" style="display:none">
-    <div class="row" style="margin-bottom:12px">
-      <strong class="grow">变更预览 · <span id="plan-job" class="mono"></span></strong>
-      <button id="plan-run" class="primary">按此执行</button>
-      <button id="plan-close">关闭</button>
-    </div>
-    <div id="plan-body"></div>
   </div>
 </section>
 
@@ -415,6 +702,8 @@
     <div id="cred-body" class="empty">载入中…</div>
   </div>
 </section>
+  </div>
+</aside>
 
 <script>
 "use strict";
@@ -503,6 +792,8 @@ async function refresh() {
   refreshHistory();
   refreshLog();
   syncJobPicker();
+  syncSessionPicker();
+  updateRunControls();
   scheduleNextPoll();
 }
 
@@ -923,6 +1214,10 @@ function closePlanPanel() {
   document.getElementById("plan-card").style.display = "none";
   planJob = "";
   pendingPlanJob = null;
+  // Drop the rows too: a stale selection from a previous job must never narrow
+  // the next run.
+  cmpState = { rows: [], pairs: 0, q: "", shown: 400, left: "", right: "",
+               sel: {}, sort: { key: "", dir: 0 }, on: {} };
 }
 
 function planHTML(p) {
@@ -941,34 +1236,27 @@ function planHTML(p) {
   }
 
   for (const r of p.results || []) {
-    const a = r.actual || {};
-    const d = r.dry_run || {};
     const guard = r.guard_hit;
+    const problems = [];
+    if (guard) problems.push("会被熔断");
+    if (r.over_limit && r.over_limit.length) {
+      problems.push(r.over_limit.length + " 个目录超过上限");
+    }
+    if (r.held) problems.push(r.held + " 项需要你判断");
+    if (!problems.length) continue;
+
+    // The counts live in the two-pane footer now; this block only carries what
+    // that footer cannot say - a refusal, an over-limit directory, or paths a
+    // human has to decide about. Repeating the same numbers twice on one screen
+    // made the page look like two reports of the same thing.
     parts.push(`<div class="plan-pair">
       <div class="head">
         <strong>${esc(r.pair)}</strong>
         <span class="badge">${esc(r.variant)}</span>
         ${guard ? '<span class="pill bad">会被熔断</span>' : ""}
-      </div>
-      <div class="plan-grid">
-        <span>上传 / 覆盖</span>
-        <span class="mono">${a.transferred || 0} 个${a.bytes ? " · " + fmtBytes(a.bytes) : ""}</span>
-        <span>删除</span>
-        <span class="mono ${a.deleted || a.deleted_dirs ? "danger" : ""}">${
-          (a.deleted || 0) + (a.deleted_dirs || 0)} 项</span>
-        ${d.deleted !== undefined && r.variant === "mirror" && d.deleted !== a.deleted
-          ? `<span>预检测得删除</span><span class="mono">${d.deleted} 项</span>` : ""}
-        <span>冲突</span>
-        <span class="mono">${(r.conflicts || []).length} 个</span>
-        ${r.pulled
-          ? `<span>从云端下载</span><span class="mono">${r.pulled} 个</span>` : ""}
-        ${r.held
-          ? `<span>需要你判断</span><span class="mono warn">${r.held} 个（删除与仅云端有的文件不会自动处理）</span>`
-          : ""}
-        <span>本地</span>
-        <span class="mono" style="word-break:break-all">${esc(r.local)}</span>
-        <span>远端</span>
-        <span class="mono" style="word-break:break-all">${esc(r.remote)}</span>
+        ${(r.over_limit || []).length
+          ? `<span class="pill bad">${r.over_limit.length} 个目录超过单层上限</span>` : ""}
+        ${r.held ? `<span class="pill">${r.held} 项需要你判断</span>` : ""}
       </div>
     </div>`);
   }
@@ -993,6 +1281,10 @@ function planHTML(p) {
 // 所以计划和真正执行不可能不一致。
 let cmpState = {
   rows: [], pairs: 0, q: "", shown: 400,
+  // sel records which rows the user unticked, keyed by pair+path. A map of
+  // exceptions rather than a set of selections: everything starts ticked, which
+  // is what "the plan you just looked at" means, and only deviations are stored.
+  sel: {},
   // 底部分类的勾选状态。取消勾选只影响显示，不影响执行 —— 这一点在界面上写明，
   // 不能让用户以为取消勾选就不会被同步。
   on: { creates: true, updates: true, downloads: true, deletes: true, dirs: true, meta: false },
@@ -1037,6 +1329,8 @@ function cmpRows(p) {
 function compareHTML(p) {
   cmpState = {
     rows: [], pairs: 0, q: "", shown: 400, left: "", right: "",
+    sel: {},
+    sort: { key: "", dir: 0 },
     on: { creates: true, updates: true, downloads: true, deletes: true, dirs: true, meta: false },
   };
 
@@ -1054,10 +1348,12 @@ function compareHTML(p) {
       <strong class="ffs-title">对比结果</strong>
       <span class="sub">${rows.length} 项</span>
       <span class="grow"></span>
+      <button id="cmp-all" title="全部勾选">全选</button>
+      <button id="cmp-none" title="全部取消">全不选</button>
       <input id="cmp-q" placeholder="过滤路径…" class="ffs-filter">
-      <button id="cmp-run" class="primary">同步</button>
     </div>
     <div class="ffs-grid">
+      <div class="ffs-pick-head">同步</div>
       <div class="ffs-pane-head">
         <span class="ffs-side">本地</span>
         <span class="ffs-path mono" title="${esc(left)}">${esc(left)}</span>
@@ -1069,7 +1365,19 @@ function compareHTML(p) {
       </div>
     </div>
     <div class="ffs-scroll">
-      <table class="ffs-table"><tbody id="cmp-rows"></tbody></table>
+      <table class="ffs-table">
+        <thead>
+          <tr>
+            <th style="width:26px"></th>
+            <th data-sort="name">名称<span class="sarrow"></span></th>
+            <th class="ffs-s" data-sort="size">大小<span class="sarrow"></span></th>
+            <th class="ffs-a" data-sort="action">动作<span class="sarrow"></span></th>
+            <th data-sort="rname">名称<span class="sarrow"></span></th>
+            <th class="ffs-s" data-sort="rsize">大小<span class="sarrow"></span></th>
+          </tr>
+        </thead>
+        <tbody id="cmp-rows"></tbody>
+      </table>
     </div>
     <div id="cmp-bar" class="ffs-bar"></div>
     <div id="cmp-more" class="row" style="margin-top:6px"></div>
@@ -1098,6 +1406,39 @@ function cmpFiltered() {
     if (!q) return true;
     return r.path.toLowerCase().includes(q) || r.action.includes(q);
   });
+}
+
+// cmpSorted filters, then orders by the column the user clicked.
+//
+// The default order is the server's, which groups a directory's files together.
+// A sort is opt-in and remembered only for the open panel: restoring a sort after
+// a new comparison would hide the order the plan actually arrived in, which is the
+// one order that says "these rows belong together".
+function cmpSorted() {
+  const list = cmpFiltered();
+  const { key, dir } = cmpState.sort || {};
+  if (!key || !dir) return list;
+  const num = v => (typeof v === "number" ? v : (parseFloat(v) || 0));
+  const pick = r => {
+    const s = cmpSides(r);
+    switch (key) {
+      case "size": return num(r.size);
+      case "rsize": return num(s.rightSize);
+      case "action": return r.action;
+      case "rname": return s.rightName.toLowerCase();
+      default: return r.path.toLowerCase();
+    }
+  };
+  // A stable sort keeps rows with an equal key in plan order, so a second click on
+  // 大小 does not reshuffle ties and make the list jump around.
+  return list
+    .map((r, i) => ({ r, i, v: pick(r) }))
+    .sort((a, b) => {
+      if (a.v < b.v) return -dir;
+      if (a.v > b.v) return dir;
+      return a.i - b.i;
+    })
+    .map(x => x.r);
 }
 
 // cmpSides decides what each pane shows for a row.
@@ -1135,24 +1476,66 @@ function cmpSides(r) {
 
 function cmpRender() {
   const c = cmpCounts(cmpState.rows);
-  const list = cmpFiltered();
+  const list = cmpSorted();
   const shown = list.slice(0, cmpState.shown);
 
-  document.getElementById("cmp-rows").innerHTML = shown.map(r => {
+  document.getElementById("cmp-rows").innerHTML = shown.map((r, i) => {
     const m = CMP_META[r.action] || CMP_META.other;
     const s = cmpSides(r);
     const cls = (r.action === "touch" || r.action === "other") ? " meta" : "";
-    return `<tr class="${cls.trim()}">
+    // The checkbox is the whole point of an editable comparison: unticking a row
+    // keeps it out of the run. Touch/other rows carry no action, so ticking them
+    // would mean nothing and they get a dash instead.
+    const actionable = !(r.action === "touch" || r.action === "other");
+    const key = rowKey(r.pair, r.path);
+    const on = cmpState.sel[key] !== false;
+    const box = actionable
+      ? `<input type="checkbox" class="cmp-pick" data-key="${esc(key)}"${on ? " checked" : ""}>`
+      : `<span class="sub">—</span>`;
+    // An unticked row dims out, so the eye can see at a glance what will not run.
+    const rowCls = [cls.trim(), on ? "" : "unticked"].filter(Boolean).join(" ");
+    return `<tr class="${rowCls}" data-key="${esc(key)}">
+      <td class="cmp-box">${box}</td>
       <td class="ffs-n mono">${esc(s.leftName)}</td>
       <td class="ffs-s mono">${s.leftSize}</td>
       <td class="ffs-a ${m.cls}" title="${esc(r.detail || m.label)}">${m.sym}</td>
       <td class="ffs-n mono">${esc(s.rightName)}</td>
       <td class="ffs-s mono">${s.rightSize}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="5" class="empty">没有匹配的行</td></tr>`;
+  }).join("") || `<tr><td colspan="6" class="empty">没有匹配的行</td></tr>`;
+
+  document.querySelectorAll("#cmp-rows .cmp-pick").forEach(el => {
+    el.addEventListener("change", () => {
+      cmpState.sel[el.dataset.key] = el.checked;
+      el.closest("tr").classList.toggle("unticked", !el.checked);
+      cmpRenderFoot();
+    });
+  });
+
+  // Right-click a row for the per-file actions, the way FreeFileSync does. The
+  // row keeps its key so the menu can act on exactly the row it was opened on.
+  document.querySelectorAll("#cmp-rows tr[data-key]").forEach(tr => {
+    tr.addEventListener("contextmenu", ev => {
+      ev.preventDefault();
+      openRowMenu(ev, tr.dataset.key);
+    });
+  });
+
+  // Column headers sort, and the arrow shows which column is in force.
+  const sortState = cmpState.sort || {};
+  const cmpBox = document.getElementById("cmp-rows");
+  const table = cmpBox && cmpBox.closest("table");
+  if (table) {
+    table.querySelectorAll("thead th[data-sort]").forEach(th => {
+      const on = sortState.key === th.dataset.sort;
+      const arrow = th.querySelector(".sarrow");
+      if (arrow) arrow.textContent = on ? (sortState.dir > 0 ? "▲" : "▼") : "";
+      th.dataset.on = on ? "1" : "";
+    });
+  }
 
   // 底部：分类开关 + 合计，和 FFS 的底部条同构。
-  const box = (cat, cls, sym, label, n) => {
+  const box = (cat, cls, sym, label, n, picked) => {
     const dis = n ? "" : " disabled";
     const chk = cmpState.on[cat] ? " checked" : "";
     return `<label class="ffs-cat ${cls}${dis}">
@@ -1180,19 +1563,75 @@ function cmpRender() {
     });
   });
 
+  cmpRenderFoot();
+}
+
+// cmpRenderFoot updates the row-count line and the "N selected" hint.
+function cmpRenderFoot() {
+  const list = cmpFiltered();
+  const shown = Math.min(cmpState.shown, list.length);
   const more = document.getElementById("cmp-more");
-  if (list.length > shown.length) {
-    more.innerHTML = `<span class="sub">显示前 ${shown.length} 项，共 ${list.length} 项</span>` +
-      `<button id="cmp-show-more">再显示 400 项</button>`;
-    document.getElementById("cmp-show-more").addEventListener("click", () => {
-      cmpState.shown += 400;
-      cmpRender();
-    });
-  } else {
-    more.innerHTML = list.length !== cmpState.rows.length
-      ? `<span class="sub">已列出 ${list.length} 项（共 ${cmpState.rows.length} 项，其余被分类开关或过滤隐藏）</span>`
-      : `<span class="sub">底部分类开关只控制显示，不改变执行范围。</span>`;
+  const picked = cmpSelectedPaths().length;
+  const total = cmpState.rows.filter(r => !(r.action === "touch" || r.action === "other")).length;
+
+  let html = `<span class="sub">已列出 ${shown} 项（共 ${cmpState.rows.length} 项，其余被分类开关或过滤隐藏）</span>`;
+  if (picked !== total) {
+    html += `<span class="ffs-total" style="margin-left:10px">已勾选 ${picked} / ${total} 项` +
+      `，同步时只处理勾选的</span>`;
   }
+  if (list.length > cmpState.shown) {
+    html += ` <button id="cmp-show-more">再显示 400 项</button>`;
+  }
+  more.innerHTML = html;
+  const btn = document.getElementById("cmp-show-more");
+  if (btn) {
+    btn.addEventListener("click", () => { cmpState.shown += 400; cmpRender(); });
+  }
+}
+
+// rowKey is the identity of a comparison row.
+//
+// The pair name is URL-encoded so the separator cannot appear inside it, and the
+// path is left as-is so the first "|" is always the boundary. A NUL separator was
+// the first attempt and it silently failed: HTML attributes cannot carry NUL, so
+// every data-key arrived truncated and unticking a row never stuck.
+function rowKey(pair, path) {
+  return encodeURIComponent(pair || "") + "|" + (path || "");
+}
+
+// cmpSelectedPaths returns the paths the user left ticked, deduplicated.
+//
+// A row can appear twice for one path (a copy and a metadata update); sending the
+// same path twice would only bloat the include list.
+function cmpSelectedPaths() {
+  const seen = new Set();
+  const out = [];
+  for (const r of cmpState.rows) {
+    if (r.action === "touch" || r.action === "other") continue;
+    if (cmpState.sel[rowKey(r.pair, r.path)] === false) continue;
+    if (seen.has(r.path)) continue;
+    seen.add(r.path);
+    out.push(r.path);
+  }
+  return out;
+}
+
+// syncOnly turns the ticked rows into the `only` list sent to the daemon.
+//
+// It returns null in the two cases where no restriction should be imposed:
+// nothing is being shown (there is nothing to restrict by), or every actionable
+// row is ticked (the full list would only bloat the query, and an accident of
+// arithmetic must not silently turn a mirror run into a filtered, no-deletes
+// run).
+function syncOnly(job) {
+  if (!cmpState.rows.length) return null;
+  if (planJob !== job) return null;             // the panel belongs to another job
+  const all = cmpState.rows.filter(
+    r => !(r.action === "touch" || r.action === "other")).length;
+  if (!all) return null;
+  const picked = cmpSelectedPaths();
+  if (picked.length === all) return null;
+  return { picked, all };
 }
 
 function cmpWire() {
@@ -1200,45 +1639,178 @@ function cmpWire() {
   if (!q) return;
   q.addEventListener("input", () => { cmpState.q = q.value; cmpState.shown = 400; cmpRender(); });
 
-  // 同步按钮就放在对比结果里，和 FFS 一样：对比是现在这一屏，同步是它的下一步，
-  // 不需要先关掉再回列表找一个按钮。
-  const run = document.getElementById("cmp-run");
-  if (run) {
-    run.addEventListener("click", async () => {
-      const name = document.getElementById("plan-run").dataset.job;
-      if (!name) return;
-      const c = cmpCounts(cmpState.rows);
-      const destructive = c["delete-remote"] + c["delete-local"] + c.rmdir;
-      if (destructive && !confirm(
-        `这次同步会删除 ${destructive} 项，无法撤销（除非作业配置了版本目录）。\n确定继续？`)) {
-        return;
+  // 全选 / 全不选 act on what is currently visible, so filtering to "reports"
+  // and pressing 全不选 does what it looks like.
+  const allBtn = document.getElementById("cmp-all");
+  if (allBtn) {
+    allBtn.addEventListener("click", () => {
+      for (const r of cmpFiltered()) {
+        if (r.action === "touch" || r.action === "other") continue;
+        cmpState.sel[rowKey(r.pair, r.path)] = true;
       }
-      run.disabled = true;
-      run.textContent = "同步中…";
-      try {
-        await post("/api/run?job=" + encodeURIComponent(name));
-        closePlanPanel();
-      } catch (err) {
-        alert("启动失败：" + err.message);
-        run.disabled = false;
-        run.textContent = "同步";
-        return;
+      cmpRender();
+    });
+  }
+  const noneBtn = document.getElementById("cmp-none");
+  if (noneBtn) {
+    noneBtn.addEventListener("click", () => {
+      for (const r of cmpFiltered()) {
+        if (r.action === "touch" || r.action === "other") continue;
+        cmpState.sel[rowKey(r.pair, r.path)] = false;
       }
-      lastSignature = "";
-      setTimeout(refresh, 400);
+      cmpRender();
     });
   }
 
   cmpRender();
+
+  // Column headers: first click sorts ascending, a second click reverses. Clicking
+  // a third time would be a no-op the user cannot see, so the direction just
+  // alternates rather than cycling back to the plan order.
+  const box = document.getElementById("cmp-rows");
+  const table = box && box.closest("table");
+  if (table) {
+    table.querySelectorAll("thead th[data-sort]").forEach(th => {
+      th.addEventListener("click", () => {
+        const k = th.dataset.sort;
+        const cur = cmpState.sort || {};
+        cmpState.sort = { key: k, dir: cur.key === k ? -cur.dir : 1 };
+        cmpState.shown = 400;
+        cmpRender();
+      });
+    });
+  }
+}
+
+// ------------------------------------------------------------------ row menu
+//
+// FreeFileSync puts the per-file actions on a right-click menu; the same actions
+// belong here. Every entry is a selection change, so nothing in this menu can
+// move data on its own - the sync button is still the only thing that runs.
+let rowMenu = null;
+
+function closeRowMenu() {
+  if (rowMenu) { rowMenu.remove(); rowMenu = null; }
+}
+
+function openRowMenu(ev, key) {
+  closeRowMenu();
+  const row = cmpState.rows.find(r => rowKey(r.pair, r.path) === key);
+  if (!row) return;
+  const actionable = !(row.action === "touch" || row.action === "other");
+  const ticked = cmpState.sel[key] !== false;
+  const meta = CMP_META[row.action] || CMP_META.other;
+
+  const items = [];
+  if (actionable) {
+    items.push(["只同步这一项", () => {
+      for (const r of cmpState.rows) {
+        if (r.action === "touch" || r.action === "other") continue;
+        cmpState.sel[rowKey(r.pair, r.path)] = rowKey(r.pair, r.path) === key;
+      }
+      cmpRender();
+    }]);
+    items.push([ticked ? "取消勾选这一项" : "勾选这一项", () => {
+      cmpState.sel[key] = !ticked;
+      cmpRender();
+    }]);
+    items.push(["取消这类别的全部勾选（" + meta.label + "）", () => {
+      for (const r of cmpState.rows) {
+        if (r.action !== row.action) continue;
+        cmpState.sel[rowKey(r.pair, r.path)] = false;
+      }
+      cmpRender();
+    }]);
+  }
+
+  const div = document.createElement("div");
+  div.className = "row-menu";
+  div.innerHTML = `<div class="head mono" title="${esc(row.path)}">${esc(row.path)}</div>`;
+  for (const [label, fn] of items) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.addEventListener("click", () => { closeRowMenu(); fn(); });
+    div.appendChild(b);
+  }
+
+  // Adding an exclude rule is the one entry that edits the configuration rather
+  // than the selection, so it is separated and says what it will do.
+  const sep = document.createElement("div");
+  sep.className = "sep";
+  div.appendChild(sep);
+  const ex = document.createElement("button");
+  ex.textContent = "把这个路径加入排除规则…";
+  ex.addEventListener("click", () => {
+    closeRowMenu();
+    addExcludeRule(row.path);
+  });
+  div.appendChild(ex);
+
+  // Position inside the viewport: a menu opened on the last row would otherwise
+  // hang off the bottom edge with its entries unreachable.
+  div.style.left = "0px";
+  div.style.top = "0px";
+  document.body.appendChild(div);
+  const r = div.getBoundingClientRect();
+  const x = Math.min(ev.clientX, window.innerWidth - r.width - 8);
+  const y = Math.min(ev.clientY, window.innerHeight - r.height - 8);
+  div.style.left = Math.max(4, x) + "px";
+  div.style.top = Math.max(4, y) + "px";
+  rowMenu = div;
+}
+
+document.addEventListener("click", closeRowMenu);
+document.addEventListener("scroll", closeRowMenu, true);
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeRowMenu(); });
+
+// addExcludeRule appends a literal path to the job-level exclude list.
+//
+// rclone matches an exclude pattern against the whole path, and a leading slash
+// anchors it at the sync root; without that, "notes.md" would also hide
+// "reports/notes.md". The rule is written into the field the user can see, not
+// into a hidden list, so the next reader of the config can find it.
+function addExcludeRule(path) {
+  if (!sessionCfg) return;
+  const field = document.getElementById("s-exclude");
+  if (!field) return;
+  const rule = "/" + path;
+  const cur = String(field.value || "").split("\n").map(s => s.trim()).filter(Boolean);
+  if (cur.includes(rule)) {
+    alert("排除规则里已经有这一条了：\n" + rule);
+    return;
+  }
+  cur.push(rule);
+  field.value = cur.join("\n");
+  sessionCfg.sync = sessionCfg.sync || {};
+  sessionCfg.sync.exclude = field.value;
+  markDirty();
+  updateFilterSummary();
+  if (!confirm(`已加入排除规则：\n${rule}\n\n这条规则作用于整个作业。` +
+      `要让结果里也去掉它，需要保存后重新比较。\n\n现在就重新比较？`)) return;
+  runSession(document.getElementById("s-compare-btn"), true, "比较中…");
 }
 
 document.getElementById("plan-run").addEventListener("click", async (e) => {
   const name = e.target.dataset.job;
   if (!name) return;
+  // This button sits directly under the comparison it would execute, so it has to
+  // honour the ticks. It is the third entry point into a run; all three must obey
+  // the same selection or one of them silently undoes what the user changed.
+  const only = syncOnly(name);
+  if (only && only.picked.length === 0) {
+    alert("没有勾选任何行。勾选要同步的行，或点「全选」。");
+    return;
+  }
+  const note = only
+    ? `\n\n只同步勾选的 ${only.picked.length} / ${only.all} 项，` +
+      `其余不会被改动（包括不会被删除）。`
+    : "";
+  if (note && !confirm("按当前对比结果执行？" + note)) return;
   e.target.disabled = true;
   e.target.textContent = "启动中…";
   try {
-    await post("/api/run?job=" + encodeURIComponent(name));
+    await post("/api/run?job=" + encodeURIComponent(name) +
+      (only ? "&only=" + encodeURIComponent(JSON.stringify(only.picked)) : ""));
     closePlanPanel();
   } catch (err) {
     alert("启动失败：" + err.message);
@@ -1271,15 +1843,597 @@ document.getElementById("run-all").addEventListener("click", async (e) => {
 
 document.getElementById("refresh").addEventListener("click", refresh);
 
-document.querySelectorAll('.tabs button').forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll('.tabs button').forEach(b => b.setAttribute("aria-selected", b === btn));
-    document.querySelectorAll('.tab').forEach(s => s.classList.add('hidden'));
-    document.getElementById('tab-' + btn.dataset.tab).classList.remove('hidden');
-    if (btn.dataset.tab === 'config') { syncJobPicker(); loadConfig(); }
-    if (btn.dataset.tab === 'split') { loadSplit(); }
-    if (btn.dataset.tab === 'settings') { loadInfo(); loadSettings(); loadAutostart(); loadCredentials(); }
+// ------------------------------------------------------------------ drawer
+//
+// The main page is one sync session. Everything else - the job list, the full
+// config form, conflicts, history, logs, split, credentials - lives behind the
+// gear. That is FreeFileSync's shape: the thing you came to do is the page, and
+// the maintenance screens are a click away rather than competing with it.
+
+const DRAWER_ITEMS = [
+  { id: "jobs", label: "所有会话" },
+  { id: "config", label: "完整配置" },
+  { id: "conflicts", label: "冲突" },
+  { id: "history", label: "历史" },
+  { id: "log", label: "日志" },
+  { id: "split", label: "拆分" },
+  { id: "settings", label: "全局设置与凭据" },
+];
+
+let drawerTab = "jobs";
+
+function buildDrawerNav() {
+  const head = document.querySelector(".drawer-head");
+  const nav = document.createElement("div");
+  nav.className = "drawer-nav";
+  nav.innerHTML = DRAWER_ITEMS
+    .map(it => `<button data-drawer="${it.id}">${esc(it.label)}</button>`).join("");
+  head.parentNode.insertBefore(nav, head.nextSibling);
+  nav.querySelectorAll("button[data-drawer]").forEach(b => {
+    b.addEventListener("click", () => openDrawer(b.dataset.drawer));
   });
+}
+
+function openDrawer(tab) {
+  drawerTab = tab || "jobs";
+  document.getElementById("drawer-mask").classList.remove("hidden");
+  document.getElementById("drawer").classList.add("open");
+
+  document.querySelectorAll(".drawer-nav button").forEach(b => {
+    b.setAttribute("aria-selected", b.dataset.drawer === drawerTab);
+  });
+  document.querySelectorAll("#drawer-body .tab").forEach(s => s.classList.add("hidden"));
+  const sec = document.getElementById("tab-" + drawerTab);
+  if (sec) sec.classList.remove("hidden");
+
+  const item = DRAWER_ITEMS.find(i => i.id === drawerTab);
+  document.getElementById("drawer-title").textContent = item ? item.label : "更多";
+
+  if (drawerTab === "config") { syncJobPicker(); loadConfig(); }
+  if (drawerTab === "split") { loadSplit(); }
+  if (drawerTab === "settings") {
+    loadInfo(); loadSettings(); loadAutostart(); loadCredentials();
+  }
+}
+
+function closeDrawer() {
+  document.getElementById("drawer-mask").classList.add("hidden");
+  document.getElementById("drawer").classList.remove("open");
+}
+
+document.getElementById("menu-btn").addEventListener("click", () => {
+  if (document.getElementById("drawer").classList.contains("open")) closeDrawer();
+  else openDrawer(drawerTab);
+});
+document.getElementById("drawer-close").addEventListener("click", closeDrawer);
+document.getElementById("drawer-mask").addEventListener("click", closeDrawer);
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") closeDrawer();
+});
+buildDrawerNav();
+
+// ------------------------------------------------------------------ session
+//
+// The main page is one job, shown the way FreeFileSync shows a session: a list of
+// folder pairs you can add to, remove from and edit in place, one compare button,
+// one synchronise button, one stop button, and the result underneath.
+//
+// Everything here edits an in-memory copy of ConfigView. Nothing is written until
+// 比较 or 同步 is pressed, which is what makes "type a path, then change your mind"
+// safe - and it matches FFS, where the settings on screen take effect when you
+// compare, not as you type.
+
+function sessionList() {
+  const out = [];
+  for (const j of (snapshot && snapshot.jobs) || []) {
+    out.push({ key: j.name, job: j.name, label: j.name });
+  }
+  return out;
+}
+
+let sessionJob = localStorage.getItem("weftsync.session") || "";
+
+function syncSessionPicker() {
+  const sel = document.getElementById("session-pick");
+  const list = sessionList();
+  const sig = list.map(s => s.key).join("\u0000");
+  if (sel.dataset.sig !== sig) {
+    sel.dataset.sig = sig;
+    sel.innerHTML = list.length
+      ? list.map(s => `<option value="${esc(s.key)}">${esc(s.label)}</option>`).join("")
+      : '<option value="">（没有作业）</option>';
+    if (!list.some(s => s.key === sessionJob)) {
+      sessionJob = list.length ? list[0].key : "";
+    }
+    sel.value = sessionJob;
+  }
+  return list.find(s => s.key === sessionJob) || null;
+}
+
+// sessionCfg is the editable copy of the selected job. `dirty` records that the
+// user changed something, so the status line can say "未保存" instead of silently
+// holding edits that a compare would flush.
+let sessionCfg = null;
+let dirty = false;
+
+function markDirty() {
+  dirty = true;
+  const st = document.getElementById("s-status");
+  if (st) st.textContent = "有未保存的改动，比较或同步时会写入文件。";
+}
+
+async function loadSession() {
+  const sel = syncSessionPicker();
+  const status = document.getElementById("s-status");
+  if (!sel) {
+    sessionCfg = null;
+    renderPairs();
+    status.textContent = "还没有作业。用右上角 ⚙ → 完整配置 新建一个。";
+    return;
+  }
+  try {
+    sessionCfg = await getJSON("/api/config?job=" + encodeURIComponent(sel.job));
+    dirty = false;
+    renderPairs();
+    status.textContent = "";
+  } catch (e) {
+    sessionCfg = null;
+    renderPairs();
+    status.textContent = "读取配置失败：" + e.message;
+  }
+}
+
+// renderPairs draws one row per folder pair plus the job-level settings.
+//
+// Values come from sessionCfg; edits go back into sessionCfg. That keeps the
+// model and the DOM in one direction, so re-rendering never loses what the user
+// typed.
+function renderPairs() {
+  const host = document.getElementById("pair-rows");
+  if (!sessionCfg) {
+    host.innerHTML = '<div class="empty">（没有作业）</div>';
+    return;
+  }
+
+  // Job-level settings are shown once at the top and apply to every pair.
+  const jobSync = sessionCfg.sync || {};
+  document.getElementById("s-compare").value = jobSync.compare || "time-size";
+  document.getElementById("s-variant").value = sessionCfg.variant || "update";
+  document.getElementById("s-include").value = jobSync.include || "";
+  document.getElementById("s-exclude").value = jobSync.exclude || "";
+  updateFilterSummary();
+
+  const pairs = sessionCfg.pairs || [];
+  if (!pairs.length) {
+    host.innerHTML = '<div class="empty">还没有文件夹对。点下面的「+ 添加文件夹对」。</div>';
+    return;
+  }
+
+  host.innerHTML = pairs.map((p, i) => {
+    const s = p.sync || {};
+    const inc = countLines(s.include);
+    const exc = countLines(s.exclude);
+    const own = [];
+    if (s.compare) own.push("比较=" + (COMPARE_LABEL_SHORT[s.compare] || s.compare));
+    if (inc) own.push("包含 " + inc + " 条");
+    if (exc) own.push("排除 " + exc + " 条");
+    return `<div class="pair-row" data-idx="${i}">
+      <div class="side">
+        <input type="text" class="p-local" value="${esc(p.local_root || "")}"
+               placeholder="本地目录，例如 D:/data" title="${esc(p.local_root || "")}">
+        <button class="p-browse" data-idx="${i}" data-side="local" title="浏览本地目录">…</button>
+      </div>
+      <div class="mid">
+        <button class="p-swap" data-idx="${i}" title="交换左右">⇄</button>
+      </div>
+      <div class="side">
+        <input type="text" class="p-remote" value="${esc(p.remote_root || "")}"
+               placeholder="云端目录，例如 feishu:token/dir" title="${esc(p.remote_root || "")}">
+      </div>
+      <div class="ops">
+        <select class="p-variant" data-idx="${i}" title="这个文件夹对的同步方向">
+          <option value="">（跟作业）</option>
+          <option value="two-way">双向</option>
+          <option value="mirror">镜像</option>
+          <option value="update">更新</option>
+        </select>
+        <button class="p-filter" data-idx="${i}" title="这个文件夹对自己的过滤规则"
+                class="${own.length ? "has-own" : ""}">过滤…</button>
+        <button class="p-remove danger-btn" data-idx="${i}" title="删除这个文件夹对">✕</button>
+      </div>
+      <div class="filters hidden" data-idx="${i}">
+        <div class="cols">
+          <div>
+            <label>包含（白名单）</label>
+            <textarea class="p-include" data-idx="${i}" rows="2"
+                      placeholder="留空 = 用作业的">${esc(s.include || "")}</textarea>
+          </div>
+          <div>
+            <label>排除</label>
+            <textarea class="p-exclude" data-idx="${i}" rows="2"
+                      placeholder="留空 = 用作业的">${esc(s.exclude || "")}</textarea>
+          </div>
+        </div>
+        <div class="sub" style="margin:4px 0 0">
+          这里的规则只作用于这一对，并且叠加在作业级规则之上。
+          ${own.length ? "当前：" + esc(own.join("，")) : "当前没有自己的规则。"}
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+
+  // Each input writes straight into sessionCfg. A delegated listener would be
+  // shorter but loses which field changed, and the model update differs per field.
+  host.querySelectorAll(".p-local").forEach(el => {
+    el.addEventListener("input", () => {
+      sessionCfg.pairs[Number(el.closest(".pair-row").dataset.idx)].local_root = el.value;
+      markDirty();
+    });
+  });
+  host.querySelectorAll(".p-remote").forEach(el => {
+    el.addEventListener("input", () => {
+      const i = Number(el.closest(".pair-row").dataset.idx);
+      sessionCfg.pairs[i].remote_root = el.value;
+      // A typed "backend:path" means the backend field must not fight it.
+      if (el.value.includes(":")) sessionCfg.pairs[i].remote_backend = "";
+      markDirty();
+    });
+  });
+  host.querySelectorAll(".p-variant").forEach(el => {
+    el.value = (sessionCfg.pairs[Number(el.dataset.idx)].variant) || "";
+    el.addEventListener("change", () => {
+      sessionCfg.pairs[Number(el.dataset.idx)].variant = el.value;
+      markDirty();
+      renderPairs();
+    });
+  });
+  host.querySelectorAll(".p-include").forEach(el => {
+    el.addEventListener("input", () => {
+      const i = Number(el.dataset.idx);
+      sessionCfg.pairs[i].sync = sessionCfg.pairs[i].sync || {};
+      sessionCfg.pairs[i].sync.include = el.value;
+      markDirty();
+    });
+  });
+  host.querySelectorAll(".p-exclude").forEach(el => {
+    el.addEventListener("input", () => {
+      const i = Number(el.dataset.idx);
+      sessionCfg.pairs[i].sync = sessionCfg.pairs[i].sync || {};
+      sessionCfg.pairs[i].sync.exclude = el.value;
+      markDirty();
+    });
+  });
+  host.querySelectorAll(".p-filter").forEach(el => {
+    el.addEventListener("click", () => {
+      const box = host.querySelector(`.filters[data-idx="${el.dataset.idx}"]`);
+      box.classList.toggle("hidden");
+    });
+  });
+  host.querySelectorAll(".p-remove").forEach(el => {
+    el.addEventListener("click", () => {
+      const i = Number(el.dataset.idx);
+      const p = sessionCfg.pairs[i];
+      if (!confirm(`删除文件夹对「${p.name}」？\n\n这只改配置，不会动任何文件。`)) return;
+      sessionCfg.pairs.splice(i, 1);
+      // The job needs at least one pair to exist; the server rejects an empty job.
+      if (!sessionCfg.pairs.length) sessionCfg.pairs.push(newPair());
+      markDirty();
+      renderPairs();
+    });
+  });
+  host.querySelectorAll(".p-browse").forEach(el => {
+    el.addEventListener("click", () => {
+      openBrowse(Number(el.dataset.idx), el.dataset.side);
+    });
+  });
+
+  // Swap is FreeFileSync's ⇄ button: it exchanges the two sides so the same pair
+  // can be run in the other direction without retyping either path.
+  host.querySelectorAll(".p-swap").forEach(el => {
+    el.addEventListener("click", () => {
+      const i = Number(el.dataset.idx);
+      const p = sessionCfg.pairs[i];
+      const a = p.local_root || "";
+      p.local_root = p.remote_root || "";
+      p.remote_root = a;
+      // remote_backend describes the right-hand side specifically; after a swap it
+      // would describe the wrong side, so it has to go with the path.
+      p.remote_backend = "";
+      markDirty();
+      renderPairs();
+    });
+  });
+}
+
+function countLines(text) {
+  return String(text || "").split("\n").filter(l => l.trim()).length;
+}
+
+const COMPARE_LABEL_SHORT = {
+  "time-size": "时间+大小",
+  "size-only": "仅大小",
+  "content": "内容",
+};
+
+// newPair builds a blank pair with a unique name, so adding two in a row does not
+// collide on the name the server requires to be unique.
+function newPair() {
+  const used = new Set((sessionCfg.pairs || []).map(p => p.name));
+  let n = used.size + 1;
+  let name = "pair-" + n;
+  while (used.has(name)) { n++; name = "pair-" + n; }
+  return {
+    name,
+    variant: "",
+    effective_variant: "",
+    local_root: "",
+    remote_backend: "",
+    remote_root: "",
+    state_file: "",
+    sync: {
+      deletion: "", versioning_dir: "", versioning_naming: "", conflict: "",
+      max_delete: 0, max_delete_set: false, max_delete_size: "",
+      propagate_local_delete: false, propagate_remote_delete: false,
+      pull_new_files: false, max_pull_size: "",
+      compare: "", include: "", exclude: "",
+    },
+  };
+}
+
+document.getElementById("pair-add").addEventListener("click", () => {
+  if (!sessionCfg) return;
+  sessionCfg.pairs = sessionCfg.pairs || [];
+  sessionCfg.pairs.push(newPair());
+  markDirty();
+  renderPairs();
+  // Focus the path box of the row we just added: adding a pair is always followed
+  // by typing a path, and making the user find the new row is busywork.
+  const rows = document.querySelectorAll("#pair-rows .pair-row");
+  const last = rows[rows.length - 1];
+  if (last) last.querySelector(".p-local").focus();
+});
+
+function updateFilterSummary() {
+  const inc = countLines(document.getElementById("s-include").value);
+  const exc = countLines(document.getElementById("s-exclude").value);
+  const bits = [];
+  if (inc) bits.push("包含 " + inc + " 条");
+  if (exc) bits.push("排除 " + exc + " 条");
+  document.getElementById("s-filter-summary").textContent =
+    bits.length ? "（作业级：" + bits.join("，") + "）" : "（作业级：未设置，全部同步）";
+}
+
+document.getElementById("session-pick").addEventListener("change", e => {
+  sessionJob = e.target.value;
+  localStorage.setItem("weftsync.session", sessionJob);
+  document.getElementById("plan-card").style.display = "none";
+  loadSession();
+});
+
+document.getElementById("s-filter-btn").addEventListener("click", () => {
+  document.getElementById("s-filter-panel").classList.toggle("hidden");
+});
+["s-compare", "s-variant"].forEach(id => {
+  document.getElementById(id).addEventListener("change", () => {
+    if (!sessionCfg) return;
+    if (id === "s-compare") {
+      sessionCfg.sync = sessionCfg.sync || {};
+      sessionCfg.sync.compare = document.getElementById("s-compare").value;
+    } else {
+      sessionCfg.variant = document.getElementById("s-variant").value;
+    }
+    markDirty();
+  });
+});
+["s-include", "s-exclude"].forEach(id => {
+  document.getElementById(id).addEventListener("input", () => {
+    if (sessionCfg) {
+      sessionCfg.sync = sessionCfg.sync || {};
+      sessionCfg.sync[id === "s-include" ? "include" : "exclude"] =
+        document.getElementById(id).value;
+      markDirty();
+    }
+    updateFilterSummary();
+  });
+});
+
+// saveSession writes the in-memory view back to the job file.
+//
+// It sends the whole ConfigView, which is what the server validates - so this page
+// cannot bypass the checks the full form goes through.
+async function saveSession() {
+  if (!sessionCfg) throw new Error("没有可保存的作业");
+  const name = sessionCfg.name;
+  const r = await fetch("/api/config?job=" + encodeURIComponent(name), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(sessionCfg),
+  });
+  const body = await r.json().catch(() => null);
+  if (!r.ok) throw new Error((body && body.error) || ("HTTP " + r.status));
+  dirty = false;
+  return body;
+}
+
+// runSession is the shared body of 比较 and 同步: save, then ask the daemon.
+//
+// Saving first means what gets compared is what the file says. Anything else lets
+// a stale file produce a result the user did not ask for.
+async function runSession(btn, plan, busyText) {
+  const sel = syncSessionPicker();
+  if (!sel || !sessionCfg) return;
+  const status = document.getElementById("s-status");
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = busyText;
+  try {
+    await saveSession();
+    await loadSession();
+    // The selection has to survive saveSession(): loadSession() rebuilds the
+    // pair rows, and a sync that quietly ignores the ticks would copy files the
+    // user just excluded.
+    let q = "/api/run?job=" + encodeURIComponent(sel.job) + (plan ? "&plan=1" : "");
+    if (!plan) {
+      const only = syncOnly(sel.job);
+      if (only) q += "&only=" + encodeURIComponent(JSON.stringify(only.picked));
+    }
+    if (plan) pendingPlanJob = sel.job;
+    await post(q);
+    lastSignature = "";
+    status.textContent = plan ? "已开始比较，结果会显示在下方。" : "已开始同步。";
+    setTimeout(refresh, 400);
+  } catch (err) {
+    status.textContent = (plan ? "比较失败：" : "同步失败：") + err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+document.getElementById("s-compare-btn").addEventListener("click", e => {
+  runSession(e.target, true, "比较中…");
+});
+
+document.getElementById("s-sync-btn").addEventListener("click", async e => {
+  const sel = syncSessionPicker();
+  if (!sel) return;
+  // A compare result with rows unticked is a narrowed sync, so it gets its own
+  // confirmation: "5 files" and "5 files, 2 unticked ones left alone" are very
+  // different promises.
+  const only = syncOnly(sel.job);
+  if (only && only.picked.length === 0) {
+    alert("没有勾选任何行。勾选要同步的行，或点「全选」。");
+    return;
+  }
+  // Deleting is the one irreversible step, so it gets a confirmation that names
+  // the plan the user just looked at. Without a compare first there is nothing to
+  // confirm against, and the run's own guard is the only protection left.
+  const plan = ((snapshot && snapshot.jobs) || []).find(j => j.name === sel.job)?.plan;
+  const s = plan ? planSummaryText(plan) : "";
+  const note = only
+    ? `\n\n只同步勾选的 ${only.picked.length} / ${only.all} 项，` +
+      `其余不会被改动（包括不会被删除）。`
+    : "";
+  if (!confirm(`开始同步「${sel.job}」？` + (s ? "\n\n上次对比结果：\n" + s : "") + note)) return;
+  runSession(e.target, false, "同步中…");
+});
+
+// planSummaryText turns the last preview into one line per pair.
+function planSummaryText(plan) {
+  const lines = [];
+  for (const r of plan.results || []) {
+    const c = (r.plan_summary) || {};
+    const bits = [];
+    if (c.create) bits.push("新建 " + c.create);
+    if (c.update) bits.push("更新 " + c.update);
+    if (c.download) bits.push("下载 " + c.download);
+    if (c.delete_remote) bits.push("删云端 " + c.delete_remote);
+    if (c.delete_local) bits.push("删本地 " + c.delete_local);
+    if (c.mkdir || c.rmdir) bits.push("目录 " + (c.mkdir + c.rmdir));
+    lines.push((r.pair || "?") + "：" + (bits.length ? bits.join("，") : "无变化"));
+  }
+  return lines.join("\n");
+}
+
+// s-stop-btn stops the run in flight. It is disabled unless something is running
+// for this job, so it cannot be pressed into a no-op.
+document.getElementById("s-stop-btn").addEventListener("click", async e => {
+  const sel = syncSessionPicker();
+  if (!sel) return;
+  e.target.disabled = true;
+  try {
+    await post("/api/stop?job=" + encodeURIComponent(sel.job));
+    document.getElementById("s-status").textContent = "已请求停止。";
+  } catch (err) {
+    document.getElementById("s-status").textContent = "停止失败：" + err.message;
+  }
+  setTimeout(refresh, 400);
+});
+
+// updateRunControls keeps 停止 in step with what the daemon is doing.
+function updateRunControls() {
+  const sel = syncSessionPicker();
+  if (!sel) return;
+  const job = ((snapshot && snapshot.jobs) || []).find(j => j.name === sel.job);
+  const running = !!job && job.state === "running";
+  const stop = document.getElementById("s-stop-btn");
+  if (stop) stop.disabled = !running;
+  const cmp = document.getElementById("s-compare-btn");
+  const sync = document.getElementById("s-sync-btn");
+  if (cmp) cmp.disabled = running;
+  if (sync) sync.disabled = running;
+}
+
+// ------------------------------------------------------------------ browser
+//
+// A web page cannot open a native folder picker, so the daemon lists directories
+// and the user clicks down. Only directories are shown; this is a sync root
+// picker, not a file manager.
+
+let browseTarget = null;   // { idx, side }
+let browsePath = "";
+
+function openBrowse(idx, side) {
+  if (!sessionCfg) return;
+  browseTarget = { idx, side };
+  browsePath = sessionCfg.pairs[idx][side === "local" ? "local_root" : "remote_root"] || "";
+  document.getElementById("browse-side").textContent = side === "local" ? "本地" : "云端";
+  document.getElementById("browse-mask").classList.remove("hidden");
+  document.getElementById("browse-dlg").classList.remove("hidden");
+  loadBrowse(browsePath);
+}
+
+function closeBrowse() {
+  browseTarget = null;
+  document.getElementById("browse-mask").classList.add("hidden");
+  document.getElementById("browse-dlg").classList.add("hidden");
+}
+
+async function loadBrowse(path) {
+  const list = document.getElementById("browse-list");
+  const err = document.getElementById("browse-err");
+  list.innerHTML = '<div class="none">载入中…</div>';
+  err.textContent = "";
+  try {
+    const v = await getJSON("/api/browse?path=" + encodeURIComponent(path || ""));
+    browsePath = v.path || "";
+    document.getElementById("browse-current").value = browsePath;
+    document.getElementById("browse-up").disabled = !v.parent;
+
+    const roots = document.getElementById("browse-roots");
+    roots.innerHTML = (v.roots || [])
+      .map(r => `<button data-root="${esc(r)}">${esc(r)}</button>`).join("");
+    roots.querySelectorAll("button[data-root]").forEach(b => {
+      b.addEventListener("click", () => loadBrowse(b.dataset.root));
+    });
+
+    if (v.error) err.textContent = v.error;
+    list.innerHTML = (v.dirs || []).length
+      ? v.dirs.map(d => `<button data-dir="${esc(d.path)}">📁 ${esc(d.name)}</button>`).join("")
+      : '<div class="none">（没有子目录）</div>';
+    list.querySelectorAll("button[data-dir]").forEach(b => {
+      b.addEventListener("click", () => loadBrowse(b.dataset.dir));
+    });
+  } catch (e) {
+    list.innerHTML = "";
+    err.textContent = "读取目录失败：" + e.message;
+  }
+}
+
+document.getElementById("browse-up").addEventListener("click", async () => {
+  const v = await getJSON("/api/browse?path=" + encodeURIComponent(browsePath));
+  if (v.parent) loadBrowse(v.parent);
+});
+document.getElementById("browse-close").addEventListener("click", closeBrowse);
+document.getElementById("browse-cancel").addEventListener("click", closeBrowse);
+document.getElementById("browse-mask").addEventListener("click", closeBrowse);
+document.getElementById("browse-pick").addEventListener("click", () => {
+  if (!browseTarget || !sessionCfg) return closeBrowse();
+  sessionCfg.pairs[browseTarget.idx][
+    browseTarget.side === "local" ? "local_root" : "remote_root"] = browsePath;
+  markDirty();
+  closeBrowse();
+  renderPairs();
 });
 
 // ------------------------------------------------------------------ split tab
@@ -2329,7 +3483,9 @@ document.getElementById("cfg-save").addEventListener("click", async () => {
   }
 });
 
-refresh();
+// The session view needs the config, not just the status, so it loads after the
+// first status poll has filled the picker.
+refresh().then(loadSession);
 </script>
 </body>
 </html>

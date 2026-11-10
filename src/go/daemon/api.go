@@ -59,6 +59,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/api/split/snapshots", a.handleSplitSnapshots)
 	mux.HandleFunc("/api/split/undo", a.handleSplitUndo)
 	mux.HandleFunc("/api/config", a.handleConfig)
+	mux.HandleFunc("/api/browse", a.handleBrowse)
 	mux.HandleFunc("/api/autostart", a.handleAutostart)
 	mux.HandleFunc("/api/info", a.handleInfo)
 	mux.HandleFunc("/api/settings", a.handleSettings)
@@ -100,6 +101,18 @@ func (a *API) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.URL.Query().Get("job")
+	// onlyPaths restricts a real run to the rows the console left ticked. Absent
+	// means "everything", which is what a scheduled run and the CLI want.
+	var only []string
+	if raw := r.URL.Query().Get("only"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &only); err != nil {
+			// A malformed selection must not silently become "run everything":
+			// that is the difference between doing what was asked and doing more.
+			writeError(w, http.StatusBadRequest,
+				"the only parameter must be a JSON array of paths: "+err.Error())
+			return
+		}
+	}
 	if name == "" {
 		if err := json.NewDecoder(r.Body).Decode(&struct {
 			Job *string `json:"job"`
@@ -112,6 +125,9 @@ func (a *API) handleRun(w http.ResponseWriter, r *http.Request) {
 	start := func(n string) error {
 		if mode == ModePlan {
 			return a.D.TriggerPlan(r.Context(), n)
+		}
+		if len(only) > 0 {
+			return a.D.TriggerPaths(r.Context(), n, only)
 		}
 		return a.D.Trigger(r.Context(), n)
 	}
