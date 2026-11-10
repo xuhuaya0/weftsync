@@ -52,7 +52,7 @@ align_to_start = true
 | POST | `/api/run` | 启动所有启用的作业 |
 | POST | `/api/stop?job=名称` | 请求停止正在跑的那一轮（202；没在跑时 409） |
 | GET | `/api/config?job=名称` | 读取可编辑的配置视图 |
-| GET | `/api/browse?path=路径` | 列出子目录（只列目录，不列文件），用于网页上的文件夹选择；`path` 省略时给盘符/根列表 |
+| GET | `/api/browse?path=路径` | 列目录，供网页选同步根。`path` 可以是本机目录，也可以是 `<remote>:<path>`；省略时给盘符/根列表 |
 | GET | `/api/log?level=&contains=&limit=&since=` | 日志（服务端过滤） |
 | GET | `/api/log/export?level=&contains=` | 把过滤后的日志作为文本附件下载 |
 | POST | `/api/conflict/resolve?job=&pair=&path=&action=push\|pull` | 处理一条冲突 |
@@ -208,7 +208,7 @@ daemon **只决定什么时候跑**，不改变任何一个 pair 的安全规则
 | `GET /api/log` | 最近日志（环形缓冲，最近 500 行） |
 | `POST /api/run` | 立即运行（`&plan=true` 则只预览；`&only=["路径",…]` 只跑勾选的） |
 | `POST /api/stop` | 停止运行中的那一轮 |
-| GET `/api/browse?path=` | 列出子目录，供网页选择同步根 |
+| GET `/api/browse?path=` | 列目录（本机或云端），供网页选择同步根 |
 | GET `/api/config?job=` | 可编辑的配置视图 |
 | POST `/api/config?job=` | 保存配置 |
 | `GET /api/log?level=&contains=&limit=&since=` | 日志（服务端过滤，级别由文本推断） |

@@ -232,60 +232,174 @@
 
   /* ---- 主界面：一个同步会话（对齐 FreeFileSync 的结构）---- */
   .topbar {
-    display: flex; gap: 10px; align-items: center;
-    padding: 10px 16px; border-bottom: 1px solid var(--line);
-    background: var(--card); flex-wrap: wrap;
-  }
-  .brand { font-size: 17px; font-weight: 700; letter-spacing: .3px; }
-  .topbar select { min-width: 200px; }
-  .icon-btn {
-    padding: 3px 9px; font-size: 15px; line-height: 1.2;
-    background: none; border: 1px solid transparent; border-radius: 6px; cursor: pointer;
-  }
-  .icon-btn:hover { border-color: var(--line); }
-
-  .session { padding: 14px 16px; max-width: 1200px; }
-
-  .paths { display: grid; grid-template-columns: 1fr 40px 1fr; gap: 10px; align-items: end; }
-  .path-side { min-width: 0; }
-  .path-side label {
-    display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px;
-  }
-  .path-side input {
-    width: 100%; font-family: ui-monospace, monospace; font-size: 12px;
+    display: flex; gap: 12px; align-items: center;
+    padding: 0 22px; height: 52px;
+    border-bottom: 1px solid var(--line);
     background: var(--card);
+    position: sticky; top: 0; z-index: 30;
   }
-  .path-arrow {
-    text-align: center; font-size: 18px; color: var(--muted);
-    padding-bottom: 6px;
+  .brand {
+    font-size: 15px; font-weight: 700; letter-spacing: .2px;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .brand::before {
+    content: ""; width: 9px; height: 9px; border-radius: 2px;
+    background: var(--blue); display: block;
+  }
+  .topbar select { min-width: 180px; }
+  .icon-btn {
+    padding: 4px 9px; font-size: 15px; line-height: 1.2;
+    background: none; border: 1px solid transparent; border-radius: 7px; cursor: pointer;
+    color: var(--muted);
+  }
+  .icon-btn:hover { border-color: var(--line); color: var(--ink); }
+  .conn-badge {
+    font-size: 12px; padding: 1px 9px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  .conn-badge.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+  .conn-badge.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+
+  /* The page column. Narrow by design: a sync screen is a form and a table, and
+     both read badly when they sprawl across a 2560px monitor. */
+  .session { padding: 20px 22px 40px; max-width: 1080px; margin: 0 auto; }
+  @media (min-width: 1500px) { .session { max-width: 1220px; } }
+
+  /* ---- 一个文件夹对 ---- */
+  .pair-card {
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--card); margin-bottom: 10px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .04);
+  }
+  .pair-card.pair-off { opacity: .55; }
+  /* minmax(0,1fr) rather than 1fr: a grid track refuses to shrink below its
+     content's min-content width, and a long path has no spaces to break at - so
+     with plain 1fr the two path boxes push the buttons off the row and the box
+     collapses to a sliver. This is the whole reason the row looked broken. */
+  .pair-paths {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr);
+    gap: 10px; align-items: center;
+    padding: 12px 12px 10px;
+  }
+  .path-side { min-width: 0; }
+  .path-side .lbl {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .5px; margin-bottom: 5px;
+  }
+  .path-side .lbl .badge { font-weight: 500; letter-spacing: 0; text-transform: none; }
+  .path-box { display: flex; gap: 6px; min-width: 0; }
+  .path-box input {
+    flex: 1; min-width: 0;
+    font-family: ui-monospace, monospace; font-size: 12.5px;
+    padding: 7px 10px; background: var(--bg);
+  }
+  .path-box input:focus { background: var(--card); }
+  .path-box .browse { flex: none; padding: 6px 11px; }
+  .pair-swap {
+    display: flex; align-items: center; justify-content: center;
+    height: 34px; width: 34px; margin: 0 auto;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--card); color: var(--muted);
+    font-size: 15px; line-height: 1; cursor: pointer;
+  }
+  .pair-swap:hover { color: var(--blue); border-color: var(--blue); }
+
+  .pair-foot {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    padding: 8px 12px; border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 60%, var(--card));
+    border-radius: 0 0 10px 10px;
+  }
+  .pair-foot .tag {
+    font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px;
+  }
+  .pair-foot select { font-size: 12.5px; padding: 3px 7px; max-width: 130px; }
+  .pair-foot .p-filter.has-own { border-color: var(--blue); color: var(--blue); }
+  .pair-foot .p-remove {
+    margin-left: auto; border-color: transparent; color: var(--muted);
+    padding: 3px 9px;
+  }
+  .pair-foot .p-remove:hover { color: var(--bad); border-color: var(--bad); }
+  .pair-own {
+    flex-basis: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    padding-top: 8px; border-top: 1px dashed var(--line); margin-top: 2px;
+  }
+  .pair-own.hidden { display: none; }
+  .pair-own label { font-size: 11px; color: var(--muted); display: block; margin-bottom: 3px; }
+  .pair-own textarea {
+    width: 100%; font-family: ui-monospace, monospace; font-size: 12px;
+    background: var(--bg);
   }
 
-  .tuning {
-    display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
-    margin-top: 12px;
+  /* ---- 设置卡片：比较 / 同步 / 过滤，每一项都带一句说明 ----
+     FreeFileSync puts these in a dialog because a native window has no room. Here
+     the choice is the point of the page, so it is visible - and each option says
+     what it does, because "镜像" and "更新" are not self-explanatory and a wrong
+     pick deletes files. */
+  .setup {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+    background: var(--card); margin-bottom: 10px;
   }
-  .tune { display: flex; gap: 6px; align-items: center; font-size: 13px; margin: 0; }
-  .tune select { min-width: 130px; }
+  @media (max-width: 760px) { .setup { grid-template-columns: 1fr; } }
+  .setup-col { padding: 12px 14px; min-width: 0; }
+  .setup-col + .setup-col {
+    border-left: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 40%, var(--card));
+  }
+  @media (max-width: 760px) {
+    .setup-col + .setup-col { border-left: none; border-top: 1px solid var(--line); }
+  }
+  .setup-col h4 {
+    margin: 0 0 9px; font-size: 11px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .5px;
+  }
+  .opt {
+    display: grid; grid-template-columns: 16px 1fr; gap: 3px 8px;
+    padding: 6px 8px; border-radius: 7px; cursor: pointer; margin: 0 -8px 2px;
+  }
+  .opt:hover { background: rgba(128, 128, 128, .1); }
+  .opt input { margin: 3px 0 0; }
+  .opt .nm { font-size: 13px; font-weight: 600; }
+  .opt .ds { grid-column: 2; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+  .opt[data-on="1"] .nm { color: var(--blue); }
+
+  .setup-foot {
+    grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    padding: 9px 14px; border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 60%, var(--card));
+  }
+  .setup-foot .sub { margin: 0; }
 
   /* :not(.hidden) rather than a bare .filter-panel: both selectors have the same
      specificity as .hidden, so a bare rule would win by source order and the panel
      would always be open. */
   .filter-panel:not(.hidden) {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
-    margin-top: 10px; padding: 10px 12px;
-    border: 1px solid var(--line); border-radius: 8px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+    margin-top: 10px; padding: 12px 14px;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--card);
   }
-  .filter-col { display: flex; flex-direction: column; gap: 4px; }
-  .filter-col label { font-size: 12px; color: var(--muted); }
-  .filter-col textarea { font-family: ui-monospace, monospace; font-size: 12px; }
+  @media (max-width: 760px) { .filter-panel:not(.hidden) { grid-template-columns: 1fr; } }
+  .filter-col { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .filter-col label { font-size: 11.5px; color: var(--muted); }
+  .filter-col textarea {
+    font-family: ui-monospace, monospace; font-size: 12px;
+    background: var(--bg); min-height: 62px;
+  }
 
   .actions {
-    display: flex; gap: 10px; align-items: center; margin: 14px 0 4px;
+    display: flex; gap: 10px; align-items: center; margin: 16px 0 4px;
     flex-wrap: wrap;
   }
-  button.big { padding: 7px 22px; font-size: 14px; font-weight: 600; }
-  #s-sync-btn { border-color: var(--bad); color: var(--bad); }
-  #s-sync-btn:hover { background: var(--bad); color: #fff; }
+  button.big { padding: 9px 26px; font-size: 14px; font-weight: 600; border-radius: 8px; }
+  button.big.primary {
+    background: var(--blue); border-color: var(--blue); color: #fff;
+  }
+  button.big.primary:hover { filter: brightness(1.1); color: #fff; }
+  #s-sync-btn { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); color: var(--bad); }
+  #s-sync-btn:hover { background: var(--bad); border-color: var(--bad); color: #fff; }
 
   /* ---- 抽屉 ---- */
   .drawer-mask {
@@ -319,42 +433,26 @@
   #drawer-body { overflow: auto; padding: 12px 14px; flex: 1; }
   #drawer-body .tab:not(.hidden) { display: block; }
 
-  /* ---- 文件夹对列表（FreeFileSync 的一行一对）---- */
-  .pair-head {
-    display: flex; gap: 8px; align-items: baseline;
-    margin: 16px 0 6px; font-size: 12px; font-weight: 600; color: var(--muted);
-    text-transform: uppercase; letter-spacing: .4px;
+  /* ---- 文件夹对区标题 ---- */
+  .sect {
+    display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+    margin: 0 0 9px;
   }
-  .pair-row {
-    display: grid;
-    grid-template-columns: 1fr 40px 1fr auto;
-    gap: 8px; align-items: center;
-    padding: 8px 10px; margin-bottom: 6px;
-    border: 1px solid var(--line); border-radius: 8px; background: var(--card);
+  .sect h3 {
+    margin: 0; font-size: 12px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .5px;
   }
-  .pair-row .side { display: flex; gap: 6px; min-width: 0; }
-  .pair-row .side input {
-    flex: 1; min-width: 0;
-    font-family: ui-monospace, monospace; font-size: 12px;
+  .sect .sub { margin: 0; }
+  .pair-add {
+    display: block; width: 100%; padding: 9px;
+    border: 1px dashed var(--line); border-radius: 10px;
+    background: none; color: var(--muted); font-size: 13px;
   }
-  .pair-row .mid { text-align: center; font-size: 17px; }
-  .pair-row .p-swap {
-    background: none; border: none; color: var(--muted); font-size: 17px;
-    line-height: 1; padding: 2px 4px; cursor: pointer; border-radius: 5px;
-  }
-  .pair-row .p-swap:hover { color: var(--ink); background: rgba(128, 128, 128, .16); }
-  .pair-row .ops { display: flex; gap: 4px; align-items: center; }
-  .pair-row select { font-size: 12px; max-width: 118px; }
-  .pair-row .filters { grid-column: 1 / -1; margin-top: 6px; }
-  .pair-row .filters.hidden { display: none; }
-  .pair-row .filters .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .pair-row .filters label { font-size: 11px; color: var(--muted); display: block; }
-  .pair-row .filters textarea { font-family: ui-monospace, monospace; font-size: 12px; width: 100%; }
-  .pair-row.disabled { opacity: .45; }
+  .pair-add:hover { border-color: var(--blue); color: var(--blue); background: none; }
 
   .filter-hint {
     grid-column: 1 / -1; font-size: 12px; color: var(--muted);
-    border-top: 1px solid var(--line); padding-top: 6px;
+    border-top: 1px solid var(--line); padding-top: 8px;
   }
 
   /* ---- 目录浏览对话框 ---- */
@@ -382,6 +480,17 @@
   }
   .browse-roots { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 12px 0; }
   .browse-roots:empty { display: none; }
+  /* Two groups of starting points under one heading each: this machine, and the
+     cloud. Without the labels a user with several remotes cannot tell a drive
+     letter from a Feishu folder. */
+  .browse-roots .grp {
+    flex-basis: 100%; display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  }
+  .browse-roots .grp > span {
+    font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px;
+    min-width: 58px;
+  }
+  .browse-roots .grp > span.pick-none { text-transform: none; letter-spacing: 0; }
   .browse-list {
     overflow: auto; flex: 1; min-height: 120px; padding: 6px 8px;
   }
@@ -405,55 +514,55 @@
   <span class="brand">weftsync</span>
   <select id="session-pick" title="选择要处理的作业"><option value="">（没有作业）</option></select>
   <span class="grow"></span>
-  <span id="conn" class="idle">连接中…</span>
   <span id="now" class="sub" style="margin:0"></span>
+  <span id="conn" class="conn-badge">连接中…</span>
   <button id="menu-btn" class="icon-btn" title="更多功能">⚙</button>
 </div>
 
 <div class="session" id="tab-session">
-  <!-- 全局设置：作用到这个作业的所有文件夹对 -->
-  <div class="tuning">
-    <label class="tune">比较
-      <select id="s-compare">
-        <option value="time-size">时间 + 大小</option>
-        <option value="size-only">仅大小</option>
-        <option value="content">文件内容</option>
-      </select>
-    </label>
-    <label class="tune">同步
-      <select id="s-variant">
-        <option value="two-way">双向</option>
-        <option value="mirror">镜像（会删）</option>
-        <option value="update">更新（只增）</option>
-      </select>
-    </label>
-    <button id="s-filter-btn">全局过滤…</button>
-    <span id="s-filter-summary" class="sub" style="margin:0"></span>
+  <!-- 文件夹对：一个同步会话可以有多个，一行一个块 -->
+  <div class="sect">
+    <h3>文件夹对</h3>
+    <span class="sub">左右两边各可以是本机目录或云端路径；路径可手输，也可点「浏览」</span>
+  </div>
+  <div id="pair-rows"></div>
+  <button id="pair-add" class="pair-add">+ 添加文件夹对</button>
+
+  <!-- 比较与同步：每一项都写清它到底做什么。这两个选择决定会不会删文件，
+       只给一个下拉框名字等于让用户猜。 -->
+  <div class="sect" style="margin-top:18px">
+    <h3>比较与同步</h3>
+  </div>
+  <div class="setup">
+    <div class="setup-col">
+      <h4>比较方式 · 什么算「不一样」</h4>
+      <div id="s-compare-opts"></div>
+    </div>
+    <div class="setup-col">
+      <h4>同步方式 · 哪些方向会动</h4>
+      <div id="s-variant-opts"></div>
+    </div>
+    <div class="setup-foot">
+      <button id="s-filter-btn">过滤器…</button>
+      <span id="s-filter-summary" class="sub"></span>
+      <span class="grow"></span>
+      <span id="s-opt-help" class="sub mono"></span>
+    </div>
   </div>
 
   <div id="s-filter-panel" class="filter-panel hidden">
     <div class="filter-col">
-      <label>包含（白名单：写了就只同步匹配的）</label>
+      <label>包含（白名单：写了就只同步匹配的，其余一律不动）</label>
       <textarea id="s-include" rows="3" placeholder="*.xlsx&#10;reports/**"></textarea>
     </div>
     <div class="filter-col">
-      <label>排除</label>
+      <label>排除（先按包含筛，再把匹配的剔掉）</label>
       <textarea id="s-exclude" rows="3" placeholder="*.tmp&#10;_*&#10;_*/**"></textarea>
     </div>
     <div class="filter-hint">
       这里的规则作用于<strong>所有</strong>文件夹对。要只作用于某一对，用该行的「过滤…」。
+      一行一条，大小写不敏感；<code>/foo</code> 从同步根锚定，<code>**</code> 匹配任意层级。
     </div>
-  </div>
-
-  <!-- 文件夹对列表：一行一对，和 FreeFileSync 一样 -->
-  <div class="pair-head">
-    <span>文件夹对</span>
-    <span class="grow"></span>
-    <span class="sub" style="margin:0">路径可以手输，也可以点「…」浏览</span>
-  </div>
-  <div id="pair-rows"></div>
-  <div class="row" style="margin-top:8px">
-    <button id="pair-add">+ 添加文件夹对</button>
   </div>
 
   <div class="actions">
@@ -473,12 +582,14 @@
   </div>
 </div>
 
-<!-- 目录浏览对话框：网页拿不到本地路径，只能由 daemon 列出来点选 -->
+<!-- 目录浏览对话框：网页拿不到本地路径，只能由 daemon 列出来点选。
+     本机与云端用同一套界面，区别只在起点列表。 -->
 <div id="browse-mask" class="drawer-mask hidden"></div>
 <div id="browse-dlg" class="browse-dlg hidden">
   <div class="browse-head">
     <strong>选择文件夹</strong>
     <span id="browse-side" class="badge"></span>
+    <span id="browse-kind" class="badge"></span>
     <span class="grow"></span>
     <button id="browse-close" class="icon-btn" title="关闭">✕</button>
   </div>
@@ -1983,7 +2094,7 @@ async function loadSession() {
   }
 }
 
-// renderPairs draws one row per folder pair plus the job-level settings.
+// renderPairs draws one block per folder pair plus the job-level settings.
 //
 // Values come from sessionCfg; edits go back into sessionCfg. That keeps the
 // model and the DOM in one direction, so re-rendering never loses what the user
@@ -1995,10 +2106,9 @@ function renderPairs() {
     return;
   }
 
-  // Job-level settings are shown once at the top and apply to every pair.
+  // Job-level settings are shown once above the pair list and apply to every pair.
   const jobSync = sessionCfg.sync || {};
-  document.getElementById("s-compare").value = jobSync.compare || "time-size";
-  document.getElementById("s-variant").value = sessionCfg.variant || "update";
+  renderOptions(jobSync);
   document.getElementById("s-include").value = jobSync.include || "";
   document.getElementById("s-exclude").value = jobSync.exclude || "";
   updateFilterSummary();
@@ -2017,46 +2127,57 @@ function renderPairs() {
     if (s.compare) own.push("比较=" + (COMPARE_LABEL_SHORT[s.compare] || s.compare));
     if (inc) own.push("包含 " + inc + " 条");
     if (exc) own.push("排除 " + exc + " 条");
-    return `<div class="pair-row" data-idx="${i}">
-      <div class="side">
-        <input type="text" class="p-local" value="${esc(p.local_root || "")}"
-               placeholder="本地目录，例如 D:/data" title="${esc(p.local_root || "")}">
-        <button class="p-browse" data-idx="${i}" data-side="local" title="浏览本地目录">…</button>
+    // A pair whose variant differs from the job's is the one thing that can
+    // surprise a reader, so it is spelled out in the footer rather than left to
+    // the dropdown value alone.
+    const eff = p.variant || sessionCfg.variant || "update";
+    return `<div class="pair-card" data-idx="${i}">
+      <div class="pair-paths">
+        <div class="path-side">
+          <div class="lbl">本地 <span class="badge">源 / 目标</span></div>
+          <div class="path-box">
+            <input type="text" class="p-local" value="${esc(p.local_root || "")}"
+                   placeholder="D:/data 或 /home/me/data" title="${esc(p.local_root || "")}">
+            <button class="browse p-browse" data-idx="${i}" data-side="local"
+                    title="浏览本机目录">浏览</button>
+          </div>
+        </div>
+        <div>
+          <button class="pair-swap" data-idx="${i}" title="交换左右">⇄</button>
+        </div>
+        <div class="path-side">
+          <div class="lbl">云端 <span class="badge">源 / 目标</span></div>
+          <div class="path-box">
+            <input type="text" class="p-remote" value="${esc(p.remote_root || "")}"
+                   placeholder="feishu:token/dir 或 remote:path" title="${esc(p.remote_root || "")}">
+            <button class="browse p-browse" data-idx="${i}" data-side="remote"
+                    title="浏览云端目录">浏览</button>
+          </div>
+        </div>
       </div>
-      <div class="mid">
-        <button class="p-swap" data-idx="${i}" title="交换左右">⇄</button>
-      </div>
-      <div class="side">
-        <input type="text" class="p-remote" value="${esc(p.remote_root || "")}"
-               placeholder="云端目录，例如 feishu:token/dir" title="${esc(p.remote_root || "")}">
-      </div>
-      <div class="ops">
-        <select class="p-variant" data-idx="${i}" title="这个文件夹对的同步方向">
-          <option value="">（跟作业）</option>
+      <div class="pair-foot">
+        <span class="tag">方向</span>
+        <select class="p-variant" data-idx="${i}" title="这个文件夹对的同步方式">
+          <option value="">跟作业（${esc(VARIANT_LABEL[eff] || eff)}）</option>
           <option value="two-way">双向</option>
           <option value="mirror">镜像</option>
           <option value="update">更新</option>
         </select>
-        <button class="p-filter" data-idx="${i}" title="这个文件夹对自己的过滤规则"
-                class="${own.length ? "has-own" : ""}">过滤…</button>
-        <button class="p-remove danger-btn" data-idx="${i}" title="删除这个文件夹对">✕</button>
-      </div>
-      <div class="filters hidden" data-idx="${i}">
-        <div class="cols">
+        <button class="p-filter${own.length ? " has-own" : ""}" data-idx="${i}"
+                title="这个文件夹对自己的过滤规则">过滤…</button>
+        <span class="sub" style="margin:0">${own.length ? esc(own.join("，")) : "这个对没有自己的规则"}</span>
+        <button class="p-remove" data-idx="${i}" title="删除这个文件夹对">删除</button>
+        <div class="pair-own hidden" data-idx="${i}">
           <div>
-            <label>包含（白名单）</label>
+            <label>包含（白名单：留空 = 用作业的）</label>
             <textarea class="p-include" data-idx="${i}" rows="2"
                       placeholder="留空 = 用作业的">${esc(s.include || "")}</textarea>
           </div>
           <div>
-            <label>排除</label>
+            <label>排除（留空 = 用作业的）</label>
             <textarea class="p-exclude" data-idx="${i}" rows="2"
                       placeholder="留空 = 用作业的">${esc(s.exclude || "")}</textarea>
           </div>
-        </div>
-        <div class="sub" style="margin:4px 0 0">
-          这里的规则只作用于这一对，并且叠加在作业级规则之上。
-          ${own.length ? "当前：" + esc(own.join("，")) : "当前没有自己的规则。"}
         </div>
       </div>
     </div>`;
@@ -2066,13 +2187,13 @@ function renderPairs() {
   // shorter but loses which field changed, and the model update differs per field.
   host.querySelectorAll(".p-local").forEach(el => {
     el.addEventListener("input", () => {
-      sessionCfg.pairs[Number(el.closest(".pair-row").dataset.idx)].local_root = el.value;
+      sessionCfg.pairs[Number(el.closest(".pair-card").dataset.idx)].local_root = el.value;
       markDirty();
     });
   });
   host.querySelectorAll(".p-remote").forEach(el => {
     el.addEventListener("input", () => {
-      const i = Number(el.closest(".pair-row").dataset.idx);
+      const i = Number(el.closest(".pair-card").dataset.idx);
       sessionCfg.pairs[i].remote_root = el.value;
       // A typed "backend:path" means the backend field must not fight it.
       if (el.value.includes(":")) sessionCfg.pairs[i].remote_backend = "";
@@ -2105,7 +2226,7 @@ function renderPairs() {
   });
   host.querySelectorAll(".p-filter").forEach(el => {
     el.addEventListener("click", () => {
-      const box = host.querySelector(`.filters[data-idx="${el.dataset.idx}"]`);
+      const box = host.querySelector(`.pair-own[data-idx="${el.dataset.idx}"]`);
       box.classList.toggle("hidden");
     });
   });
@@ -2129,7 +2250,7 @@ function renderPairs() {
 
   // Swap is FreeFileSync's ⇄ button: it exchanges the two sides so the same pair
   // can be run in the other direction without retyping either path.
-  host.querySelectorAll(".p-swap").forEach(el => {
+  host.querySelectorAll(".pair-swap").forEach(el => {
     el.addEventListener("click", () => {
       const i = Number(el.dataset.idx);
       const p = sessionCfg.pairs[i];
@@ -2154,6 +2275,115 @@ const COMPARE_LABEL_SHORT = {
   "size-only": "仅大小",
   "content": "内容",
 };
+
+// The two choices that decide whether files get deleted, described in full.
+//
+// A dropdown can only show the name, and these names do not carry their
+// consequences: "镜像" sounds tidy right up until it removes a folder the user
+// only had in the cloud. FreeFileSync solves this with a dialog of radio buttons
+// and one line of explanation each; the same information is shown inline here,
+// because on a page about a pending file operation it should not be one click
+// away.
+//
+// The compare descriptions are the same sentences the API sends in
+// compare_help, so the page and the server cannot drift apart.
+const COMPARE_OPTS = [
+  {
+    v: "time-size", nm: "文件时间和大小",
+    ds: "用同步快照记住的上次上传时间与大小判断，只读本地与状态文件，秒级。" +
+        "同一个文件在两处的时间戳本来就可能有几秒偏差，不必较真。",
+  },
+  {
+    v: "size-only", nm: "文件大小",
+    ds: "只看大小，忽略修改时间。适合时间戳不可靠的存储；" +
+        "内容变了但长度没变时会漏传。",
+  },
+  {
+    v: "content", nm: "文件内容",
+    ds: "把云端那份下载回来逐字节比对，最准。云盘没有可用的哈希，" +
+        "只能这样比，代价是全量数据要重读一遍，可能数小时。",
+  },
+];
+
+const VARIANT_LABEL = { "two-way": "双向", mirror: "镜像", update: "更新" };
+
+const VARIANT_OPTS = [
+  {
+    v: "two-way", nm: "双向",
+    ds: "先拉取云端的改动，再把本地的新增与改动传上去。默认不传播删除；" +
+        "要传播得在「完整配置」里打开对应开关。",
+  },
+  {
+    v: "mirror", nm: "镜像",
+    ds: "本地是唯一来源，云端严格照抄。云端独有的文件会被删除 —— " +
+        "这是三个选项里唯一会删云端数据的。",
+  },
+  {
+    v: "update", nm: "更新",
+    ds: "只把新增和改动送到云端，从不删除任何东西。最安全，但云端会越堆越多。",
+  },
+];
+
+// renderOptions paints the two radio groups from the model.
+//
+// Only the *job* level is drawn here; a pair that overrides either one says so in
+// its own footer, so the reader is never told "镜像" while a pair quietly runs
+// something else.
+function renderOptions(jobSync) {
+  const cmp = jobSync.compare || "time-size";
+  const vr = sessionCfg.variant || "update";
+
+  document.getElementById("s-compare-opts").innerHTML = COMPARE_OPTS.map(o => `
+    <label class="opt" data-on="${cmp === o.v ? "1" : "0"}">
+      <input type="radio" name="s-compare" value="${o.v}"${cmp === o.v ? " checked" : ""}>
+      <span class="nm">${esc(o.nm)}</span>
+      <span class="ds">${esc(o.ds)}</span>
+    </label>`).join("");
+
+  document.getElementById("s-variant-opts").innerHTML = VARIANT_OPTS.map(o => `
+    <label class="opt" data-on="${vr === o.v ? "1" : "0"}">
+      <input type="radio" name="s-variant" value="${o.v}"${vr === o.v ? " checked" : ""}>
+      <span class="nm">${esc(o.nm)}</span>
+      <span class="ds">${esc(o.ds)}</span>
+    </label>`).join("");
+
+  // The badge in the footer repeats the risk in one word, because the safe
+  // choice and the destructive one look identical once the radio is scrolled off.
+  //
+  // It has to look at the pairs, not just the job: a pair may override the
+  // variant, and a footer reading "不会删除任何文件" while a pair quietly runs
+  // mirror would be worse than no badge at all.
+  const mirrors = (sessionCfg.pairs || []).filter(
+    p => (p.variant || vr) === "mirror").length;
+  const help = document.getElementById("s-opt-help");
+  if (help) {
+    if (mirrors) {
+      help.textContent = vr === "mirror" && mirrors === (sessionCfg.pairs || []).length
+        ? "当前会删除云端多余文件"
+        : `${mirrors} 个文件夹对会删除云端多余文件`;
+      help.className = "sub mono warn";
+    } else {
+      help.textContent = "当前不会删除任何文件";
+      help.className = "sub mono ok";
+    }
+  }
+
+  document.querySelectorAll("#s-compare-opts input, #s-variant-opts input")
+    .forEach(el => {
+      el.addEventListener("change", () => {
+        if (!sessionCfg) return;
+        if (el.name === "s-compare") {
+          sessionCfg.sync = sessionCfg.sync || {};
+          sessionCfg.sync.compare = el.value;
+        } else {
+          sessionCfg.variant = el.value;
+        }
+        markDirty();
+        // Re-render so the highlight and the footer warning follow the radio.
+        renderPairs();
+      });
+    });
+}
 
 // newPair builds a blank pair with a unique name, so adding two in a row does not
 // collide on the name the server requires to be unique.
@@ -2186,9 +2416,9 @@ document.getElementById("pair-add").addEventListener("click", () => {
   sessionCfg.pairs.push(newPair());
   markDirty();
   renderPairs();
-  // Focus the path box of the row we just added: adding a pair is always followed
-  // by typing a path, and making the user find the new row is busywork.
-  const rows = document.querySelectorAll("#pair-rows .pair-row");
+  // Focus the path box of the block we just added: adding a pair is always
+  // followed by typing a path, and making the user find the new row is busywork.
+  const rows = document.querySelectorAll("#pair-rows .pair-card");
   const last = rows[rows.length - 1];
   if (last) last.querySelector(".p-local").focus();
 });
@@ -2212,18 +2442,6 @@ document.getElementById("session-pick").addEventListener("change", e => {
 
 document.getElementById("s-filter-btn").addEventListener("click", () => {
   document.getElementById("s-filter-panel").classList.toggle("hidden");
-});
-["s-compare", "s-variant"].forEach(id => {
-  document.getElementById(id).addEventListener("change", () => {
-    if (!sessionCfg) return;
-    if (id === "s-compare") {
-      sessionCfg.sync = sessionCfg.sync || {};
-      sessionCfg.sync.compare = document.getElementById("s-compare").value;
-    } else {
-      sessionCfg.variant = document.getElementById("s-variant").value;
-    }
-    markDirty();
-  });
 });
 ["s-include", "s-exclude"].forEach(id => {
   document.getElementById(id).addEventListener("input", () => {
@@ -2369,24 +2587,66 @@ function updateRunControls() {
 // A web page cannot open a native folder picker, so the daemon lists directories
 // and the user clicks down. Only directories are shown; this is a sync root
 // picker, not a file manager.
+//
+// The same dialog serves both sides. A cloud root is not a path on disk, so the
+// dialog cannot start from a drive letter and expect the user to spell
+// "feishu:token/dir" by heart: it offers the configured remotes as starting
+// points and then lists them through the backend, which is also the only way to
+// learn whether the credentials actually work before saving the pair.
 
 let browseTarget = null;   // { idx, side }
 let browsePath = "";
+let browseKind = "local";
 
 function openBrowse(idx, side) {
   if (!sessionCfg) return;
   browseTarget = { idx, side };
-  browsePath = sessionCfg.pairs[idx][side === "local" ? "local_root" : "remote_root"] || "";
-  document.getElementById("browse-side").textContent = side === "local" ? "本地" : "云端";
+  const cur = sessionCfg.pairs[idx][side === "local" ? "local_root" : "remote_root"] || "";
+  void syncSessionPicker;
+  document.getElementById("browse-side").textContent = side === "local" ? "左：本地" : "右：云端";
   document.getElementById("browse-mask").classList.remove("hidden");
   document.getElementById("browse-dlg").classList.remove("hidden");
-  loadBrowse(browsePath);
+  loadBrowse(cur);
 }
 
 function closeBrowse() {
   browseTarget = null;
   document.getElementById("browse-mask").classList.add("hidden");
   document.getElementById("browse-dlg").classList.add("hidden");
+}
+
+// browseRootsHTML renders the two groups of starting points.
+//
+// The labels matter: without them a drive letter and a Feishu folder look like the
+// same kind of thing, and a user with three remotes cannot tell which one holds
+// the folder they want.
+function browseRootsHTML(v, go) {
+  const parts = [];
+
+  const roots = v.roots || [];
+  if (roots.length) {
+    parts.push(`<div class="grp"><span>本机</span>` +
+      roots.map(r => `<button data-path="${esc(r)}">${esc(r)}</button>`).join("") +
+      `</div>`);
+  }
+
+  const remotes = v.remotes || [];
+  if (remotes.length) {
+    parts.push(`<div class="grp"><span>云端</span>` +
+      remotes.map(r => `<button data-path="${esc(r.name + ":")}" ` +
+        `title="rclone 远程「${esc(r.name)}」，类型 ${esc(r.type)}">` +
+        `${esc(r.name)}: <span class="badge">${esc(r.type)}</span></button>`).join("") +
+      `</div>`);
+  } else if (roots.length) {
+    parts.push(`<div class="grp"><span class="pick-none sub">还没有配置云端远程，` +
+      `去 ⚙ → 全局设置与凭据 添加</span></div>`);
+  }
+
+  const host = document.getElementById("browse-roots");
+  host.innerHTML = parts.join("");
+  host.querySelectorAll("button[data-path]").forEach(b => {
+    b.addEventListener("click", () => go(b.dataset.path));
+  });
 }
 
 async function loadBrowse(path) {
@@ -2397,20 +2657,18 @@ async function loadBrowse(path) {
   try {
     const v = await getJSON("/api/browse?path=" + encodeURIComponent(path || ""));
     browsePath = v.path || "";
+    browseKind = v.kind || "local";
     document.getElementById("browse-current").value = browsePath;
     document.getElementById("browse-up").disabled = !v.parent;
+    document.getElementById("browse-kind").textContent =
+      browseKind === "remote" ? "云端" : "本机";
 
-    const roots = document.getElementById("browse-roots");
-    roots.innerHTML = (v.roots || [])
-      .map(r => `<button data-root="${esc(r)}">${esc(r)}</button>`).join("");
-    roots.querySelectorAll("button[data-root]").forEach(b => {
-      b.addEventListener("click", () => loadBrowse(b.dataset.root));
-    });
+    browseRootsHTML(v, loadBrowse);
 
     if (v.error) err.textContent = v.error;
     list.innerHTML = (v.dirs || []).length
       ? v.dirs.map(d => `<button data-dir="${esc(d.path)}">📁 ${esc(d.name)}</button>`).join("")
-      : '<div class="none">（没有子目录）</div>';
+      : `<div class="none">（${browseKind === "remote" ? "云端这一层没有子文件夹" : "没有子目录"}）</div>`;
     list.querySelectorAll("button[data-dir]").forEach(b => {
       b.addEventListener("click", () => loadBrowse(b.dataset.dir));
     });
@@ -2429,8 +2687,26 @@ document.getElementById("browse-cancel").addEventListener("click", closeBrowse);
 document.getElementById("browse-mask").addEventListener("click", closeBrowse);
 document.getElementById("browse-pick").addEventListener("click", () => {
   if (!browseTarget || !sessionCfg) return closeBrowse();
-  sessionCfg.pairs[browseTarget.idx][
-    browseTarget.side === "local" ? "local_root" : "remote_root"] = browsePath;
+  const p = sessionCfg.pairs[browseTarget.idx];
+  const local = browseTarget.side === "local";
+
+  if (local) {
+    // The left side is a plain disk path. A cloud path here would be a
+    // configuration the job file cannot express, so it is refused rather than
+    // written and hoped for.
+    if (browseKind === "remote") {
+      alert("左边（本地）必须是本机目录，不能选云端路径。\n\n" +
+        "要用云端作为源，把这一行左右交换（⇄）即可。");
+      return;
+    }
+    p.local_root = browsePath;
+  } else {
+    // The right side is opened through rclone, which needs "<remote>:<path>". A
+    // plain disk path has no remote, so the on-the-fly local backend is spelled
+    // out - that is what ":local:" is for, and a pair may store it.
+    p.remote_root = browseKind === "remote" ? browsePath : ":local:" + browsePath;
+    p.remote_backend = "";
+  }
   markDirty();
   closeBrowse();
   renderPairs();
