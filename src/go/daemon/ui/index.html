@@ -265,141 +265,152 @@
   .session { padding: 20px 22px 40px; max-width: 1080px; margin: 0 auto; }
   @media (min-width: 1500px) { .session { max-width: 1220px; } }
 
-  /* ---- 一个文件夹对 ---- */
-  .pair-card {
-    border: 1px solid var(--line); border-radius: 10px;
-    background: var(--card); margin-bottom: 10px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, .04);
+  /* ---- 工具条：三个设置按钮，各自在第二行显示当前值 ----
+     This is FreeFileSync's toolbar: comparison settings, filter and
+     synchronization settings are three buttons, and what they are set to is
+     printed underneath each one. The point of the shape is that you can see all
+     three current values without opening anything, and changing one is a click on
+     the thing that shows it - not a search through a form. */
+  .toolbar {
+    display: flex; gap: 6px; align-items: stretch; flex-wrap: wrap;
+    padding: 8px 0 10px;
   }
-  .pair-card.pair-off { opacity: .55; }
-  /* minmax(0,1fr) rather than 1fr: a grid track refuses to shrink below its
-     content's min-content width, and a long path has no spaces to break at - so
-     with plain 1fr the two path boxes push the buttons off the row and the box
-     collapses to a sliver. This is the whole reason the row looked broken. */
-  .pair-paths {
+  .tool {
+    display: grid; grid-template-columns: auto 1fr; gap: 0 9px;
+    align-items: center; text-align: left;
+    padding: 6px 13px 6px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    cursor: pointer; min-width: 132px;
+  }
+  .tool:hover { border-color: var(--blue); background: var(--card); }
+  .tool .ti {
+    grid-row: span 2; font-size: 17px; line-height: 1; color: var(--muted);
+    font-family: ui-monospace, monospace;
+  }
+  .tool:hover .ti { color: var(--blue); }
+  .tool .tt { font-size: 12px; color: var(--muted); }
+  .tool .tv {
+    font-size: 13px; font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px;
+  }
+  .tool.warn .tv { color: var(--warn); }
+
+  /* ---- 文件夹对：一行就是 FFS 的一套「左 ⇄ 右」---- */
+  .pairs { display: flex; flex-direction: column; gap: 6px; }
+  .pair-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr);
-    gap: 10px; align-items: center;
-    padding: 12px 12px 10px;
+    /* minmax(0,1fr) rather than 1fr: a grid track refuses to shrink below its
+       content's min-content width, and a long path has no spaces to break at - so
+       with plain 1fr the two path boxes push the buttons off the row and the box
+       collapses to a sliver. That is exactly how this row broke once. */
+    grid-template-columns: minmax(0, 1fr) 34px minmax(0, 1fr) auto;
+    gap: 8px; align-items: center;
+    padding: 7px 9px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--card);
   }
-  .path-side { min-width: 0; }
-  .path-side .lbl {
-    display: flex; align-items: center; gap: 6px;
-    font-size: 11px; font-weight: 600; color: var(--muted);
-    text-transform: uppercase; letter-spacing: .5px; margin-bottom: 5px;
-  }
-  .path-side .lbl .badge { font-weight: 500; letter-spacing: 0; text-transform: none; }
-  .path-box { display: flex; gap: 6px; min-width: 0; }
+  .path-box { display: flex; gap: 5px; min-width: 0; }
   .path-box input {
     flex: 1; min-width: 0;
     font-family: ui-monospace, monospace; font-size: 12.5px;
-    padding: 7px 10px; background: var(--bg);
+    padding: 6px 9px; background: var(--bg);
   }
   .path-box input:focus { background: var(--card); }
-  .path-box .browse { flex: none; padding: 6px 11px; }
+  .path-box .browse { flex: none; padding: 5px 9px; font-size: 12px; }
   .pair-swap {
     display: flex; align-items: center; justify-content: center;
-    height: 34px; width: 34px; margin: 0 auto;
-    border: 1px solid var(--line); border-radius: 8px;
+    height: 30px; width: 30px; margin: 0 auto;
+    border: 1px solid var(--line); border-radius: 7px;
     background: var(--card); color: var(--muted);
-    font-size: 15px; line-height: 1; cursor: pointer;
+    font-size: 14px; line-height: 1; cursor: pointer;
   }
   .pair-swap:hover { color: var(--blue); border-color: var(--blue); }
+  .pair-ops { display: flex; gap: 2px; align-items: center; }
+  .pair-ops button {
+    border-color: transparent; background: none; color: var(--muted);
+    padding: 4px 8px; font-size: 13px;
+  }
+  .pair-ops button:hover { border-color: var(--line); color: var(--ink); }
+  .pair-ops .p-remove:hover { border-color: var(--bad); color: var(--bad); }
+  /* A pair that overrides the configuration says so; otherwise a reader has to
+     open the dialog to find out why this one row behaves differently. */
+  .pair-ops .p-own.has-own { border-color: var(--blue); color: var(--blue); }
+  .pair-add {
+    display: block; width: 100%; padding: 7px; margin-top: 6px;
+    border: 1px dashed var(--line); border-radius: 8px;
+    background: none; color: var(--muted); font-size: 12.5px;
+  }
+  .pair-add:hover { border-color: var(--blue); color: var(--blue); background: none; }
 
-  .pair-foot {
-    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-    padding: 8px 12px; border-top: 1px solid var(--line);
-    background: color-mix(in srgb, var(--bg) 60%, var(--card));
-    border-radius: 0 0 10px 10px;
+  /* ---- 底部条：状态在左，比较/同步在右（FFS 的位置）---- */
+  .foot {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line);
   }
-  .pair-foot .tag {
-    font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px;
-  }
-  .pair-foot select { font-size: 12.5px; padding: 3px 7px; max-width: 130px; }
-  .pair-foot .p-filter.has-own { border-color: var(--blue); color: var(--blue); }
-  .pair-foot .p-remove {
-    margin-left: auto; border-color: transparent; color: var(--muted);
-    padding: 3px 9px;
-  }
-  .pair-foot .p-remove:hover { color: var(--bad); border-color: var(--bad); }
-  .pair-own {
-    flex-basis: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
-    padding-top: 8px; border-top: 1px dashed var(--line); margin-top: 2px;
-  }
-  .pair-own.hidden { display: none; }
-  .pair-own label { font-size: 11px; color: var(--muted); display: block; margin-bottom: 3px; }
-  .pair-own textarea {
-    width: 100%; font-family: ui-monospace, monospace; font-size: 12px;
-    background: var(--bg);
-  }
+  .foot .grow { flex: 1; }
+  .foot button.big { padding: 8px 22px; font-size: 13.5px; font-weight: 600; border-radius: 8px; }
+  .foot button.big.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .foot button.big.primary:hover { filter: brightness(1.1); color: #fff; }
+  #s-sync-btn { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); color: var(--bad); }
+  #s-sync-btn:hover { background: var(--bad); border-color: var(--bad); color: #fff; }
 
-  /* ---- 设置卡片：比较 / 同步 / 过滤，每一项都带一句说明 ----
-     FreeFileSync puts these in a dialog because a native window has no room. Here
-     the choice is the point of the page, so it is visible - and each option says
-     what it does, because "镜像" and "更新" are not self-explanatory and a wrong
-     pick deletes files. */
-  .setup {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 0;
-    border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
-    background: var(--card); margin-bottom: 10px;
+  /* ---- 设置对话框（FFS 的 Comparison / Synchronization / Filter 三个窗）----
+     A dialog rather than an inline form because these are choices you make and
+     then leave alone; keeping them on the page means every glance at the file list
+     has to step over them. */
+  .dlg-mask {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, .34); z-index: 62;
   }
-  @media (max-width: 760px) { .setup { grid-template-columns: 1fr; } }
-  .setup-col { padding: 12px 14px; min-width: 0; }
-  .setup-col + .setup-col {
-    border-left: 1px solid var(--line);
-    background: color-mix(in srgb, var(--bg) 40%, var(--card));
+  .dlg:not(.hidden) {
+    position: fixed; z-index: 64; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(560px, 93vw); max-height: 86vh;
+    display: flex; flex-direction: column;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, .32);
   }
-  @media (max-width: 760px) {
-    .setup-col + .setup-col { border-left: none; border-top: 1px solid var(--line); }
+  .dlg.wide:not(.hidden) { width: min(680px, 94vw); }
+  .dlg-head {
+    display: flex; gap: 9px; align-items: center;
+    padding: 11px 14px; border-bottom: 1px solid var(--line);
   }
-  .setup-col h4 {
-    margin: 0 0 9px; font-size: 11px; font-weight: 700; color: var(--muted);
-    text-transform: uppercase; letter-spacing: .5px;
+  .dlg-head strong { font-size: 14px; }
+  .dlg-head .grow { flex: 1; }
+  .dlg-body { padding: 12px 14px; overflow: auto; }
+  .dlg-foot {
+    display: flex; gap: 8px; align-items: center;
+    padding: 10px 14px; border-top: 1px solid var(--line);
   }
+  .dlg-foot .grow { flex: 1; }
+  .dlg-foot .note { margin: 0; font-size: 12px; flex-basis: 100%; }
+
+  /* One option per row: name on top, what it does underneath. */
   .opt {
-    display: grid; grid-template-columns: 16px 1fr; gap: 3px 8px;
-    padding: 6px 8px; border-radius: 7px; cursor: pointer; margin: 0 -8px 2px;
+    display: grid; grid-template-columns: 17px 1fr; gap: 2px 9px;
+    padding: 7px 9px; border-radius: 7px; cursor: pointer; margin: 0 -9px 2px;
   }
   .opt:hover { background: rgba(128, 128, 128, .1); }
   .opt input { margin: 3px 0 0; }
   .opt .nm { font-size: 13px; font-weight: 600; }
   .opt .ds { grid-column: 2; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
   .opt[data-on="1"] .nm { color: var(--blue); }
-
-  .setup-foot {
-    grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-    padding: 9px 14px; border-top: 1px solid var(--line);
-    background: color-mix(in srgb, var(--bg) 60%, var(--card));
+  .dlg-sect {
+    margin: 0 0 6px; font-size: 11px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .5px;
   }
-  .setup-foot .sub { margin: 0; }
+  .dlg-sect + .dlg-sect { margin-top: 14px; }
 
-  /* :not(.hidden) rather than a bare .filter-panel: both selectors have the same
-     specificity as .hidden, so a bare rule would win by source order and the panel
-     would always be open. */
-  .filter-panel:not(.hidden) {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
-    margin-top: 10px; padding: 12px 14px;
-    border: 1px solid var(--line); border-radius: 10px; background: var(--card);
-  }
-  @media (max-width: 760px) { .filter-panel:not(.hidden) { grid-template-columns: 1fr; } }
+  .filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 620px) { .filter-grid { grid-template-columns: 1fr; } }
   .filter-col { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
   .filter-col label { font-size: 11.5px; color: var(--muted); }
   .filter-col textarea {
     font-family: ui-monospace, monospace; font-size: 12px;
-    background: var(--bg); min-height: 62px;
+    background: var(--bg); min-height: 84px; resize: vertical;
   }
-
-  .actions {
-    display: flex; gap: 10px; align-items: center; margin: 16px 0 4px;
-    flex-wrap: wrap;
+  .filter-hint {
+    margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line);
+    font-size: 11.5px; color: var(--muted); line-height: 1.55;
   }
-  button.big { padding: 9px 26px; font-size: 14px; font-weight: 600; border-radius: 8px; }
-  button.big.primary {
-    background: var(--blue); border-color: var(--blue); color: #fff;
-  }
-  button.big.primary:hover { filter: brightness(1.1); color: #fff; }
-  #s-sync-btn { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); color: var(--bad); }
-  #s-sync-btn:hover { background: var(--bad); border-color: var(--bad); color: #fff; }
 
   /* ---- 抽屉 ---- */
   .drawer-mask {
@@ -520,65 +531,142 @@
 </div>
 
 <div class="session" id="tab-session">
-  <!-- 文件夹对：一个同步会话可以有多个，一行一个块 -->
-  <div class="sect">
-    <h3>文件夹对</h3>
-    <span class="sub">左右两边各可以是本机目录或云端路径；路径可手输，也可点「浏览」</span>
+  <!-- 工具条：三个设置按钮。当前值写在按钮上，改就点它。
+       顺序和 FFS 的工具条一致：比较设置 → 过滤器 → 同步设置。 -->
+  <div class="toolbar">
+    <button class="tool" id="btn-compare-settings" title="Comparison Settings · 什么算「不一样」">
+      <span class="ti">≙</span>
+      <span class="tt">比较设置</span>
+      <span class="tv" id="tv-compare">—</span>
+    </button>
+    <button class="tool" id="btn-filter" title="Filter · 哪些路径参与同步">
+      <span class="ti">≡</span>
+      <span class="tt">过滤器</span>
+      <span class="tv" id="tv-filter">—</span>
+    </button>
+    <button class="tool" id="btn-sync-settings" title="Synchronization Settings · 会怎么改两边">
+      <span class="ti">⇄</span>
+      <span class="tt">同步设置</span>
+      <span class="tv" id="tv-variant">—</span>
+    </button>
   </div>
-  <div id="pair-rows"></div>
+
+  <!-- 文件夹对：一行一套「左 ⇄ 右」，右侧 − 删掉这一对 -->
+  <div class="pairs" id="pair-rows"></div>
   <button id="pair-add" class="pair-add">+ 添加文件夹对</button>
 
-  <!-- 比较与同步：每一项都写清它到底做什么。这两个选择决定会不会删文件，
-       只给一个下拉框名字等于让用户猜。 -->
-  <div class="sect" style="margin-top:18px">
-    <h3>比较与同步</h3>
-  </div>
-  <div class="setup">
-    <div class="setup-col">
-      <h4>比较方式 · 什么算「不一样」</h4>
-      <div id="s-compare-opts"></div>
-    </div>
-    <div class="setup-col">
-      <h4>同步方式 · 哪些方向会动</h4>
-      <div id="s-variant-opts"></div>
-    </div>
-    <div class="setup-foot">
-      <button id="s-filter-btn">过滤器…</button>
-      <span id="s-filter-summary" class="sub"></span>
-      <span class="grow"></span>
-      <span id="s-opt-help" class="sub mono"></span>
-    </div>
-  </div>
-
-  <div id="s-filter-panel" class="filter-panel hidden">
-    <div class="filter-col">
-      <label>包含（白名单：写了就只同步匹配的，其余一律不动）</label>
-      <textarea id="s-include" rows="3" placeholder="*.xlsx&#10;reports/**"></textarea>
-    </div>
-    <div class="filter-col">
-      <label>排除（先按包含筛，再把匹配的剔掉）</label>
-      <textarea id="s-exclude" rows="3" placeholder="*.tmp&#10;_*&#10;_*/**"></textarea>
-    </div>
-    <div class="filter-hint">
-      这里的规则作用于<strong>所有</strong>文件夹对。要只作用于某一对，用该行的「过滤…」。
-      一行一条，大小写不敏感；<code>/foo</code> 从同步根锚定，<code>**</code> 匹配任意层级。
-    </div>
-  </div>
-
-  <div class="actions">
-    <button id="s-compare-btn" class="primary big">比较</button>
-    <button id="s-sync-btn" class="big">同步</button>
-    <button id="s-stop-btn" class="big" disabled>停止</button>
-    <span id="s-status" class="sub" style="margin:0"></span>
-  </div>
-
-  <div class="card" id="plan-card" style="display:none">
-    <div class="row" style="margin-bottom:12px">
-      <strong class="grow">对比结果 · <span id="plan-job" class="mono"></span></strong>
-      <button id="plan-run" class="primary">按此执行</button>
-      <button id="plan-close">关闭</button>
+  <!-- 对比结果：FFS 的主区域就是这张表，比较前是空的 -->
+  <div class="card" id="plan-card" style="margin-top:14px">
+    <div class="row" style="margin-bottom:10px">
+      <strong class="grow">对比结果<span id="plan-job" class="mono sub" style="margin-left:6px"></span></strong>
+      <button id="plan-run">直接按此执行</button>
+      <button id="plan-close">清除结果</button>
     </div>
     <div id="plan-body"></div>
+  </div>
+
+  <!-- 底部：状态在左，比较/同步在右，和 FFS 一致 -->
+  <div class="foot">
+    <span id="s-status" class="sub" style="margin:0"></span>
+    <span class="grow"></span>
+    <button id="s-stop-btn" disabled>停止</button>
+    <button id="s-compare-btn" class="big primary">比较</button>
+    <button id="s-sync-btn" class="big">同步</button>
+  </div>
+</div>
+
+<!-- ============ 设置对话框 ============ -->
+<div id="dlg-mask" class="dlg-mask hidden"></div>
+
+<!-- 比较设置：FFS 的 Comparison Settings -->
+<div id="dlg-compare" class="dlg hidden">
+  <div class="dlg-head"><strong>比较设置</strong><span class="grow"></span>
+    <button class="icon-btn" data-dlg-close title="关闭">✕</button></div>
+  <div class="dlg-body">
+    <div class="dlg-sect">判断两个文件是否相同时，比什么</div>
+    <div id="dlg-compare-opts"></div>
+  </div>
+  <div class="dlg-foot">
+    <span class="grow"></span>
+    <button data-dlg-close>取消</button>
+    <button class="primary" id="dlg-compare-ok">确定</button>
+  </div>
+</div>
+
+<!-- 同步设置：FFS 的 Synchronization Settings -->
+<div id="dlg-sync" class="dlg hidden">
+  <div class="dlg-head"><strong>同步设置</strong><span class="grow"></span>
+    <button class="icon-btn" data-dlg-close title="关闭">✕</button></div>
+  <div class="dlg-body">
+    <div class="dlg-sect">哪些方向会改动，哪些会被删</div>
+    <div id="dlg-sync-opts"></div>
+    <div class="note" id="dlg-sync-warn" style="display:none;margin:12px 0 0"></div>
+  </div>
+  <div class="dlg-foot">
+    <span class="grow"></span>
+    <button data-dlg-close>取消</button>
+    <button class="primary" id="dlg-sync-ok">确定</button>
+  </div>
+</div>
+
+<!-- 过滤器：FFS 的 Filter -->
+<div id="dlg-filter" class="dlg wide hidden">
+  <div class="dlg-head"><strong>过滤器</strong><span class="grow"></span>
+    <button class="icon-btn" data-dlg-close title="关闭">✕</button></div>
+  <div class="dlg-body">
+    <div class="filter-grid">
+      <div class="filter-col">
+        <label>包含（白名单：写了就只同步匹配的，其余一律不动）</label>
+        <textarea id="dlg-include" rows="5" placeholder="*.xlsx&#10;reports/**"></textarea>
+      </div>
+      <div class="filter-col">
+        <label>排除（先按包含筛，再把匹配的剔掉）</label>
+        <textarea id="dlg-exclude" rows="5" placeholder="*.tmp&#10;_*&#10;_*/**"></textarea>
+      </div>
+    </div>
+    <div class="filter-hint">
+      一行一条，大小写不敏感。<code>/foo</code> 从同步根锚定；<code>**</code> 匹配任意层级。
+      这里的规则作用于<strong>所有</strong>文件夹对。
+    </div>
+  </div>
+  <div class="dlg-foot">
+    <span class="grow"></span>
+    <button data-dlg-close>取消</button>
+    <button class="primary" id="dlg-filter-ok">确定</button>
+  </div>
+</div>
+
+<!-- 单个文件夹对的设置：FFS 没有这一层，这里用同一个窗的形状，
+     每一项的第一个选择就是「跟配置」——不选它就等于没改。 -->
+<div id="dlg-pair" class="dlg wide hidden">
+  <div class="dlg-head">
+    <strong>文件夹对的设置</strong>
+    <span id="dlg-pair-name" class="badge"></span>
+    <span class="grow"></span>
+    <button class="icon-btn" data-dlg-close title="关闭">✕</button>
+  </div>
+  <div class="dlg-body">
+    <div class="dlg-sect">比较方式</div>
+    <div id="dlg-pair-compare"></div>
+    <div class="dlg-sect">同步方式</div>
+    <div id="dlg-pair-variant"></div>
+    <div class="dlg-sect">过滤器（叠加在配置级规则之上）</div>
+    <div class="filter-grid">
+      <div class="filter-col">
+        <label>包含</label>
+        <textarea id="dlg-pair-include" rows="3" placeholder="留空 = 用配置的"></textarea>
+      </div>
+      <div class="filter-col">
+        <label>排除</label>
+        <textarea id="dlg-pair-exclude" rows="3" placeholder="留空 = 用配置的"></textarea>
+      </div>
+    </div>
+  </div>
+  <div class="dlg-foot">
+    <button id="dlg-pair-reset">全部跟配置</button>
+    <span class="grow"></span>
+    <button data-dlg-close>取消</button>
+    <button class="primary" id="dlg-pair-ok">确定</button>
   </div>
 </div>
 
@@ -1299,12 +1387,22 @@ async function stopJob(name, btn) {
   setTimeout(refresh, 400);
 }
 
-function openPlanPanel(name) {
-  const card = document.getElementById("plan-card");
-  const job = ((snapshot && snapshot.jobs) || []).find(j => j.name === name);
-  if (!job || !job.plan) { card.style.display = "none"; return; }
+// planCardPlaceholder is what the result area says before anything has been
+// compared. The area is always on screen - it is where the answer appears, and a
+// panel that only materialises afterwards makes the page jump.
+function planCardPlaceholder() {
+  return `<div class="empty">还没有比较结果。点右下角「比较」，先看会改什么，再决定要不要同步。</div>`;
+}
 
-  document.getElementById("plan-job").textContent = name;
+function openPlanPanel(name) {
+  const job = ((snapshot && snapshot.jobs) || []).find(j => j.name === name);
+  if (!job || !job.plan) {
+    document.getElementById("plan-body").innerHTML = planCardPlaceholder();
+    return;
+  }
+
+  document.getElementById("plan-job").textContent =
+    "· " + name + (job.plan.at ? " · " + fmtTime(job.plan.at) : "");
   document.getElementById("plan-body").innerHTML = planHTML(job.plan);
   // The table is injected as a string, so its filter controls need wiring after
   // the fact. Doing it here (not in planHTML) keeps planHTML a pure formatter.
@@ -1313,16 +1411,26 @@ function openPlanPanel(name) {
   runBtn.dataset.job = name;
   // "Run it" makes no sense for a preview that could not be built.
   runBtn.disabled = !!job.plan.error;
-  runBtn.textContent = "按此执行";
-  card.style.display = "";
   planJob = name;
 }
 
 // planJob is the job the open panel belongs to; "" when the panel is closed.
 let planJob = "";
 
+// closePlanPanel clears the result area.
+//
+// It leaves the area on screen with a placeholder rather than hiding it: the
+// comparison is the point of this screen, and a card that disappears takes the
+// column layout with it.
 function closePlanPanel() {
-  document.getElementById("plan-card").style.display = "none";
+  clearPlan();
+}
+
+function clearPlan() {
+  document.getElementById("plan-job").textContent = "";
+  document.getElementById("plan-body").innerHTML = planCardPlaceholder();
+  document.getElementById("plan-run").dataset.job = "";
+  document.getElementById("plan-run").disabled = true;
   planJob = "";
   pendingPlanJob = null;
   // Drop the rows too: a stale selection from a previous job must never narrow
@@ -1874,29 +1982,28 @@ document.addEventListener("click", closeRowMenu);
 document.addEventListener("scroll", closeRowMenu, true);
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeRowMenu(); });
 
-// addExcludeRule appends a literal path to the job-level exclude list.
+// addExcludeRule appends a literal path to the configuration's exclude list.
 //
 // rclone matches an exclude pattern against the whole path, and a leading slash
 // anchors it at the sync root; without that, "notes.md" would also hide
-// "reports/notes.md". The rule is written into the field the user can see, not
-// into a hidden list, so the next reader of the config can find it.
+// "reports/notes.md". The rule goes into the same field the filter dialog edits,
+// so the next reader of the config can find it - a rule that only exists inside
+// this page would be invisible the moment the dialog is opened.
 function addExcludeRule(path) {
   if (!sessionCfg) return;
-  const field = document.getElementById("s-exclude");
-  if (!field) return;
   const rule = "/" + path;
-  const cur = String(field.value || "").split("\n").map(s => s.trim()).filter(Boolean);
+  sessionCfg.sync = sessionCfg.sync || {};
+  const cur = String(sessionCfg.sync.exclude || "")
+    .split("\n").map(s => s.trim()).filter(Boolean);
   if (cur.includes(rule)) {
     alert("排除规则里已经有这一条了：\n" + rule);
     return;
   }
   cur.push(rule);
-  field.value = cur.join("\n");
-  sessionCfg.sync = sessionCfg.sync || {};
-  sessionCfg.sync.exclude = field.value;
+  sessionCfg.sync.exclude = cur.join("\n");
   markDirty();
-  updateFilterSummary();
-  if (!confirm(`已加入排除规则：\n${rule}\n\n这条规则作用于整个作业。` +
+  renderPairs();
+  if (!confirm(`已加入排除规则：\n${rule}\n\n这条规则作用于整个配置。` +
       `要让结果里也去掉它，需要保存后重新比较。\n\n现在就重新比较？`)) return;
   runSession(document.getElementById("s-compare-btn"), true, "比较中…");
 }
@@ -1926,7 +2033,7 @@ document.getElementById("plan-run").addEventListener("click", async (e) => {
   } catch (err) {
     alert("启动失败：" + err.message);
     e.target.disabled = false;
-    e.target.textContent = "按此执行";
+    e.target.textContent = "直接按此执行";
     return;
   }
   lastSignature = "";
@@ -2076,6 +2183,7 @@ function markDirty() {
 async function loadSession() {
   const sel = syncSessionPicker();
   const status = document.getElementById("s-status");
+  clearPlan();
   if (!sel) {
     sessionCfg = null;
     renderPairs();
@@ -2087,6 +2195,11 @@ async function loadSession() {
     dirty = false;
     renderPairs();
     status.textContent = "";
+    // If this job was compared before, show that result: it is the state the
+    // daemon is actually in, and hiding it would make an empty grid look like
+    // "nothing to do" when it really means "not compared yet".
+    const job = ((snapshot && snapshot.jobs) || []).find(j => j.name === sel.job);
+    if (job && job.plan) openPlanPanel(sel.job);
   } catch (e) {
     sessionCfg = null;
     renderPairs();
@@ -2094,24 +2207,21 @@ async function loadSession() {
   }
 }
 
-// renderPairs draws one block per folder pair plus the job-level settings.
+// renderPairs draws the folder pairs the way FreeFileSync draws them: one row
+// per pair, left path, swap, right path, and the buttons that act on that row.
 //
-// Values come from sessionCfg; edits go back into sessionCfg. That keeps the
-// model and the DOM in one direction, so re-rendering never loses what the user
-// typed.
+// Nothing about how the sync behaves lives on this row any more. Comparison,
+// synchronization and filters are settings, they apply to the whole
+// configuration, and they are changed in dialogs - which is exactly FFS's shape.
+// A dropdown per row invited the question "which of these do I set, and when?",
+// and there was no good answer.
 function renderPairs() {
   const host = document.getElementById("pair-rows");
+  renderToolbar();
   if (!sessionCfg) {
     host.innerHTML = '<div class="empty">（没有作业）</div>';
     return;
   }
-
-  // Job-level settings are shown once above the pair list and apply to every pair.
-  const jobSync = sessionCfg.sync || {};
-  renderOptions(jobSync);
-  document.getElementById("s-include").value = jobSync.include || "";
-  document.getElementById("s-exclude").value = jobSync.exclude || "";
-  updateFilterSummary();
 
   const pairs = sessionCfg.pairs || [];
   if (!pairs.length) {
@@ -2120,65 +2230,27 @@ function renderPairs() {
   }
 
   host.innerHTML = pairs.map((p, i) => {
-    const s = p.sync || {};
-    const inc = countLines(s.include);
-    const exc = countLines(s.exclude);
-    const own = [];
-    if (s.compare) own.push("比较=" + (COMPARE_LABEL_SHORT[s.compare] || s.compare));
-    if (inc) own.push("包含 " + inc + " 条");
-    if (exc) own.push("排除 " + exc + " 条");
-    // A pair whose variant differs from the job's is the one thing that can
-    // surprise a reader, so it is spelled out in the footer rather than left to
-    // the dropdown value alone.
-    const eff = p.variant || sessionCfg.variant || "update";
-    return `<div class="pair-card" data-idx="${i}">
-      <div class="pair-paths">
-        <div class="path-side">
-          <div class="lbl">本地 <span class="badge">源 / 目标</span></div>
-          <div class="path-box">
-            <input type="text" class="p-local" value="${esc(p.local_root || "")}"
-                   placeholder="D:/data 或 /home/me/data" title="${esc(p.local_root || "")}">
-            <button class="browse p-browse" data-idx="${i}" data-side="local"
-                    title="浏览本机目录">浏览</button>
-          </div>
-        </div>
-        <div>
-          <button class="pair-swap" data-idx="${i}" title="交换左右">⇄</button>
-        </div>
-        <div class="path-side">
-          <div class="lbl">云端 <span class="badge">源 / 目标</span></div>
-          <div class="path-box">
-            <input type="text" class="p-remote" value="${esc(p.remote_root || "")}"
-                   placeholder="feishu:token/dir 或 remote:path" title="${esc(p.remote_root || "")}">
-            <button class="browse p-browse" data-idx="${i}" data-side="remote"
-                    title="浏览云端目录">浏览</button>
-          </div>
-        </div>
+    const own = pairHasOwn(p);
+    return `<div class="pair-row" data-idx="${i}">
+      <div class="path-box">
+        <input type="text" class="p-local" value="${esc(p.local_root || "")}"
+               placeholder="本机目录，例如 D:/data" title="左边：本机目录">
+        <button class="browse p-browse" data-idx="${i}" data-side="local"
+                title="浏览本机目录">浏览</button>
       </div>
-      <div class="pair-foot">
-        <span class="tag">方向</span>
-        <select class="p-variant" data-idx="${i}" title="这个文件夹对的同步方式">
-          <option value="">跟作业（${esc(VARIANT_LABEL[eff] || eff)}）</option>
-          <option value="two-way">双向</option>
-          <option value="mirror">镜像</option>
-          <option value="update">更新</option>
-        </select>
-        <button class="p-filter${own.length ? " has-own" : ""}" data-idx="${i}"
-                title="这个文件夹对自己的过滤规则">过滤…</button>
-        <span class="sub" style="margin:0">${own.length ? esc(own.join("，")) : "这个对没有自己的规则"}</span>
-        <button class="p-remove" data-idx="${i}" title="删除这个文件夹对">删除</button>
-        <div class="pair-own hidden" data-idx="${i}">
-          <div>
-            <label>包含（白名单：留空 = 用作业的）</label>
-            <textarea class="p-include" data-idx="${i}" rows="2"
-                      placeholder="留空 = 用作业的">${esc(s.include || "")}</textarea>
-          </div>
-          <div>
-            <label>排除（留空 = 用作业的）</label>
-            <textarea class="p-exclude" data-idx="${i}" rows="2"
-                      placeholder="留空 = 用作业的">${esc(s.exclude || "")}</textarea>
-          </div>
-        </div>
+      <button class="pair-swap" data-idx="${i}" title="交换左右">⇄</button>
+      <div class="path-box">
+        <input type="text" class="p-remote" value="${esc(p.remote_root || "")}"
+               placeholder="云端路径，例如 feishu:token/dir" title="右边：云端目录">
+        <button class="browse p-browse" data-idx="${i}" data-side="remote"
+                title="浏览云端目录">浏览</button>
+      </div>
+      <div class="pair-ops">
+        <button class="p-own${own ? " has-own" : ""}" data-idx="${i}"
+                title="${own ? "这一对有独立设置（蓝点）" : "这一对的独立设置（当前全部跟配置）"}">
+          ${own ? "●" : "⚙"}
+        </button>
+        <button class="p-remove" data-idx="${i}" title="删除这个文件夹对">−</button>
       </div>
     </div>`;
   }).join("");
@@ -2187,48 +2259,21 @@ function renderPairs() {
   // shorter but loses which field changed, and the model update differs per field.
   host.querySelectorAll(".p-local").forEach(el => {
     el.addEventListener("input", () => {
-      sessionCfg.pairs[Number(el.closest(".pair-card").dataset.idx)].local_root = el.value;
+      sessionCfg.pairs[Number(el.closest(".pair-row").dataset.idx)].local_root = el.value;
       markDirty();
     });
   });
   host.querySelectorAll(".p-remote").forEach(el => {
     el.addEventListener("input", () => {
-      const i = Number(el.closest(".pair-card").dataset.idx);
+      const i = Number(el.closest(".pair-row").dataset.idx);
       sessionCfg.pairs[i].remote_root = el.value;
       // A typed "backend:path" means the backend field must not fight it.
       if (el.value.includes(":")) sessionCfg.pairs[i].remote_backend = "";
       markDirty();
     });
   });
-  host.querySelectorAll(".p-variant").forEach(el => {
-    el.value = (sessionCfg.pairs[Number(el.dataset.idx)].variant) || "";
-    el.addEventListener("change", () => {
-      sessionCfg.pairs[Number(el.dataset.idx)].variant = el.value;
-      markDirty();
-      renderPairs();
-    });
-  });
-  host.querySelectorAll(".p-include").forEach(el => {
-    el.addEventListener("input", () => {
-      const i = Number(el.dataset.idx);
-      sessionCfg.pairs[i].sync = sessionCfg.pairs[i].sync || {};
-      sessionCfg.pairs[i].sync.include = el.value;
-      markDirty();
-    });
-  });
-  host.querySelectorAll(".p-exclude").forEach(el => {
-    el.addEventListener("input", () => {
-      const i = Number(el.dataset.idx);
-      sessionCfg.pairs[i].sync = sessionCfg.pairs[i].sync || {};
-      sessionCfg.pairs[i].sync.exclude = el.value;
-      markDirty();
-    });
-  });
-  host.querySelectorAll(".p-filter").forEach(el => {
-    el.addEventListener("click", () => {
-      const box = host.querySelector(`.pair-own[data-idx="${el.dataset.idx}"]`);
-      box.classList.toggle("hidden");
-    });
+  host.querySelectorAll(".p-own").forEach(el => {
+    el.addEventListener("click", () => openPairDlg(Number(el.dataset.idx)));
   });
   host.querySelectorAll(".p-remove").forEach(el => {
     el.addEventListener("click", () => {
@@ -2270,10 +2315,13 @@ function countLines(text) {
   return String(text || "").split("\n").filter(l => l.trim()).length;
 }
 
-const COMPARE_LABEL_SHORT = {
-  "time-size": "时间+大小",
-  "size-only": "仅大小",
-  "content": "内容",
+// Short names for the toolbar, where a button only has room for a few words.
+// (The full config form has its own, longer COMPARE_LABEL; two top-level consts
+// cannot share a name, and the longer wording does not fit on a toolbar button.)
+const COMPARE_SHORT = {
+  "time-size": "时间 + 大小",
+  "size-only": "文件大小",
+  "content": "文件内容",
 };
 
 // The two choices that decide whether files get deleted, described in full.
@@ -2324,66 +2372,277 @@ const VARIANT_OPTS = [
   },
 ];
 
-// renderOptions paints the two radio groups from the model.
+// renderToolbar refreshes the three setting buttons.
 //
-// Only the *job* level is drawn here; a pair that overrides either one says so in
-// its own footer, so the reader is never told "镜像" while a pair quietly runs
-// something else.
-function renderOptions(jobSync) {
+// The current value is printed on the button, which is the whole reason the
+// toolbar works: you can see how this configuration is set without opening
+// anything, and changing one is a click on the thing that shows it.
+function renderToolbar() {
+  if (!sessionCfg) return;
+  const jobSync = sessionCfg.sync || {};
   const cmp = jobSync.compare || "time-size";
   const vr = sessionCfg.variant || "update";
+  const pairs = sessionCfg.pairs || [];
 
-  document.getElementById("s-compare-opts").innerHTML = COMPARE_OPTS.map(o => `
-    <label class="opt" data-on="${cmp === o.v ? "1" : "0"}">
-      <input type="radio" name="s-compare" value="${o.v}"${cmp === o.v ? " checked" : ""}>
-      <span class="nm">${esc(o.nm)}</span>
-      <span class="ds">${esc(o.ds)}</span>
-    </label>`).join("");
+  document.getElementById("tv-compare").textContent = COMPARE_SHORT[cmp] || cmp;
 
-  document.getElementById("s-variant-opts").innerHTML = VARIANT_OPTS.map(o => `
-    <label class="opt" data-on="${vr === o.v ? "1" : "0"}">
-      <input type="radio" name="s-variant" value="${o.v}"${vr === o.v ? " checked" : ""}>
-      <span class="nm">${esc(o.nm)}</span>
-      <span class="ds">${esc(o.ds)}</span>
-    </label>`).join("");
-
-  // The badge in the footer repeats the risk in one word, because the safe
-  // choice and the destructive one look identical once the radio is scrolled off.
-  //
-  // It has to look at the pairs, not just the job: a pair may override the
-  // variant, and a footer reading "不会删除任何文件" while a pair quietly runs
-  // mirror would be worse than no badge at all.
-  const mirrors = (sessionCfg.pairs || []).filter(
-    p => (p.variant || vr) === "mirror").length;
-  const help = document.getElementById("s-opt-help");
-  if (help) {
-    if (mirrors) {
-      help.textContent = vr === "mirror" && mirrors === (sessionCfg.pairs || []).length
-        ? "当前会删除云端多余文件"
-        : `${mirrors} 个文件夹对会删除云端多余文件`;
-      help.className = "sub mono warn";
-    } else {
-      help.textContent = "当前不会删除任何文件";
-      help.className = "sub mono ok";
-    }
+  // The sync value shown is what will actually happen, not the configuration
+  // value. With a per-pair override the two differ, and printing the
+  // configuration value while a pair runs something else is the one way this
+  // button could actively mislead: "更新" reads as "nothing is deleted".
+  const eff = pairs.map(p => p.variant || vr);
+  const kinds = [...new Set(eff)];
+  let vrText = VARIANT_LABEL[vr] || vr;
+  if (kinds.length > 1 || (kinds.length === 1 && kinds[0] !== vr)) {
+    vrText = kinds.map(k =>
+      `${VARIANT_LABEL[k] || k}×${eff.filter(x => x === k).length}`).join(" / ");
   }
+  document.getElementById("tv-variant").textContent = vrText;
 
-  document.querySelectorAll("#s-compare-opts input, #s-variant-opts input")
-    .forEach(el => {
-      el.addEventListener("change", () => {
-        if (!sessionCfg) return;
-        if (el.name === "s-compare") {
-          sessionCfg.sync = sessionCfg.sync || {};
-          sessionCfg.sync.compare = el.value;
-        } else {
-          sessionCfg.variant = el.value;
-        }
-        markDirty();
-        // Re-render so the highlight and the footer warning follow the radio.
-        renderPairs();
-      });
-    });
+  const inc = countLines(jobSync.include);
+  const exc = countLines(jobSync.exclude);
+  const bits = [];
+  if (inc) bits.push("包含 " + inc);
+  if (exc) bits.push("排除 " + exc);
+  let filterText = bits.length ? bits.join(" / ") : "未设置";
+  const overrides = pairs.filter(pairHasOwn).length;
+  if (overrides) filterText += ` · ${overrides} 对有独立设置`;
+  document.getElementById("tv-filter").textContent = filterText;
+
+  // The one irreversible outcome is called out on the toolbar itself. A name
+  // like "镜像" does not carry "and it deletes", and that is the only thing on
+  // this screen that cannot be undone.
+  const mirrors = pairs.filter(p => (p.variant || vr) === "mirror").length;
+  const syncBtn = document.getElementById("btn-sync-settings");
+  syncBtn.classList.toggle("warn", mirrors > 0);
+  syncBtn.title = mirrors
+    ? `Synchronization Settings · 当前有 ${mirrors} 个文件夹对会删除云端多余文件`
+    : "Synchronization Settings · 当前不会删除任何文件";
 }
+
+// pairHasOwn reports whether a pair overrides the configuration.
+//
+// Used for two things: the dot on the row's settings button, and the count on the
+// filter button. Both exist so that "this row behaves differently" is visible
+// without opening the dialog.
+//
+// compare is the *effective* value, so compare_set is what says whether this pair
+// stated it. Without that flag every pair would look like an override.
+function pairHasOwn(p) {
+  const s = p.sync || {};
+  return !!(p.variant || s.compare_set ||
+            countLines(s.include) || countLines(s.exclude));
+}
+
+// ---------------------------------------------------------------- dialogs
+//
+// Three dialogs, opened from the toolbar, in FreeFileSync's order. All three edit
+// the in-memory configuration and nothing else: a click on 确定 marks the
+// configuration dirty, and 比较 / 同步 writes it. 取消 restores the snapshot taken
+// when the dialog opened - without that, a forgotten radio click would be saved
+// by the next compare, which is not what cancel means.
+
+let dlgSnapshot = null;
+let openDlgId = "";
+
+function dlgOpen(id) {
+  dlgClose();
+  dlgSnapshot = sessionCfg ? JSON.parse(JSON.stringify(sessionCfg)) : null;
+  openDlgId = id;
+  document.getElementById("dlg-mask").classList.remove("hidden");
+  document.getElementById(id).classList.remove("hidden");
+}
+
+function dlgHide() {
+  if (openDlgId) document.getElementById(openDlgId).classList.add("hidden");
+  openDlgId = "";
+  document.getElementById("dlg-mask").classList.add("hidden");
+}
+
+function dlgClose() {
+  dlgSnapshot = null;
+  dlgHide();
+}
+
+function dlgOk() {
+  dlgClose();
+  markDirty();
+  renderPairs();
+}
+
+function dlgCancel() {
+  if (dlgSnapshot) {
+    sessionCfg = dlgSnapshot;
+    dlgSnapshot = null;
+  }
+  dlgHide();
+  renderPairs();
+}
+
+// radioList renders one group of described options and keeps the highlight on the
+// chosen one as it changes.
+function radioList(host, name, opts, value) {
+  host.innerHTML = opts.map(o => `
+    <label class="opt" data-on="${value === o.v ? "1" : "0"}">
+      <input type="radio" name="${name}" value="${esc(o.v)}"${value === o.v ? " checked" : ""}>
+      <span class="nm">${esc(o.nm)}</span>
+      ${o.ds ? `<span class="ds">${esc(o.ds)}</span>` : ""}
+    </label>`).join("");
+  host.querySelectorAll("input").forEach(el => {
+    el.addEventListener("change", () => {
+      host.querySelectorAll(".opt").forEach(l => { l.dataset.on = "0"; });
+      el.closest(".opt").dataset.on = "1";
+      if (name === "dlg-sync") updateSyncWarn();
+    });
+  });
+}
+
+function checkedValue(name, fallback) {
+  const el = document.querySelector(`input[name="${name}"]:checked`);
+  return el ? el.value : fallback;
+}
+
+// ---- comparison settings
+
+document.getElementById("btn-compare-settings").addEventListener("click", () => {
+  if (!sessionCfg) return;
+  dlgOpen("dlg-compare");
+  const cur = (sessionCfg.sync || {}).compare || "time-size";
+  radioList(document.getElementById("dlg-compare-opts"), "dlg-compare", COMPARE_OPTS, cur);
+});
+
+document.getElementById("dlg-compare-ok").addEventListener("click", () => {
+  sessionCfg.sync = sessionCfg.sync || {};
+  sessionCfg.sync.compare = checkedValue("dlg-compare", "time-size");
+  dlgOk();
+});
+
+// ---- filter
+
+document.getElementById("btn-filter").addEventListener("click", () => {
+  if (!sessionCfg) return;
+  dlgOpen("dlg-filter");
+  const s = sessionCfg.sync || {};
+  document.getElementById("dlg-include").value = s.include || "";
+  document.getElementById("dlg-exclude").value = s.exclude || "";
+});
+
+document.getElementById("dlg-filter-ok").addEventListener("click", () => {
+  sessionCfg.sync = sessionCfg.sync || {};
+  sessionCfg.sync.include = document.getElementById("dlg-include").value;
+  sessionCfg.sync.exclude = document.getElementById("dlg-exclude").value;
+  dlgOk();
+});
+
+// ---- synchronization settings
+
+document.getElementById("btn-sync-settings").addEventListener("click", () => {
+  if (!sessionCfg) return;
+  dlgOpen("dlg-sync");
+  radioList(document.getElementById("dlg-sync-opts"), "dlg-sync",
+    VARIANT_OPTS, sessionCfg.variant || "update");
+  updateSyncWarn();
+});
+
+document.getElementById("dlg-sync-ok").addEventListener("click", () => {
+  sessionCfg.variant = checkedValue("dlg-sync", "update");
+  dlgOk();
+});
+
+// updateSyncWarn counts the pairs that will actually delete, not the job value.
+//
+// A pair may override the variant, so a warning derived from the job value alone
+// can say "nothing will be deleted" while a pair runs mirror. Counting the
+// effective value is the only reading that is true.
+function updateSyncWarn() {
+  const val = checkedValue("dlg-sync", sessionCfg.variant || "update");
+  const pairs = sessionCfg.pairs || [];
+  const mirrors = pairs.filter(p => (p.variant || val) === "mirror").length;
+  const warn = document.getElementById("dlg-sync-warn");
+  if (!mirrors) {
+    warn.style.display = "none";
+    return;
+  }
+  warn.style.display = "";
+  warn.innerHTML =
+    `<strong>${mirrors} / ${pairs.length} 个文件夹对会删除云端多余文件。</strong>` +
+    `<div style="margin-top:5px">镜像 = 云端严格照抄本地。云端独有的文件和文件夹会被删掉，` +
+    `删了找不回来（除非作业配了版本目录 deletion = versioning）。</div>`;
+}
+
+// ---- per-pair settings
+//
+// FreeFileSync has no per-pair settings at all: different behaviour means a
+// different configuration file. This program can store them, so the option
+// exists - but it stays off the main screen, because the normal path must remain
+// "set it once, compare, sync". The first option in each group is 跟配置, and a
+// pair with the defaults behaves exactly like an FFS pair.
+
+let pairDlgIdx = -1;
+
+function openPairDlg(i) {
+  if (!sessionCfg) return;
+  const p = sessionCfg.pairs[i];
+  if (!p) return;
+  dlgOpen("dlg-pair");
+  pairDlgIdx = i;
+  document.getElementById("dlg-pair-name").textContent = p.name;
+
+  const s = p.sync || {};
+  const curCmp = (sessionCfg.sync || {}).compare || "time-size";
+  const curVr = sessionCfg.variant || "update";
+
+  radioList(document.getElementById("dlg-pair-compare"), "dlg-pair-compare",
+    [{ v: "", nm: "跟配置", ds: `用配置级的「${COMPARE_SHORT[curCmp] || curCmp}」。` }]
+      .concat(COMPARE_OPTS),
+    s.compare_set ? s.compare : "");
+
+  radioList(document.getElementById("dlg-pair-variant"), "dlg-pair-variant",
+    [{ v: "", nm: "跟配置", ds: `用配置级的「${VARIANT_LABEL[curVr] || curVr}」。` }]
+      .concat(VARIANT_OPTS),
+    p.variant || "");
+
+  document.getElementById("dlg-pair-include").value = s.include || "";
+  document.getElementById("dlg-pair-exclude").value = s.exclude || "";
+}
+
+document.getElementById("dlg-pair-ok").addEventListener("click", () => {
+  const p = sessionCfg.pairs[pairDlgIdx];
+  if (p) {
+    p.sync = p.sync || {};
+    p.sync.compare = checkedValue("dlg-pair-compare", "");
+    // compare_set drives the dot on the row. Leaving it stale would keep saying
+    // "this pair has its own settings" right after the user cleared them.
+    p.sync.compare_set = !!p.sync.compare;
+    p.variant = checkedValue("dlg-pair-variant", "");
+    p.sync.include = document.getElementById("dlg-pair-include").value;
+    p.sync.exclude = document.getElementById("dlg-pair-exclude").value;
+  }
+  dlgOk();
+});
+
+document.getElementById("dlg-pair-reset").addEventListener("click", () => {
+  const p = sessionCfg.pairs[pairDlgIdx];
+  if (p) {
+    p.sync = p.sync || {};
+    p.sync.compare = "";
+    p.sync.compare_set = false;
+    p.variant = "";
+    p.sync.include = "";
+    p.sync.exclude = "";
+  }
+  dlgOk();
+});
+
+// One mask and one Escape handler for every dialog, so none of them can be left
+// open behind another.
+document.getElementById("dlg-mask").addEventListener("click", dlgCancel);
+document.querySelectorAll("[data-dlg-close]").forEach(el => {
+  el.addEventListener("click", dlgCancel);
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && openDlgId) dlgCancel();
+});
 
 // newPair builds a blank pair with a unique name, so adding two in a row does not
 // collide on the name the server requires to be unique.
@@ -2405,7 +2664,7 @@ function newPair() {
       max_delete: 0, max_delete_set: false, max_delete_size: "",
       propagate_local_delete: false, propagate_remote_delete: false,
       pull_new_files: false, max_pull_size: "",
-      compare: "", include: "", exclude: "",
+      compare: "", compare_set: false, include: "", exclude: "",
     },
   };
 }
@@ -2416,43 +2675,20 @@ document.getElementById("pair-add").addEventListener("click", () => {
   sessionCfg.pairs.push(newPair());
   markDirty();
   renderPairs();
-  // Focus the path box of the block we just added: adding a pair is always
+  // Focus the path box of the row we just added: adding a pair is always
   // followed by typing a path, and making the user find the new row is busywork.
-  const rows = document.querySelectorAll("#pair-rows .pair-card");
+  const rows = document.querySelectorAll("#pair-rows .pair-row");
   const last = rows[rows.length - 1];
   if (last) last.querySelector(".p-local").focus();
 });
 
-function updateFilterSummary() {
-  const inc = countLines(document.getElementById("s-include").value);
-  const exc = countLines(document.getElementById("s-exclude").value);
-  const bits = [];
-  if (inc) bits.push("包含 " + inc + " 条");
-  if (exc) bits.push("排除 " + exc + " 条");
-  document.getElementById("s-filter-summary").textContent =
-    bits.length ? "（作业级：" + bits.join("，") + "）" : "（作业级：未设置，全部同步）";
-}
-
 document.getElementById("session-pick").addEventListener("change", e => {
   sessionJob = e.target.value;
   localStorage.setItem("weftsync.session", sessionJob);
-  document.getElementById("plan-card").style.display = "none";
+  // The result belongs to the job that produced it; carrying it over would show
+  // last job's plan under this job's name.
+  clearPlan();
   loadSession();
-});
-
-document.getElementById("s-filter-btn").addEventListener("click", () => {
-  document.getElementById("s-filter-panel").classList.toggle("hidden");
-});
-["s-include", "s-exclude"].forEach(id => {
-  document.getElementById(id).addEventListener("input", () => {
-    if (sessionCfg) {
-      sessionCfg.sync = sessionCfg.sync || {};
-      sessionCfg.sync[id === "s-include" ? "include" : "exclude"] =
-        document.getElementById(id).value;
-      markDirty();
-    }
-    updateFilterSummary();
-  });
 });
 
 // saveSession writes the in-memory view back to the job file.
@@ -2482,19 +2718,23 @@ async function runSession(btn, plan, busyText) {
   if (!sel || !sessionCfg) return;
   const status = document.getElementById("s-status");
   const label = btn.textContent;
+
+  // Read the ticks BEFORE the save round-trip.
+  //
+  // saveSession() is followed by loadSession(), which rebuilds the page from the
+  // server's copy and clears the comparison, so the row selection is gone by the
+  // time the request is built. Reading it afterwards silently produced a full run
+  // right after the confirmation dialog had promised "only the ticked ones".
+  // Measured: 6 files transferred with one row unticked.
+  const only = plan ? null : syncOnly(sel.job);
+
   btn.disabled = true;
   btn.textContent = busyText;
   try {
     await saveSession();
     await loadSession();
-    // The selection has to survive saveSession(): loadSession() rebuilds the
-    // pair rows, and a sync that quietly ignores the ticks would copy files the
-    // user just excluded.
     let q = "/api/run?job=" + encodeURIComponent(sel.job) + (plan ? "&plan=1" : "");
-    if (!plan) {
-      const only = syncOnly(sel.job);
-      if (only) q += "&only=" + encodeURIComponent(JSON.stringify(only.picked));
-    }
+    if (only) q += "&only=" + encodeURIComponent(JSON.stringify(only.picked));
     if (plan) pendingPlanJob = sel.job;
     await post(q);
     lastSignature = "";

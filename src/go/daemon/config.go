@@ -87,6 +87,13 @@ type SyncView struct {
 	Compare     string   `json:"compare"`
 	CompareHelp string   `json:"compare_help"`
 	Compares    []string `json:"compares"`
+	// CompareSet reports whether this table states compare itself.
+	//
+	// Compare above is the *effective* value, so a pair that inherits it and a pair
+	// that spells out the same value look identical without this flag. The console
+	// needs the difference: an editor that cannot tell them apart offers no "inherit"
+	// choice, and every pair would appear to override the configuration.
+	CompareSet bool `json:"compare_set"`
 
 	// Include / Exclude are the filter patterns as text, one per line. Held as
 	// text rather than arrays because that is how the form edits them, and a
@@ -133,6 +140,7 @@ func syncView(spec job.SyncSpec, resolved job.ResolvedSync) SyncView {
 		PullNewFiles:          resolved.PullNewFiles,
 		MaxPullSize:           resolved.MaxPullSizeText,
 		Compare:               resolved.Compare,
+		CompareSet:            spec.Compare != "",
 		CompareHelp:           compareHelp(resolved.Compare),
 		Compares:              job.CompareStrategies,
 		Include:               strings.Join(spec.Filter.Include, "\n"),
