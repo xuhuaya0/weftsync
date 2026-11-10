@@ -219,17 +219,16 @@
     display: flex; gap: 8px; align-items: baseline;
     padding: 7px 10px; min-width: 0;
   }
-  .ffs-pane-head + .ffs-act-head + .ffs-pane-head { border-left: 1px solid var(--line); }
+  /* Row one names the two sides; row two names the columns. The centre cell of
+     row one is deliberately empty - putting 动作 there as well put the same word
+     twice, three rows apart, and read as two tables disagreeing about headings. */
+  .ffs-mid-head { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+  .ffs-pane-head + .ffs-mid-head + .ffs-pane-head { border-left: 1px solid var(--line); }
   .ffs-side { font-weight: 700; font-size: 10.5px; color: var(--muted);
               flex: none; text-transform: uppercase; letter-spacing: .5px; }
   .ffs-path {
     font-size: 11px; color: var(--muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .ffs-act-head {
-    display: flex; align-items: center; justify-content: center;
-    font-size: 10.5px; color: var(--muted); letter-spacing: .3px;
-    border-left: 1px solid var(--line); border-right: 1px solid var(--line);
   }
   .ffs-scroll { max-height: 62vh; overflow: auto; }
   .ffs-table { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: fixed; }
@@ -306,21 +305,31 @@
     padding: 8px 12px; border-top: 1px solid var(--line);
     background: color-mix(in srgb, var(--bg) 55%, var(--card));
   }
+  /* 分类开关是「显示过滤器」，不是「选中」。用复选框会让人以为取消勾选 = 不同步，
+     而它只影响这张表里看得到什么。所以用按下态按钮（aria-pressed）而不是勾选框。 */
   .ffs-cat {
     display: inline-flex; gap: 5px; align-items: center;
-    font-size: 11.5px; padding: 2px 9px; border-radius: 999px;
+    font-size: 11.5px; padding: 3px 10px; border-radius: 999px;
     border: 1px solid var(--line); margin: 0; cursor: pointer;
-    white-space: nowrap; background: var(--card); color: var(--ink-2);
-    transition: border-color .12s, color .12s, opacity .12s;
+    white-space: nowrap; background: var(--card); color: var(--muted);
+    transition: border-color .12s, color .12s, opacity .12s, background .12s;
   }
-  .ffs-cat input { margin: 0; cursor: pointer; }
   .ffs-cat b { font-variant-numeric: tabular-nums; }
-  .ffs-cat.disabled { opacity: .38; cursor: default; }
-  .ffs-cat.creates:not(.disabled) { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); color: var(--blue); }
-  .ffs-cat.updates:not(.disabled) { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); color: var(--warn); }
-  .ffs-cat.downloads:not(.disabled) { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); color: var(--ok); }
-  .ffs-cat.deletes:not(.disabled) { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); color: var(--bad); }
+  .ffs-cat[aria-pressed="true"] {
+    background: var(--card); font-weight: 600;
+  }
+  .ffs-cat[aria-pressed="true"].creates { border-color: color-mix(in srgb, var(--blue) 50%, var(--line)); color: var(--blue); }
+  .ffs-cat[aria-pressed="true"].updates { border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); color: var(--warn); }
+  .ffs-cat[aria-pressed="true"].downloads { border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); color: var(--ok); }
+  .ffs-cat[aria-pressed="true"].deletes { border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); color: var(--bad); }
+  .ffs-cat[aria-pressed="false"] { text-decoration: line-through; opacity: .5; }
+  .ffs-cat.disabled { opacity: .35; cursor: default; text-decoration: none; }
   .ffs-cat .sym { font-family: ui-monospace, monospace; font-weight: 700; }
+  .ffs-cat .eye { font-size: 9px; opacity: .7; }
+  .ffs-bar-label {
+    font-size: 10.5px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .5px; margin-right: 2px;
+  }
   .ffs-total { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .ffs-total b { color: var(--ink-2); }
   .ffs-total.danger { color: var(--bad); font-weight: 600; }
@@ -332,6 +341,45 @@
     color: var(--blue); font-weight: 600;
     background: var(--blue-soft); border-radius: 999px; padding: 1px 10px;
   }
+  /* 图例 / 引导：解释 新建・更新・下载・删除・目录・元数据 到底是什么。
+     这些词对做过同步的人很清楚，对第一次用的人就是六个陌生的名词。 */
+  .ffs-steps {
+    display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+    padding: 9px 12px; border-bottom: 1px solid var(--line-2);
+    background: color-mix(in srgb, var(--blue) 5%, var(--card));
+    font-size: 11.5px; color: var(--ink-2);
+  }
+  .ffs-steps .step {
+    display: inline-flex; gap: 6px; align-items: center;
+  }
+  .ffs-steps .n {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--blue); color: #fff; font-size: 10px; font-weight: 700;
+    flex: none;
+  }
+  @media (prefers-color-scheme: dark) { .ffs-steps .n { color: #08111c; } }
+  .ffs-steps .arw { color: var(--muted); opacity: .6; }
+  .ffs-legend {
+    padding: 8px 12px 10px; border-top: 1px solid var(--line-2);
+    font-size: 11.5px; color: var(--muted); line-height: 1.85;
+  }
+  .ffs-legend summary {
+    cursor: pointer; color: var(--ink-2); font-weight: 600;
+    list-style: none; user-select: none;
+  }
+  .ffs-legend summary::-webkit-details-marker { display: none; }
+  .ffs-legend summary::before { content: "？ "; }
+  .ffs-legend dl {
+    margin: 6px 0 0; display: grid; grid-template-columns: 62px 1fr;
+    gap: 3px 10px; align-items: baseline;
+  }
+  .ffs-legend dt { text-align: right; font-weight: 700; }
+  .ffs-legend dd { margin: 0; }
+  .ffs-legend dt.creates { color: var(--blue); }
+  .ffs-legend dt.updates { color: var(--warn); }
+  .ffs-legend dt.downloads { color: var(--ok); }
+  .ffs-legend dt.deletes { color: var(--bad); }
 
   /* ---- 主界面：一个同步会话（对齐 FreeFileSync 的结构）---- */
   .topbar {
@@ -389,36 +437,63 @@
     padding: 0 0 14px;
   }
   .tool {
-    display: grid; grid-template-columns: auto 1fr; gap: 1px 11px;
+    display: grid; grid-template-columns: 1fr auto; gap: 1px 8px;
     align-items: center; text-align: left;
-    padding: 8px 15px 8px 11px; border-radius: var(--r);
+    padding: 8px 12px 9px 14px; border-radius: var(--r);
     border: 1px solid var(--line); background: var(--card); color: var(--ink);
-    cursor: pointer; min-width: 148px; box-shadow: var(--sh-1);
+    cursor: pointer; min-width: 152px; box-shadow: var(--sh-1);
   }
   .tool:hover {
     border-color: color-mix(in srgb, var(--blue) 55%, var(--line));
     box-shadow: var(--sh-2);
   }
-  .tool .ti {
-    grid-row: span 2;
-    display: flex; align-items: center; justify-content: center;
-    width: 30px; height: 30px; border-radius: var(--r-sm);
-    background: var(--bg); color: var(--ink-2);
-    font-size: 15px; line-height: 1; font-family: ui-monospace, monospace;
-    transition: background .12s, color .12s;
-  }
-  .tool:hover .ti { background: var(--blue-soft); color: var(--blue); }
   .tool .tt {
-    font-size: 10.5px; color: var(--muted); font-weight: 600;
-    text-transform: uppercase; letter-spacing: .5px;
+    grid-column: 1; font-size: 10.5px; color: var(--muted); font-weight: 600;
+    text-transform: uppercase; letter-spacing: .55px;
   }
   .tool .tv {
-    font-size: 13px; font-weight: 600; color: var(--ink);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px;
+    grid-column: 1; font-size: 13px; font-weight: 600; color: var(--ink);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px;
   }
+  /* The chevron says "this opens something". Without it the buttons look like
+     toggles, and a toggle whose state never changes is a puzzle. */
+  .tool .tchev {
+    grid-row: 1 / span 2; grid-column: 2;
+    color: var(--muted); font-size: 16px; line-height: 1; opacity: .55;
+  }
+  .tool:hover .tchev { color: var(--blue); opacity: 1; }
   .tool.warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
-  .tool.warn .ti { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
   .tool.warn .tv { color: var(--warn); }
+  .tool.warn .tchev { color: var(--warn); }
+
+  /* The one line that explains what a "pair" is. Shown under the list, because a
+     button labelled 添加目录对 only lands if the reader already knows what a
+     directory pair is; this is the sentence that tells them. */
+  .pair-help {
+    margin-top: 7px; font-size: 11.5px; color: var(--muted); line-height: 1.6;
+  }
+  .tb-label {
+    font-size: 10.5px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .6px;
+  }
+
+  .plan-head {
+    padding: 12px 14px; border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 45%, var(--card));
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+  }
+  /* 状态行：比较/同步进行中要能看出「在动」，所以这里是等宽 + 动画点 */
+  .stat { font-size: 12.5px; color: var(--muted); margin: 0; }
+  .stat.busy { color: var(--blue); font-weight: 600; }
+  .stat.done { color: var(--ok); font-weight: 600; }
+  .stat.err  { color: var(--bad); font-weight: 600; }
+  .stat .spin {
+    display: inline-block; width: 9px; height: 9px; margin-right: 6px;
+    border: 2px solid color-mix(in srgb, var(--blue) 30%, transparent);
+    border-top-color: var(--blue); border-radius: 50%;
+    animation: spin .7s linear infinite; vertical-align: -1px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   /* ---- 文件夹对：一行就是 FFS 的一套「左 ⇄ 右」---- */
   .pairs { display: flex; flex-direction: column; gap: 7px; }
@@ -700,10 +775,13 @@
 </head>
 <body>
 
-<!-- 顶栏：选作业 + 齿轮。主界面是一个作业的全部文件夹对，其余功能都收进齿轮里。 -->
+<!-- 顶栏：选配置 + 齿轮。主界面是一个配置的全部目录对，其余功能都收进齿轮里。
+     左边那个下拉选的是「配置」——FreeFileSync 里就是当前打开的那个 .ffs_gui；
+     这里一个配置对应一个作业文件（.toml）。--> 
 <div class="topbar">
   <span class="brand">weftsync</span>
-  <select id="session-pick" title="选择要处理的作业"><option value="">（没有作业）</option></select>
+  <span class="tb-label">配置</span>
+  <select id="session-pick" title="选择要处理的配置"><option value="">（没有配置）</option></select>
   <span class="grow"></span>
   <span id="now" class="sub" style="margin:0"></span>
   <span id="conn" class="conn-badge">连接中…</span>
@@ -711,50 +789,54 @@
 </div>
 
 <div class="session" id="tab-session">
-  <!-- 工具条：三个设置按钮。当前值写在按钮上，改就点它。
-       顺序和 FFS 的工具条一致：比较设置 → 过滤器 → 同步设置。 -->
+  <!-- 工具条：三个设置按钮。和 FreeFileSync 一致的位置与含义：
+       Comparison settings / Filter / Synchronization settings。
+       按钮上直接印当前值，所以不打开也知道这个配置是怎么设的。 -->
   <div class="toolbar">
-    <button class="tool" id="btn-compare-settings" title="Comparison Settings · 什么算「不一样」">
-      <span class="ti">≙</span>
-      <span class="tt">比较设置</span>
+    <button class="tool" id="btn-compare-settings" title="什么算「不一样」">
+      <span class="tt">比较方式</span>
       <span class="tv" id="tv-compare">—</span>
+      <span class="tchev">›</span>
     </button>
-    <button class="tool" id="btn-filter" title="Filter · 哪些路径参与同步">
-      <span class="ti">≡</span>
-      <span class="tt">过滤器</span>
+    <button class="tool" id="btn-filter" title="哪些路径参与同步">
+      <span class="tt">过滤规则</span>
       <span class="tv" id="tv-filter">—</span>
+      <span class="tchev">›</span>
     </button>
-    <button class="tool" id="btn-sync-settings" title="Synchronization Settings · 会怎么改两边">
-      <span class="ti">⇄</span>
-      <span class="tt">同步设置</span>
+    <button class="tool" id="btn-sync-settings" title="会怎么改两边，哪些会被删">
+      <span class="tt">同步方式</span>
       <span class="tv" id="tv-variant">—</span>
+      <span class="tchev">›</span>
     </button>
   </div>
 
-  <!-- 文件夹对：一行一套「左 ⇄ 右」，右侧 − 删掉这一对 -->
+  <!-- 目录对：一行一套「左 → 右」。一组 = 左边一个目录 + 右边一个目录 -->
   <div class="pairs" id="pair-rows"></div>
-  <button id="pair-add" class="pair-add">+ 添加文件夹对</button>
+  <button id="pair-add" class="pair-add">+ 添加目录对</button>
+  <div class="pair-help">
+    一组目录对 = 左边一个目录 + 右边一个目录，同步就在这两边之间发生。
+    左边可以是本机目录，也可以是云端；右边通常是从端。
+  </div>
 
-  <!-- 对比结果：FFS 的主区域就是这张表，比较前是空的 -->
+  <!-- 对比结果 -->
   <div class="card" id="plan-card" style="margin-top:16px;padding:0;overflow:hidden">
-    <div class="row" style="padding:12px 14px;border-bottom:1px solid var(--line);
-                            background:color-mix(in srgb,var(--bg) 45%,var(--card))">
+    <div class="row plan-head">
       <strong style="font-size:13px">对比结果</strong>
       <span id="plan-job" class="mono badge"></span>
       <span class="grow"></span>
-      <button id="plan-run">按此执行</button>
-      <button id="plan-close">清除结果</button>
+      <button id="plan-run" title="不经过下方的底部按钮，直接执行这张表">按此执行</button>
+      <button id="plan-close" title="只清空显示，不改任何东西">清除结果</button>
     </div>
-    <div id="plan-body" style="padding:0 14px 14px"></div>
+    <div id="plan-body"></div>
   </div>
 
   <!-- 底部：状态在左，比较/同步在右，和 FFS 一致 -->
   <div class="foot">
-    <span id="s-status" class="sub" style="margin:0"></span>
+    <span id="s-status" class="stat"></span>
     <span class="grow"></span>
     <button id="s-stop-btn" disabled>停止</button>
-    <button id="s-compare-btn" class="big primary">比较</button>
-    <button id="s-sync-btn" class="big">同步</button>
+    <button id="s-compare-btn" class="big primary" title="只扫描，不改任何东西（F5）">比较</button>
+    <button id="s-sync-btn" class="big" title="按上方的对比结果真的执行">同步</button>
   </div>
 </div>
 
@@ -809,7 +891,7 @@
     </div>
     <div class="filter-hint">
       一行一条，大小写不敏感。<code>/foo</code> 从同步根锚定；<code>**</code> 匹配任意层级。
-      这里的规则作用于<strong>所有</strong>文件夹对。
+      这里的规则作用于<strong>所有</strong>目录对。
     </div>
   </div>
   <div class="dlg-foot">
@@ -819,11 +901,11 @@
   </div>
 </div>
 
-<!-- 单个文件夹对的设置：FFS 没有这一层，这里用同一个窗的形状，
+<!-- 单个目录对的设置：FFS 没有这一层，这里用同一个窗的形状，
      每一项的第一个选择就是「跟配置」——不选它就等于没改。 -->
 <div id="dlg-pair" class="dlg wide hidden">
   <div class="dlg-head">
-    <strong>文件夹对的设置</strong>
+    <strong>这一组目录对的设置</strong>
     <span id="dlg-pair-name" class="badge"></span>
     <span class="grow"></span>
     <button class="icon-btn" data-dlg-close title="关闭">✕</button>
@@ -890,7 +972,7 @@
 <section id="tab-jobs" class="tab">
   <div class="card">
     <div class="row" style="margin-bottom:12px">
-      <strong class="grow">所有会话</strong>
+      <strong class="grow">所有配置</strong>
       <label class="sub" style="margin:0">
         <input type="checkbox" id="skip-preview"> 跳过预览
       </label>
@@ -900,7 +982,7 @@
     <table>
       <thead>
         <tr>
-          <th>作业</th><th>状态</th><th>调度</th><th>下次</th>
+          <th>配置</th><th>状态</th><th>调度</th><th>下次</th>
           <th>上次</th><th>上次结果</th><th style="width:1%"></th>
         </tr>
       </thead>
@@ -913,12 +995,12 @@
   <div class="card">
     <div class="row" style="margin-bottom:12px">
       <strong class="grow">作业配置</strong>
-      <select id="cfg-job"><option value="">（选择作业）</option></select>
+      <select id="cfg-job"><option value="">（选择配置）</option></select>
       <button id="cfg-save" disabled>保存</button>
     </div>
     <div id="cfg-save-note" class="note save-note"></div>
     <div id="cfg-warn" class="hidden"></div>
-    <div id="cfg-body" class="empty">选择一个作业后可编辑</div>
+    <div id="cfg-body" class="empty">选择一个配置后可编辑</div>
   </div>
 </section>
 
@@ -1171,6 +1253,7 @@ async function refresh() {
   }
   updateProgress();
   afterPlanRun();
+  updateBusy();
   refreshHistory();
   refreshLog();
   syncJobPicker();
@@ -1201,6 +1284,104 @@ function afterPlanRun() {
   if (job.plan) openPlanPanel(started);
 }
 
+// ---------------------------------------------------------------- run status
+//
+// busyJob is the run this page started. It exists for one reason: the status line
+// used to read "已开始比较。" and then never change again. A preview of a local
+// pair finishes in 50 ms, the table on screen was already there from a previous
+// compare, and nothing else moved - so the only honest reading of that screen was
+// "it is still working". Measured: the user waited, saw no change, and reported
+// that 比较 did nothing.
+//
+// With this, the line (a) keeps counting while the run is in flight, so a long
+// scan visibly makes progress even though a preview transfers no bytes, and
+// (b) says what the result was once it stops.
+let busyJob = null;   // { name, mode: "plan"|"run", startedAt }
+
+function planTotals(plan) {
+  const rows = [];
+  for (const r of (plan && plan.results) || []) {
+    for (const row of (r.plan || [])) {
+      rows.push({ action: row.action || "other", size: row.size || 0 });
+    }
+  }
+  const c = cmpCounts(rows);
+  return {
+    c,
+    total: c.create + c.update + c.download + c["delete-remote"] +
+           c["delete-local"] + c.mkdir + c.rmdir,
+    destructive: c["delete-remote"] + c["delete-local"] + c.rmdir,
+  };
+}
+
+function updateBusy() {
+  const st = document.getElementById("s-status");
+  if (!st || !busyJob) return;
+  const job = ((snapshot && snapshot.jobs) || []).find(j => j.name === busyJob.name);
+  if (!job) { busyJob = null; return; }
+
+  if (job.state === "running") {
+    const secs = Math.max(0, Math.round((Date.now() - busyJob.startedAt) / 1000));
+    const bits = [];
+    const p = job.progress;
+    if (busyJob.mode === "run" && p) {
+      if (p.transfers) bits.push(`${p.transfers} 个文件`);
+      if (p.bytes) bits.push(fmtBytes(p.bytes));
+      if (p.speed) bits.push(fmtBytes(p.speed) + "/s");
+    }
+    // Elapsed seconds are the only sign of life a preview can give: it transfers
+    // nothing, so every byte counter stays at zero and would look frozen.
+    if (secs >= 1) bits.push(`已用 ${secs} 秒`);
+    st.className = "stat busy";
+    st.innerHTML = `<span class="spin"></span>` +
+      (busyJob.mode === "plan" ? "正在扫描并比较" : "正在同步") +
+      (bits.length ? `　${esc(bits.join(" · "))}` : "…");
+    return;
+  }
+
+  const mode = busyJob.mode;
+  busyJob = null;
+  finishStatus(job, mode);
+}
+
+// finishStatus says what just happened, in the same place the progress was.
+function finishStatus(job, mode) {
+  const st = document.getElementById("s-status");
+  if (!st) return;
+
+  const jobErr = job.last_error || "";
+  if (mode === "plan") {
+    const plan = job.plan;
+    if (jobErr || (plan && plan.error)) {
+      st.className = "stat err";
+      st.textContent = "比较失败：" + (jobErr || plan.error);
+      return;
+    }
+    const t = planTotals(plan);
+    st.className = "stat done";
+    st.textContent = t.total
+      ? `比较完成：${t.total} 项要处理` +
+        (t.destructive ? `，其中 ${t.destructive} 项会删除` : "")
+      : "比较完成：两侧一致，没有需要变更的内容。";
+    return;
+  }
+
+  const r = (job.last_result || [])[0] || {};
+  const a = r.actual || {};
+  const errs = a.errors || 0;
+  if (jobErr) {
+    st.className = "stat err";
+    st.textContent = "同步失败：" + jobErr;
+    return;
+  }
+  const bits = [`传输 ${a.transferred || 0} 项`];
+  if (a.deleted) bits.push(`删除 ${a.deleted} 项`);
+  if (a.pulled) bits.push(`下载 ${a.pulled} 项`);
+  bits.push(errs ? `${errs} 个错误` : "无错误");
+  st.className = errs ? "stat err" : "stat done";
+  st.textContent = "同步完成：" + bits.join("，");
+}
+
 // syncJobPicker is declared further down with the config tab; this wrapper keeps
 // refresh() readable and tolerates the script not having reached it yet.
 function syncJobPicker() {
@@ -1211,7 +1392,7 @@ function renderJobs() {
   const tbody = document.getElementById("jobs");
   const jobs = (snapshot && snapshot.jobs) || [];
   if (!jobs.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">没有作业</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">没有配置</td></tr>';
     return;
   }
   tbody.innerHTML = jobs.map(j => {
@@ -1642,7 +1823,7 @@ function planHTML(p) {
     parts.push(`<div class="note err"><strong>预览失败，不能据此判断有没有变更。</strong>` +
       `<div class="mono" style="margin-top:6px">${esc(p.error)}</div></div>`);
   } else if (p.guard_hit) {
-    parts.push(`<div class="note"><strong>这个作业现在真的跑一次会被拒绝。</strong>` +
+    parts.push(`<div class="note"><strong>这个配置现在真的跑一次会被拒绝。</strong>` +
       `待删除的数量超过 max_delete，保护机制会在任何删除发生之前中止整轮。` +
       `下面的数字是「如果允许，会做什么」。</div>`);
   } else if (!p.transferred && !p.deleted && !p.conflicts) {
@@ -1758,22 +1939,29 @@ function compareHTML(p) {
   }
 
   return `<div class="ffs">
+    <!-- 引导：这一屏有「勾选」「同步」两套选择动作，不写清楚顺序的话
+         人的第一反应是不知道先点哪个。三步就是这里全部的操作流程。 -->
+    <div class="ffs-steps">
+      <span class="step"><span class="n">1</span>看下面会改什么</span>
+      <span class="arw">→</span>
+      <span class="step"><span class="n">2</span>取消不要的勾选</span>
+      <span class="arw">→</span>
+      <span class="step"><span class="n">3</span>点右下角「同步」</span>
+    </div>
     <div class="ffs-tools">
-      <!-- No title here: the card header above already says 对比结果, and two of
-           them stacked read as a heading followed by another heading. -->
       <span class="count">${rows.length} 项</span>
       <span class="grow"></span>
-      <input id="cmp-q" type="text" placeholder="过滤路径…" class="ffs-filter">
-      <button id="cmp-all" title="全部勾选">全选</button>
-      <button id="cmp-none" title="全部取消">全不选</button>
+      <input id="cmp-q" type="text" placeholder="按路径筛选…" class="ffs-filter">
+      <button id="cmp-all" title="把当前筛选出的行全部勾上">全选</button>
+      <button id="cmp-none" title="把当前筛选出的行全部取消">全不选</button>
     </div>
     <div class="ffs-grid">
-      <div class="ffs-pick-head">同步</div>
+      <div class="ffs-pick-head" title="勾选的行才会被同步">同步</div>
       <div class="ffs-pane-head">
         <span class="ffs-side">本地</span>
         <span class="ffs-path mono" title="${esc(left)}">${esc(left)}</span>
       </div>
-      <div class="ffs-act-head">动作</div>
+      <div class="ffs-mid-head"></div>
       <div class="ffs-pane-head">
         <span class="ffs-side">云端</span>
         <span class="ffs-path mono" title="${esc(right)}">${esc(right)}</span>
@@ -1800,6 +1988,28 @@ function compareHTML(p) {
     </div>
     <div id="cmp-bar" class="ffs-bar"></div>
     <div id="cmp-more" class="ffs-more"></div>
+    <details class="ffs-legend">
+      <summary>这些标记是什么意思</summary>
+      <dl>
+        <dt class="creates">新建</dt>
+        <dd>云端还没有这个文件，同步时会新建。箭头 → 表示方向是从本地到云端。</dd>
+        <dt class="updates">更新</dt>
+        <dd>两边都有但内容（或时间）不同，同步时用本地版覆盖云端。</dd>
+        <dt class="downloads">下载</dt>
+        <dd>只有双向同步才会出现：云端有更新，同步时拉回本地。</dd>
+        <dt class="deletes">删云端 / 删本地</dt>
+        <dd>一侧没有、另一侧有。镜像模式会当真删掉；更新模式不删。</dd>
+        <dt>目录</dt>
+        <dd>整个目录的新建或删除，本身不传数据。</dd>
+        <dt>元数据</dt>
+        <dd>两边内容一样，只有修改时间不同。不传任何文件内容，
+            默认不显示，免得淹没真正的变更；勾选底部「元数据」才会列出来。</dd>
+      </dl>
+      <div style="margin-top:8px">
+        左侧方框控制<strong>这一行要不要同步</strong>；
+        底部的那排按钮只控制<strong>哪些类别显示在这张表里</strong>，不影响执行。
+      </div>
+    </details>
   </div>`;
 }
 
@@ -1954,16 +2164,22 @@ function cmpRender() {
   }
 
   // 底部：分类开关 + 合计，和 FFS 的底部条同构。
-  const box = (cat, cls, sym, label, n, picked) => {
+  // 底部：显示过滤 + 合计。
+  //
+  // 这一排管的是「哪些类别显示在这张表里」，不是「哪些会被同步」。
+  // 用勾选框会让人误以为取消勾选 = 不同步，所以用按下态按钮，
+  // 并明写一个「显示」标签把语义锁死。
+  const box = (cat, cls, sym, label, n) => {
     const dis = n ? "" : " disabled";
-    const chk = cmpState.on[cat] ? " checked" : "";
-    return `<label class="ffs-cat ${cls}${dis}">
-      <input type="checkbox" data-cat="${cat}"${chk}${dis}>
-      <span class="sym">${sym}</span> ${label} <b>${n}</b></label>`;
+    const on = cmpState.on[cat] ? "true" : "false";
+    return `<button class="ffs-cat ${cls}${dis}" data-cat="${cat}"
+      aria-pressed="${on}" title="${esc(label)}：${n} 项。点一下控制是否显示，不影响同步">
+      <span class="sym">${sym}</span> ${label} <b>${n}</b></button>`;
   };
 
   const destructive = c["delete-remote"] + c["delete-local"] + c.rmdir;
   document.getElementById("cmp-bar").innerHTML =
+    `<span class="ffs-bar-label">显示</span>` +
     box("creates", "creates", "→", "新建", c.create) +
     box("updates", "updates", "→", "更新", c.update) +
     box("downloads", "downloads", "←", "下载", c.download) +
@@ -1974,9 +2190,12 @@ function cmpRender() {
     (c.bytes ? `<span class="ffs-total">合计 <b>${fmtBytes(c.bytes)}</b></span>` : "") +
     (destructive ? `<span class="ffs-total danger">其中 ${destructive} 项会删除</span>` : "");
 
-  document.querySelectorAll("#cmp-bar input[data-cat]").forEach(el => {
-    el.addEventListener("change", () => {
-      cmpState.on[el.dataset.cat] = el.checked;
+  document.querySelectorAll("#cmp-bar button[data-cat]").forEach(el => {
+    el.addEventListener("click", () => {
+      if (el.disabled) return;
+      const cat = el.dataset.cat;
+      cmpState.on[cat] = !cmpState.on[cat];
+      el.setAttribute("aria-pressed", cmpState.on[cat] ? "true" : "false");
       cmpState.shown = 400;
       cmpRender();
     });
@@ -2002,7 +2221,7 @@ function cmpRenderFoot() {
   }
   const hidden = cmpState.rows.length - shown;
   html += `<span>已列出 ${shown} 项` +
-    (hidden > 0 ? `，另有 ${hidden} 项被分类开关或过滤隐藏` : "") + `</span>`;
+    (hidden > 0 ? `，另有 ${hidden} 项被上面的「显示」按钮隐藏` : "") + `</span>`;
   if (list.length > cmpState.shown) {
     html += ` <button id="cmp-show-more">再显示 400 项</button>`;
   }
@@ -2274,7 +2493,7 @@ document.getElementById("refresh").addEventListener("click", refresh);
 // the maintenance screens are a click away rather than competing with it.
 
 const DRAWER_ITEMS = [
-  { id: "jobs", label: "所有会话" },
+  { id: "jobs", label: "所有配置" },
   { id: "config", label: "完整配置" },
   { id: "conflicts", label: "冲突" },
   { id: "history", label: "历史" },
@@ -2364,7 +2583,7 @@ function syncSessionPicker() {
     sel.dataset.sig = sig;
     sel.innerHTML = list.length
       ? list.map(s => `<option value="${esc(s.key)}">${esc(s.label)}</option>`).join("")
-      : '<option value="">（没有作业）</option>';
+      : '<option value="">（没有配置）</option>';
     if (!list.some(s => s.key === sessionJob)) {
       sessionJob = list.length ? list[0].key : "";
     }
@@ -2392,7 +2611,7 @@ async function loadSession() {
   if (!sel) {
     sessionCfg = null;
     renderPairs();
-    status.textContent = "还没有作业。用右上角 ⚙ → 完整配置 新建一个。";
+    status.textContent = "还没有配置。用右上角 ⚙ → 完整配置 新建一个。";
     return;
   }
   try {
@@ -2424,13 +2643,13 @@ function renderPairs() {
   const host = document.getElementById("pair-rows");
   renderToolbar();
   if (!sessionCfg) {
-    host.innerHTML = '<div class="empty">（没有作业）</div>';
+    host.innerHTML = '<div class="empty">（没有配置）</div>';
     return;
   }
 
   const pairs = sessionCfg.pairs || [];
   if (!pairs.length) {
-    host.innerHTML = '<div class="empty">还没有文件夹对。点下面的「+ 添加文件夹对」。</div>';
+    host.innerHTML = '<div class="empty">还没有目录对。点下面的「+ 添加目录对」。</div>';
     return;
   }
 
@@ -2455,7 +2674,7 @@ function renderPairs() {
                 title="${own ? "这一对有独立设置（蓝点）" : "这一对的独立设置（当前全部跟配置）"}">
           ${own ? "●" : "⚙"}
         </button>
-        <button class="p-remove" data-idx="${i}" title="删除这个文件夹对">−</button>
+        <button class="p-remove" data-idx="${i}" title="删除这一组目录对">−</button>
       </div>
     </div>`;
   }).join("");
@@ -2484,7 +2703,7 @@ function renderPairs() {
     el.addEventListener("click", () => {
       const i = Number(el.dataset.idx);
       const p = sessionCfg.pairs[i];
-      if (!confirm(`删除文件夹对「${p.name}」？\n\n这只改配置，不会动任何文件。`)) return;
+      if (!confirm(`删除目录对「${p.name}」？\n\n这只改配置，不会动任何文件。`)) return;
       sessionCfg.pairs.splice(i, 1);
       // The job needs at least one pair to exist; the server rejects an empty job.
       if (!sessionCfg.pairs.length) sessionCfg.pairs.push(newPair());
@@ -2621,7 +2840,7 @@ function renderToolbar() {
   const syncBtn = document.getElementById("btn-sync-settings");
   syncBtn.classList.toggle("warn", mirrors > 0);
   syncBtn.title = mirrors
-    ? `Synchronization Settings · 当前有 ${mirrors} 个文件夹对会删除云端多余文件`
+    ? `当前有 ${mirrors} 组目录对会删除云端多余文件`
     : "Synchronization Settings · 当前不会删除任何文件";
 }
 
@@ -2770,9 +2989,9 @@ function updateSyncWarn() {
   }
   warn.style.display = "";
   warn.innerHTML =
-    `<strong>${mirrors} / ${pairs.length} 个文件夹对会删除云端多余文件。</strong>` +
-    `<div style="margin-top:5px">镜像 = 云端严格照抄本地。云端独有的文件和文件夹会被删掉，` +
-    `删了找不回来（除非作业配了版本目录 deletion = versioning）。</div>`;
+    `<strong>${mirrors} / ${pairs.length} 组目录对会删除云端多余文件。</strong>` +
+    `<div style="margin-top:5px">镜像 = 云端严格照抄本地。云端独有的文件和目录会被删掉，` +
+    `删了找不回来（除非配置了版本目录 deletion = versioning）。</div>`;
 }
 
 // ---- per-pair settings
@@ -2901,7 +3120,7 @@ document.getElementById("session-pick").addEventListener("change", e => {
 // It sends the whole ConfigView, which is what the server validates - so this page
 // cannot bypass the checks the full form goes through.
 async function saveSession() {
-  if (!sessionCfg) throw new Error("没有可保存的作业");
+  if (!sessionCfg) throw new Error("没有可保存的配置");
   const name = sessionCfg.name;
   const r = await fetch("/api/config?job=" + encodeURIComponent(name), {
     method: "POST",
@@ -2942,15 +3161,42 @@ async function runSession(btn, plan, busyText) {
     if (only) q += "&only=" + encodeURIComponent(JSON.stringify(only.picked));
     if (plan) pendingPlanJob = sel.job;
     await post(q);
+
+    // The clock starts only once the daemon has accepted the request: an error
+    // above must not leave a spinner running with nothing behind it.
+    busyJob = { name: sel.job, mode: plan ? "plan" : "run", startedAt: Date.now() };
+    if (plan) showPlanBusy();
+    status.className = "stat busy";
+    status.innerHTML = `<span class="spin"></span>` +
+      (plan ? "正在扫描并比较…" : "正在同步…");
+
     lastSignature = "";
-    status.textContent = plan ? "已开始比较。" : "已开始同步。";
-    setTimeout(refresh, 400);
+    setTimeout(refresh, 300);
   } catch (err) {
+    busyJob = null;
+    status.className = "stat err";
     status.textContent = (plan ? "比较失败：" : "同步失败：") + err.message;
   } finally {
     btn.disabled = false;
     btn.textContent = label;
   }
+}
+
+// showPlanBusy replaces the result area while a compare is in flight.
+//
+// The previous numbers belong to the previous compare. Leaving them on screen
+// while a new scan runs is how "nothing happened" gets reported: the table looks
+// identical before and after, so the only evidence of work is the status line.
+function showPlanBusy() {
+  document.getElementById("plan-job").textContent = "";
+  document.getElementById("plan-body").innerHTML =
+    `<div class="empty" style="padding:22px 2px 10px;text-align:center">
+       正在比较…<br>
+       <span style="font-style:normal;font-size:12px;opacity:.75">
+         正在扫描两边并生成逐文件计划。这一步不改动任何东西。
+       </span>
+     </div>`;
+  document.getElementById("plan-run").disabled = true;
 }
 
 document.getElementById("s-compare-btn").addEventListener("click", e => {
