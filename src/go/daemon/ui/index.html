@@ -6,46 +6,88 @@
 <title>weftsync</title>
 <style>
   :root {
-    --bg: #f6f7f9;
-    --card: #fff;
-    --ink: #1f2328;
-    --muted: #656d76;
-    --line: #d8dee4;
-    --ok: #1a7f37;
+    --bg: #f4f6f8;
+    --card: #ffffff;
+    --ink: #171b21;
+    --ink-2: #3d4650;
+    --muted: #6b7480;
+    --line: #e2e6eb;
+    --line-2: #eef1f4;
+    --ok: #187a3c;
     --warn: #9a6700;
-    --bad: #cf222e;
-    --blue: #0969da;
+    --bad: #cf2230;
+    --blue: #0a63d0;
+    --blue-soft: #eaf2fd;
+
+    --r-sm: 6px;
+    --r: 9px;
+    --r-lg: 13px;
+    --sh-1: 0 1px 2px rgba(16, 24, 40, .05);
+    --sh-2: 0 2px 6px rgba(16, 24, 40, .07), 0 1px 2px rgba(16, 24, 40, .05);
+    --sh-3: 0 14px 40px rgba(16, 24, 40, .16), 0 2px 8px rgba(16, 24, 40, .08);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0d1117; --card: #161b22; --ink: #e6edf3; --muted: #8b949e;
-      --line: #30363d; --ok: #3fb950; --warn: #d29922; --bad: #f85149; --blue: #58a6ff;
+      --bg: #0c1015; --card: #151a21; --ink: #e8edf3; --ink-2: #c3ccd6;
+      --muted: #8b95a1; --line: #262d36; --line-2: #1d232b;
+      --ok: #3fb950; --warn: #d29922; --bad: #f85149; --blue: #4d9dff;
+      --blue-soft: #12253c;
+      --sh-1: 0 1px 2px rgba(0, 0, 0, .4);
+      --sh-2: 0 2px 6px rgba(0, 0, 0, .45);
+      --sh-3: 0 16px 44px rgba(0, 0, 0, .62);
     }
   }
   * { box-sizing: border-box; }
+  input[type=radio], input[type=checkbox] { accent-color: var(--blue); }
+  /* Thin scrollbars. The default Windows ones are 17px of grey chrome next to a
+     12px font, and they appear inside the result grid and every dialog body. */
+  * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 40%, transparent) transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--muted) 34%, transparent);
+    border-radius: 99px; border: 2px solid transparent; background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--muted) 60%, transparent); background-clip: content-box; }
+  /* The topbar is sticky, so anything scrolled to the top edge lands underneath
+     it and cannot be clicked. scroll-padding keeps that gap for scrollIntoView
+     and for keyboard focus. Measured: clicking the first toolbar button after a
+     scroll hit the topbar instead. */
+  html { scroll-padding-top: 68px; }
   body {
     margin: 0; padding: 0; background: var(--bg); color: var(--ink);
-    font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font: 13.5px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
+          "Segoe UI", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
   h1 { font-size: 18px; margin: 0 0 4px; }
   .sub { color: var(--muted); font-size: 12px; margin-bottom: 20px; }
   .card {
-    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
-    padding: 16px; margin-bottom: 16px;
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 16px; margin-bottom: 16px; box-shadow: var(--sh-1);
   }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
   tr:last-child td { border-bottom: none; }
-  code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+    font-size: 12px;
+  }
   button {
-    font: inherit; padding: 5px 12px; border-radius: 6px; cursor: pointer;
-    border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    font: inherit; font-size: 13px; padding: 5px 12px; border-radius: var(--r-sm);
+    cursor: pointer; border: 1px solid var(--line);
+    background: var(--card); color: var(--ink-2);
     white-space: nowrap;
+    transition: border-color .12s, color .12s, background .12s, box-shadow .12s;
   }
   td.actions { width: 1%; white-space: nowrap; }
   button:hover { border-color: var(--blue); color: var(--blue); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
+  button:active { transform: translateY(.5px); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button:focus-visible, select:focus-visible, textarea:focus-visible,
+  input:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
   .pill {
     display: inline-block; padding: 1px 8px; border-radius: 999px;
     font-size: 12px; border: 1px solid var(--line);
@@ -59,7 +101,8 @@
   .log {
     max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-all;
     font-family: ui-monospace, Consolas, monospace; font-size: 12px;
-    background: var(--bg); border-radius: 6px; padding: 10px; border: 1px solid var(--line);
+    background: var(--bg); border-radius: var(--r-sm); padding: 10px;
+    border: 1px solid var(--line);
   }
   .empty { color: var(--muted); font-style: italic; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -69,36 +112,51 @@
   .hidden { display: none; }
 
   /* config form */
-  select, input[type=text], input[type=number] {
-    font: inherit; padding: 4px 8px; border-radius: 6px;
+  /* `input:not([type])` matters: an <input> with no type attribute is a text
+     input, but it does NOT match `input[type=text]`. One such field (the result
+     filter box) rendered as a browser-default white box in dark mode. */
+  select, input:not([type]), input[type=text], input[type=number] {
+    font: inherit; font-size: 13px; padding: 5px 9px; border-radius: var(--r-sm);
     border: 1px solid var(--line); background: var(--card); color: var(--ink);
     max-width: 100%;
+    transition: border-color .12s, background .12s;
   }
-  select:focus, input:focus { outline: 2px solid var(--blue); outline-offset: -1px; }
+  select:hover, input:not([type]):hover, input[type=text]:hover {
+    border-color: color-mix(in srgb, var(--muted) 45%, var(--line));
+  }
+  select:focus, input:focus { outline: none; border-color: var(--blue); }
+  textarea {
+    font: inherit; font-size: 12.5px; padding: 8px 10px; border-radius: var(--r-sm);
+    border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    resize: vertical;
+  }
+  textarea:focus { outline: none; border-color: var(--blue); }
   fieldset {
-    border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 0 0 14px;
+    border: 1px solid var(--line); border-radius: var(--r); padding: 12px; margin: 0 0 14px;
   }
   legend { padding: 0 6px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
   .field { display: flex; gap: 10px; align-items: center; margin-bottom: 9px; flex-wrap: wrap; }
   .field label { min-width: 130px; color: var(--muted); }
   .field .hint { color: var(--muted); font-size: 12px; }
-  .pair-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+  .pair-card { border: 1px solid var(--line); border-radius: var(--r); padding: 12px; margin-bottom: 10px; }
   .pair-card .head { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
   .note {
-    background: color-mix(in srgb, var(--warn) 12%, transparent);
-    border: 1px solid var(--warn); border-radius: 8px;
-    padding: 10px 12px; margin-bottom: 12px; color: var(--ink);
+    background: color-mix(in srgb, var(--warn) 9%, var(--card));
+    border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+    border-radius: var(--r);
+    padding: 11px 13px; margin-bottom: 12px; color: var(--ink);
+    font-size: 12.5px; line-height: 1.6;
   }
   .note.ok {
-    background: color-mix(in srgb, var(--ok) 12%, transparent);
-    border-color: var(--ok);
+    background: color-mix(in srgb, var(--ok) 8%, var(--card));
+    border-color: color-mix(in srgb, var(--ok) 40%, var(--line));
   }
   .note.err {
-    background: color-mix(in srgb, var(--bad) 12%, transparent);
-    border-color: var(--bad);
+    background: color-mix(in srgb, var(--bad) 8%, var(--card));
+    border-color: color-mix(in srgb, var(--bad) 45%, var(--line));
     white-space: pre-wrap;
   }
-  .note code { background: rgba(127,127,127,.18); padding: 1px 4px; border-radius: 4px; }
+  .note code { background: rgba(127,127,127,.16); padding: 1px 5px; border-radius: 4px; }
   .save-note { margin: 10px 0 0; }
   .save-note:empty { display: none; }
 
@@ -111,53 +169,75 @@
   .prog { font-size: 12px; color: var(--muted); }
   .prog .cur { word-break: break-all; }
   .plan-grid { display: grid; grid-template-columns: 1fr auto; gap: 6px 14px; align-items: baseline; }
-  .plan-pair { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+  .plan-pair { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; margin-bottom: 10px; }
   .plan-pair .head { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
   .danger { color: var(--bad); font-weight: 600; }
-  button.primary { border-color: var(--blue); color: var(--blue); font-weight: 600; }
-  button.danger-btn { border-color: var(--bad); color: var(--bad); }
+  button.primary {
+    background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 600;
+    box-shadow: var(--sh-1);
+  }
+  button.primary:hover { background: color-mix(in srgb, var(--blue) 88%, #000); color: #fff; border-color: transparent; }
+  @media (prefers-color-scheme: dark) {
+    button.primary { color: #08111c; }
+  }
+  button.danger-btn { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); color: var(--bad); }
   .badge {
-    display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px;
-    border: 1px solid var(--line); color: var(--muted);
+    display: inline-block; padding: 1px 6px; border-radius: 5px; font-size: 10.5px;
+    font-weight: 500; letter-spacing: .2px;
+    border: 1px solid var(--line); color: var(--muted); background: var(--bg);
   }
 
   /* 对比视图：和 FreeFileSync 一样左右两栏对齐，中间一列放动作 */
-  .ffs { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .ffs { margin-top: 12px; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
   .ffs-tools {
-    display: flex; gap: 8px; align-items: center;
-    padding: 6px 10px; border-bottom: 1px solid var(--line);
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    padding: 8px 12px; border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 55%, var(--card));
+  }
+  .ffs-tools .count {
+    font-size: 11.5px; font-weight: 600; color: var(--ink-2);
+    background: var(--bg); border: 1px solid var(--line);
+    border-radius: 999px; padding: 0 9px;
   }
   .ffs-title { font-weight: 600; font-size: 13px; }
-  .ffs-filter { width: 220px; }
+  .ffs-filter { width: 200px; font-size: 12.5px; padding: 4px 9px; }
+  /* The header strip uses the same six tracks as the table below it (see the
+     colgroup), so 本地 / 动作 / 云端 sit exactly above the columns they name.
+     Without matching widths the labels drifted a few pixels off the columns and
+     the strip read as a second, disagreeing table. */
   .ffs-grid {
-    display: grid; grid-template-columns: 30px 1fr 64px 1fr;
+    display: grid; grid-template-columns: 34px minmax(0, 1fr) 62px 68px minmax(0, 1fr) 62px;
     border-bottom: 1px solid var(--line);
+    background: var(--card);
   }
   .ffs-pick-head {
     display: flex; align-items: center; justify-content: center;
-    font-size: 11px; color: var(--muted);
+    font-size: 10.5px; color: var(--muted); letter-spacing: .3px;
   }
   .ffs-pane-head {
+    grid-column: span 2;
     display: flex; gap: 8px; align-items: baseline;
-    padding: 5px 10px; min-width: 0;
+    padding: 7px 10px; min-width: 0;
   }
   .ffs-pane-head + .ffs-act-head + .ffs-pane-head { border-left: 1px solid var(--line); }
-  .ffs-side { font-weight: 600; font-size: 12px; color: var(--muted); flex: none; }
+  .ffs-side { font-weight: 700; font-size: 10.5px; color: var(--muted);
+              flex: none; text-transform: uppercase; letter-spacing: .5px; }
   .ffs-path {
     font-size: 11px; color: var(--muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .ffs-act-head {
     display: flex; align-items: center; justify-content: center;
-    font-size: 11px; color: var(--muted);
+    font-size: 10.5px; color: var(--muted); letter-spacing: .3px;
     border-left: 1px solid var(--line); border-right: 1px solid var(--line);
   }
-  .ffs-scroll { max-height: 50vh; overflow: auto; }
-  .ffs-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .ffs-table td { padding: 2px 8px; border-bottom: 1px solid var(--line); }
+  .ffs-scroll { max-height: 62vh; overflow: auto; }
+  .ffs-table { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: fixed; }
+  .ffs-table td { padding: 5px 10px; border-bottom: 1px solid var(--line-2); }
   .ffs-table tr.meta { opacity: .5; }
-  .ffs-table td.cmp-box { width: 26px; text-align: center; padding-right: 0; }
-  .ffs-table tr.unticked td.ffs-n, .ffs-table tr.unticked td.ffs-s { opacity: .4; }
+  .ffs-table td.cmp-box { width: 34px; text-align: center; padding-right: 0; }
+  .ffs-table input[type=checkbox] { margin: 0; cursor: pointer; }
+  .ffs-table tr.unticked td.ffs-n, .ffs-table tr.unticked td.ffs-s { opacity: .38; }
   .ffs-table tr.unticked td.ffs-a { opacity: .3; }
   /* A sticky header is what makes a long result list readable, and clicking it to
      sort is what every file comparison tool does. FreeFileSync sorts on the column
@@ -165,105 +245,138 @@
   .ffs-table thead th {
     position: sticky; top: 0; z-index: 1;
     background: var(--card); color: var(--muted);
-    font-size: 11px; font-weight: 600; text-align: left;
-    padding: 4px 8px; border-bottom: 1px solid var(--line);
+    font-size: 10.5px; font-weight: 700; text-align: left;
+    letter-spacing: .4px; text-transform: uppercase;
+    padding: 5px 10px; border-bottom: 1px solid var(--line);
     cursor: pointer; user-select: none; white-space: nowrap;
   }
   .ffs-table thead th:hover { color: var(--ink); }
-  .ffs-table thead th[data-on="1"] { color: var(--ink); }
+  .ffs-table thead th[data-on="1"] { color: var(--blue); }
   .ffs-table thead th.ffs-s { text-align: right; }
   .ffs-table thead th.ffs-a { text-align: center; }
-  .ffs-table thead th .sarrow { opacity: .5; font-size: 10px; margin-left: 3px; }
-  .ffs-table tbody tr:hover { background: rgba(128, 128, 128, .12); }
+  .ffs-table thead th .sarrow { opacity: .65; font-size: 9px; margin-left: 3px; }
+  .ffs-table tbody tr:hover { background: color-mix(in srgb, var(--blue) 5%, transparent); }
   /* Right-click menu on a result row, mirroring the per-file actions
      FreeFileSync puts there. */
   .row-menu {
-    position: fixed; z-index: 80; min-width: 170px;
-    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
-    box-shadow: 0 10px 26px rgba(0, 0, 0, .28); padding: 4px;
+    position: fixed; z-index: 80; min-width: 180px;
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
+    box-shadow: var(--sh-3); padding: 4px;
   }
   .row-menu button {
     display: block; width: 100%; text-align: left; background: none;
-    border: none; color: var(--ink); padding: 6px 10px; border-radius: 6px;
-    cursor: pointer; font-size: 13px;
+    border: none; color: var(--ink); padding: 6px 10px; border-radius: var(--r-sm);
+    cursor: pointer; font-size: 12.5px;
   }
-  .row-menu button:hover { background: rgba(128, 128, 128, .18); }
+  .row-menu button:hover { background: color-mix(in srgb, var(--blue) 12%, transparent); color: var(--blue); }
   .row-menu .sep { height: 1px; background: var(--line); margin: 4px 2px; }
   .row-menu .head {
-    padding: 4px 10px 6px; font-size: 11px; color: var(--muted);
+    padding: 5px 10px 7px; font-size: 11px; color: var(--muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px;
+    border-bottom: 1px solid var(--line-2); margin-bottom: 3px;
   }
   .ffs-n {
-    width: 42%; word-break: break-all; vertical-align: top;
+    word-break: break-all; vertical-align: top;
   }
   .ffs-s {
-    width: 58px; text-align: right; white-space: nowrap;
-    color: var(--muted); font-size: 12px;
+    text-align: right; white-space: nowrap;
+    color: var(--muted); font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
   }
+  /* The action is the column the eye is looking for, so it gets a chip rather
+     than a bare arrow: at 12px an arrow is a speck, and the colour alone has to
+     carry "this deletes something". */
   .ffs-a {
-    width: 64px; text-align: center; white-space: nowrap;
-    font-family: ui-monospace, monospace; font-weight: 700;
-    border-left: 1px solid var(--line); border-right: 1px solid var(--line);
+    text-align: center; white-space: nowrap;
+    border-left: 1px solid var(--line-2); border-right: 1px solid var(--line-2);
   }
-  .ffs-a.creates { color: var(--blue); }
-  .ffs-a.updates { color: #b8860b; }
-  .ffs-a.downloads { color: #2f8f4e; }
-  .ffs-a.deletes { color: var(--bad); }
-  .ffs-a.dirs, .ffs-a.meta { color: var(--muted); }
+  .ffs-act {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 26px; height: 20px; padding: 0 6px; border-radius: 999px;
+    font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700;
+    background: color-mix(in srgb, currentColor 12%, transparent);
+  }
+  .ffs-a.creates .ffs-act { color: var(--blue); }
+  .ffs-a.updates .ffs-act { color: var(--warn); }
+  .ffs-a.downloads .ffs-act { color: var(--ok); }
+  .ffs-a.deletes .ffs-act { color: var(--bad); }
+  .ffs-a.dirs .ffs-act, .ffs-a.meta .ffs-act { color: var(--muted); }
   .ffs-bar {
     display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
-    padding: 6px 10px; border-top: 1px solid var(--line);
-    background: var(--card);
+    padding: 8px 12px; border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 55%, var(--card));
   }
   .ffs-cat {
     display: inline-flex; gap: 5px; align-items: center;
-    font-size: 12px; padding: 1px 8px; border-radius: 999px;
+    font-size: 11.5px; padding: 2px 9px; border-radius: 999px;
     border: 1px solid var(--line); margin: 0; cursor: pointer;
-    white-space: nowrap;
+    white-space: nowrap; background: var(--card); color: var(--ink-2);
+    transition: border-color .12s, color .12s, opacity .12s;
   }
-  .ffs-cat input { margin: 0; }
-  .ffs-cat.disabled { opacity: .4; cursor: default; }
-  .ffs-cat.creates { border-color: var(--blue); color: var(--blue); }
-  .ffs-cat.updates { border-color: #b8860b; color: #b8860b; }
-  .ffs-cat.downloads { border-color: #2f8f4e; color: #2f8f4e; }
-  .ffs-cat.deletes { border-color: var(--bad); color: var(--bad); }
+  .ffs-cat input { margin: 0; cursor: pointer; }
+  .ffs-cat b { font-variant-numeric: tabular-nums; }
+  .ffs-cat.disabled { opacity: .38; cursor: default; }
+  .ffs-cat.creates:not(.disabled) { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); color: var(--blue); }
+  .ffs-cat.updates:not(.disabled) { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); color: var(--warn); }
+  .ffs-cat.downloads:not(.disabled) { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); color: var(--ok); }
+  .ffs-cat.deletes:not(.disabled) { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); color: var(--bad); }
   .ffs-cat .sym { font-family: ui-monospace, monospace; font-weight: 700; }
-  .ffs-total { font-size: 12px; color: var(--muted); }
+  .ffs-total { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .ffs-total b { color: var(--ink-2); }
+  .ffs-total.danger { color: var(--bad); font-weight: 600; }
+  .ffs-more {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    padding: 4px 12px 10px; font-size: 11.5px; color: var(--muted);
+  }
+  .ffs-sel-hint {
+    color: var(--blue); font-weight: 600;
+    background: var(--blue-soft); border-radius: 999px; padding: 1px 10px;
+  }
 
   /* ---- 主界面：一个同步会话（对齐 FreeFileSync 的结构）---- */
   .topbar {
-    display: flex; gap: 12px; align-items: center;
-    padding: 0 22px; height: 52px;
+    display: flex; gap: 14px; align-items: center;
+    padding: 0 24px; height: 54px;
     border-bottom: 1px solid var(--line);
-    background: var(--card);
+    background: color-mix(in srgb, var(--card) 88%, var(--bg));
+    backdrop-filter: saturate(180%) blur(8px);
     position: sticky; top: 0; z-index: 30;
   }
   .brand {
-    font-size: 15px; font-weight: 700; letter-spacing: .2px;
-    display: flex; align-items: center; gap: 7px;
+    font-size: 14.5px; font-weight: 700; letter-spacing: .2px;
+    display: flex; align-items: center; gap: 8px;
   }
   .brand::before {
-    content: ""; width: 9px; height: 9px; border-radius: 2px;
-    background: var(--blue); display: block;
+    content: ""; width: 10px; height: 10px; border-radius: 3px;
+    background: linear-gradient(145deg, var(--blue), color-mix(in srgb, var(--blue) 55%, #7b3ff2));
+    display: block;
   }
-  .topbar select { min-width: 180px; }
+  .topbar select { min-width: 180px; background: var(--bg); }
   .icon-btn {
-    padding: 4px 9px; font-size: 15px; line-height: 1.2;
-    background: none; border: 1px solid transparent; border-radius: 7px; cursor: pointer;
+    padding: 5px 10px; font-size: 15px; line-height: 1.1;
+    background: none; border: 1px solid transparent; border-radius: var(--r-sm); cursor: pointer;
     color: var(--muted);
   }
-  .icon-btn:hover { border-color: var(--line); color: var(--ink); }
+  .icon-btn:hover { border-color: var(--line); color: var(--ink); background: var(--bg); }
   .conn-badge {
-    font-size: 12px; padding: 1px 9px; border-radius: 999px;
-    border: 1px solid var(--line); color: var(--muted);
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11.5px; font-weight: 500; padding: 2px 10px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); background: var(--bg);
   }
-  .conn-badge.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
-  .conn-badge.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+  .conn-badge::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--muted); display: block;
+  }
+  .conn-badge.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); }
+  .conn-badge.ok::before { background: var(--ok); }
+  .conn-badge.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
+  .conn-badge.bad::before { background: var(--bad); }
 
   /* The page column. Narrow by design: a sync screen is a form and a table, and
      both read badly when they sprawl across a 2560px monitor. */
-  .session { padding: 20px 22px 40px; max-width: 1080px; margin: 0 auto; }
-  @media (min-width: 1500px) { .session { max-width: 1220px; } }
+  .session { padding: 22px 24px 44px; max-width: 1120px; margin: 0 auto; }
+  @media (min-width: 1500px) { .session { max-width: 1280px; } }
+  @media (max-width: 620px) { .session { padding: 16px 14px 36px; } }
 
   /* ---- 工具条：三个设置按钮，各自在第二行显示当前值 ----
      This is FreeFileSync's toolbar: comparison settings, filter and
@@ -272,85 +385,128 @@
      three current values without opening anything, and changing one is a click on
      the thing that shows it - not a search through a form. */
   .toolbar {
-    display: flex; gap: 6px; align-items: stretch; flex-wrap: wrap;
-    padding: 8px 0 10px;
+    display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap;
+    padding: 0 0 14px;
   }
   .tool {
-    display: grid; grid-template-columns: auto 1fr; gap: 0 9px;
+    display: grid; grid-template-columns: auto 1fr; gap: 1px 11px;
     align-items: center; text-align: left;
-    padding: 6px 13px 6px 10px; border-radius: 8px;
+    padding: 8px 15px 8px 11px; border-radius: var(--r);
     border: 1px solid var(--line); background: var(--card); color: var(--ink);
-    cursor: pointer; min-width: 132px;
+    cursor: pointer; min-width: 148px; box-shadow: var(--sh-1);
   }
-  .tool:hover { border-color: var(--blue); background: var(--card); }
+  .tool:hover {
+    border-color: color-mix(in srgb, var(--blue) 55%, var(--line));
+    box-shadow: var(--sh-2);
+  }
   .tool .ti {
-    grid-row: span 2; font-size: 17px; line-height: 1; color: var(--muted);
-    font-family: ui-monospace, monospace;
+    grid-row: span 2;
+    display: flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; border-radius: var(--r-sm);
+    background: var(--bg); color: var(--ink-2);
+    font-size: 15px; line-height: 1; font-family: ui-monospace, monospace;
+    transition: background .12s, color .12s;
   }
-  .tool:hover .ti { color: var(--blue); }
-  .tool .tt { font-size: 12px; color: var(--muted); }
+  .tool:hover .ti { background: var(--blue-soft); color: var(--blue); }
+  .tool .tt {
+    font-size: 10.5px; color: var(--muted); font-weight: 600;
+    text-transform: uppercase; letter-spacing: .5px;
+  }
   .tool .tv {
-    font-size: 13px; font-weight: 600;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px;
+    font-size: 13px; font-weight: 600; color: var(--ink);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px;
   }
+  .tool.warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+  .tool.warn .ti { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
   .tool.warn .tv { color: var(--warn); }
 
   /* ---- 文件夹对：一行就是 FFS 的一套「左 ⇄ 右」---- */
-  .pairs { display: flex; flex-direction: column; gap: 6px; }
+  .pairs { display: flex; flex-direction: column; gap: 7px; }
   .pair-row {
     display: grid;
     /* minmax(0,1fr) rather than 1fr: a grid track refuses to shrink below its
        content's min-content width, and a long path has no spaces to break at - so
        with plain 1fr the two path boxes push the buttons off the row and the box
        collapses to a sliver. That is exactly how this row broke once. */
-    grid-template-columns: minmax(0, 1fr) 34px minmax(0, 1fr) auto;
-    gap: 8px; align-items: center;
-    padding: 7px 9px;
-    border: 1px solid var(--line); border-radius: 8px; background: var(--card);
+    grid-template-columns: minmax(0, 1fr) 36px minmax(0, 1fr) auto;
+    gap: 9px; align-items: center;
+    padding: 9px 10px;
+    border: 1px solid var(--line); border-radius: var(--r); background: var(--card);
+    box-shadow: var(--sh-1);
   }
-  .path-box { display: flex; gap: 5px; min-width: 0; }
+  .pair-row:focus-within { border-color: color-mix(in srgb, var(--blue) 50%, var(--line)); }
+  .path-box { display: flex; gap: 6px; min-width: 0; }
   .path-box input {
     flex: 1; min-width: 0;
-    font-family: ui-monospace, monospace; font-size: 12.5px;
-    padding: 6px 9px; background: var(--bg);
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px;
+    padding: 7px 10px; background: var(--bg); color: var(--ink-2);
+    border-color: transparent;
   }
-  .path-box input:focus { background: var(--card); }
-  .path-box .browse { flex: none; padding: 5px 9px; font-size: 12px; }
+  .path-box input:hover { background: color-mix(in srgb, var(--bg) 60%, var(--card)); }
+  .path-box input:focus { background: var(--card); border-color: var(--blue); }
+  .path-box .browse {
+    flex: none; padding: 6px 11px; font-size: 12px;
+    background: var(--card); color: var(--ink-2);
+  }
   .pair-swap {
     display: flex; align-items: center; justify-content: center;
-    height: 30px; width: 30px; margin: 0 auto;
-    border: 1px solid var(--line); border-radius: 7px;
+    height: 32px; width: 32px; margin: 0 auto;
+    border: 1px solid var(--line); border-radius: var(--r-sm);
     background: var(--card); color: var(--muted);
     font-size: 14px; line-height: 1; cursor: pointer;
+    transition: color .12s, border-color .12s, background .12s;
   }
-  .pair-swap:hover { color: var(--blue); border-color: var(--blue); }
-  .pair-ops { display: flex; gap: 2px; align-items: center; }
+  .pair-swap:hover { color: var(--blue); border-color: var(--blue); background: var(--blue-soft); }
+  .pair-ops { display: flex; gap: 3px; align-items: center; }
   .pair-ops button {
     border-color: transparent; background: none; color: var(--muted);
-    padding: 4px 8px; font-size: 13px;
+    padding: 5px 8px; font-size: 13px; line-height: 1; border-radius: var(--r-sm);
   }
-  .pair-ops button:hover { border-color: var(--line); color: var(--ink); }
-  .pair-ops .p-remove:hover { border-color: var(--bad); color: var(--bad); }
+  .pair-ops button:hover { border-color: var(--line); color: var(--ink); background: var(--bg); }
+  .pair-ops .p-remove:hover { border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, transparent); }
   /* A pair that overrides the configuration says so; otherwise a reader has to
      open the dialog to find out why this one row behaves differently. */
-  .pair-ops .p-own.has-own { border-color: var(--blue); color: var(--blue); }
+  .pair-ops .p-own.has-own { color: var(--blue); }
+  .pair-ops .p-own.has-own:hover { border-color: var(--blue); background: var(--blue-soft); }
   .pair-add {
-    display: block; width: 100%; padding: 7px; margin-top: 6px;
-    border: 1px dashed var(--line); border-radius: 8px;
-    background: none; color: var(--muted); font-size: 12.5px;
+    display: block; width: 100%; padding: 9px; margin-top: 7px;
+    border: 1px dashed color-mix(in srgb, var(--line) 90%, var(--muted)); border-radius: var(--r);
+    background: none; color: var(--muted); font-size: 12.5px; font-weight: 500;
   }
-  .pair-add:hover { border-color: var(--blue); color: var(--blue); background: none; }
+  .pair-add:hover {
+    border-color: var(--blue); color: var(--blue);
+    background: var(--blue-soft); border-style: solid;
+  }
 
-  /* ---- 底部条：状态在左，比较/同步在右（FFS 的位置）---- */
+  /* ---- 底部条：状态在左，比较/同步在右（FFS 的位置）----
+     Not sticky. A bar pinned to the bottom of a scrolling page floats over the
+     result grid and hides the rows underneath it - measured: the last rows of a
+     three-row plan were painted over by it. FFS can keep its buttons at the
+     window bottom because the whole app is one fixed window; a web page scrolls. */
   .foot {
-    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-    margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line);
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    margin-top: 18px; padding: 13px 16px;
+    border: 1px solid var(--line); border-radius: var(--r);
+    background: color-mix(in srgb, var(--card) 92%, var(--bg));
+    box-shadow: var(--sh-1);
   }
   .foot .grow { flex: 1; }
-  .foot button.big { padding: 8px 22px; font-size: 13.5px; font-weight: 600; border-radius: 8px; }
-  .foot button.big.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
-  .foot button.big.primary:hover { filter: brightness(1.1); color: #fff; }
-  #s-sync-btn { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); color: var(--bad); }
+  .foot #s-status { font-size: 12.5px; margin: 0; }
+  .foot button.big {
+    padding: 9px 24px; font-size: 13.5px; font-weight: 600;
+    border-radius: var(--r-sm); box-shadow: var(--sh-1);
+  }
+  .foot button.big.primary {
+    background: var(--blue); border-color: var(--blue); color: #fff;
+  }
+  .foot button.big.primary:hover { background: color-mix(in srgb, var(--blue) 86%, #000); color: #fff; border-color: transparent; }
+  @media (prefers-color-scheme: dark) {
+    .foot button.big.primary { color: #08111c; }
+  }
+  #s-sync-btn {
+    border-color: color-mix(in srgb, var(--bad) 45%, var(--line));
+    color: var(--bad);
+  }
   #s-sync-btn:hover { background: var(--bad); border-color: var(--bad); color: #fff; }
 
   /* ---- 设置对话框（FFS 的 Comparison / Synchronization / Filter 三个窗）----
@@ -358,84 +514,108 @@
      then leave alone; keeping them on the page means every glance at the file list
      has to step over them. */
   .dlg-mask {
-    position: fixed; inset: 0; background: rgba(0, 0, 0, .34); z-index: 62;
+    position: fixed; inset: 0; background: rgba(10, 14, 20, .42); z-index: 62;
+    backdrop-filter: blur(2px);
   }
   .dlg:not(.hidden) {
     position: fixed; z-index: 64; left: 50%; top: 50%;
     transform: translate(-50%, -50%);
-    width: min(560px, 93vw); max-height: 86vh;
+    width: min(560px, 93vw); max-height: 90vh;
     display: flex; flex-direction: column;
-    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-    box-shadow: 0 16px 48px rgba(0, 0, 0, .32);
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
+    box-shadow: var(--sh-3);
+    animation: dlg-in .14s ease-out;
+  }
+  @keyframes dlg-in {
+    from { opacity: 0; transform: translate(-50%, -48%) scale(.985); }
+    to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   }
   .dlg.wide:not(.hidden) { width: min(680px, 94vw); }
   .dlg-head {
     display: flex; gap: 9px; align-items: center;
-    padding: 11px 14px; border-bottom: 1px solid var(--line);
+    padding: 13px 16px; border-bottom: 1px solid var(--line);
   }
-  .dlg-head strong { font-size: 14px; }
+  .dlg-head strong { font-size: 14px; letter-spacing: .1px; }
   .dlg-head .grow { flex: 1; }
-  .dlg-body { padding: 12px 14px; overflow: auto; }
+  .dlg-body { padding: 14px 16px; overflow: auto; }
   .dlg-foot {
     display: flex; gap: 8px; align-items: center;
-    padding: 10px 14px; border-top: 1px solid var(--line);
+    padding: 12px 16px; border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 55%, var(--card));
+    border-radius: 0 0 var(--r-lg) var(--r-lg);
   }
   .dlg-foot .grow { flex: 1; }
   .dlg-foot .note { margin: 0; font-size: 12px; flex-basis: 100%; }
+  .dlg-foot button { padding: 6px 16px; }
 
-  /* One option per row: name on top, what it does underneath. */
+  /* One option per row: name on top, what it does underneath.
+     The selected row is boxed and tinted: a blue name alone was too quiet to
+     answer "which one is on?" at a glance, which is the only question this
+     dialog exists to answer. */
   .opt {
-    display: grid; grid-template-columns: 17px 1fr; gap: 2px 9px;
-    padding: 7px 9px; border-radius: 7px; cursor: pointer; margin: 0 -9px 2px;
+    display: grid; grid-template-columns: 18px 1fr; gap: 2px 10px;
+    padding: 9px 11px; border-radius: var(--r-sm); cursor: pointer;
+    margin: 0 0 3px; border: 1px solid transparent;
+    transition: background .12s, border-color .12s;
   }
-  .opt:hover { background: rgba(128, 128, 128, .1); }
-  .opt input { margin: 3px 0 0; }
-  .opt .nm { font-size: 13px; font-weight: 600; }
-  .opt .ds { grid-column: 2; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+  .opt:hover { background: var(--bg); }
+  .opt input { margin: 3px 0 0; cursor: pointer; }
+  .opt .nm { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+  .opt .ds { grid-column: 2; font-size: 11.5px; color: var(--muted); line-height: 1.55; }
+  .opt[data-on="1"] {
+    background: var(--blue-soft);
+    border-color: color-mix(in srgb, var(--blue) 32%, var(--line));
+  }
   .opt[data-on="1"] .nm { color: var(--blue); }
   .dlg-sect {
-    margin: 0 0 6px; font-size: 11px; font-weight: 700; color: var(--muted);
-    text-transform: uppercase; letter-spacing: .5px;
+    margin: 0 0 7px; font-size: 10.5px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .6px;
   }
-  .dlg-sect + .dlg-sect { margin-top: 14px; }
+  .dlg-sect + .dlg-sect { margin-top: 16px; }
 
-  .filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 620px) { .filter-grid { grid-template-columns: 1fr; } }
-  .filter-col { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-  .filter-col label { font-size: 11.5px; color: var(--muted); }
+  .filter-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .filter-col label { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
   .filter-col textarea {
-    font-family: ui-monospace, monospace; font-size: 12px;
-    background: var(--bg); min-height: 84px; resize: vertical;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px;
+    background: var(--bg); min-height: 90px; resize: vertical;
   }
   .filter-hint {
-    margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line);
-    font-size: 11.5px; color: var(--muted); line-height: 1.55;
+    margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line);
+    font-size: 11.5px; color: var(--muted); line-height: 1.6;
+  }
+  .filter-hint code {
+    background: rgba(127,127,127,.14); padding: 1px 5px; border-radius: 4px;
   }
 
   /* ---- 抽屉 ---- */
   .drawer-mask {
-    position: fixed; inset: 0; background: rgba(0, 0, 0, .28); z-index: 40;
+    position: fixed; inset: 0; background: rgba(10, 14, 20, .38); z-index: 40;
+    backdrop-filter: blur(1px);
   }
   .drawer {
-    position: fixed; top: 0; right: 0; bottom: 0; width: min(860px, 94vw);
-    background: var(--bg, #fff); z-index: 50;
-    box-shadow: -6px 0 24px rgba(0, 0, 0, .18);
-    transform: translateX(102%); transition: transform .18s ease-out;
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(880px, 94vw);
+    background: var(--bg); z-index: 50;
+    box-shadow: -10px 0 40px rgba(0, 0, 0, .22);
+    transform: translateX(102%); transition: transform .2s cubic-bezier(.4,0,.2,1);
     display: flex; flex-direction: column;
   }
   .drawer.open { transform: translateX(0); }
   .drawer-head {
     display: flex; gap: 10px; align-items: center;
-    padding: 10px 14px; border-bottom: 1px solid var(--line);
+    padding: 14px 18px; border-bottom: 1px solid var(--line);
+    background: var(--card);
   }
   .drawer-head strong { font-size: 15px; }
   .drawer-head .icon-btn { margin-left: auto; }
   .drawer-nav {
     display: flex; gap: 4px; flex-wrap: wrap;
-    padding: 8px 14px; border-bottom: 1px solid var(--line);
+    padding: 10px 18px; border-bottom: 1px solid var(--line);
+    background: var(--card);
   }
   .drawer-nav button {
-    padding: 3px 11px; font-size: 13px; background: none;
+    padding: 4px 12px; font-size: 12.5px; background: none;
     border: 1px solid var(--line); border-radius: 999px; cursor: pointer; color: var(--muted);
   }
   .drawer-nav button[aria-selected="true"] {
@@ -556,13 +736,16 @@
   <button id="pair-add" class="pair-add">+ 添加文件夹对</button>
 
   <!-- 对比结果：FFS 的主区域就是这张表，比较前是空的 -->
-  <div class="card" id="plan-card" style="margin-top:14px">
-    <div class="row" style="margin-bottom:10px">
-      <strong class="grow">对比结果<span id="plan-job" class="mono sub" style="margin-left:6px"></span></strong>
-      <button id="plan-run">直接按此执行</button>
+  <div class="card" id="plan-card" style="margin-top:16px;padding:0;overflow:hidden">
+    <div class="row" style="padding:12px 14px;border-bottom:1px solid var(--line);
+                            background:color-mix(in srgb,var(--bg) 45%,var(--card))">
+      <strong style="font-size:13px">对比结果</strong>
+      <span id="plan-job" class="mono badge"></span>
+      <span class="grow"></span>
+      <button id="plan-run">按此执行</button>
       <button id="plan-close">清除结果</button>
     </div>
-    <div id="plan-body"></div>
+    <div id="plan-body" style="padding:0 14px 14px"></div>
   </div>
 
   <!-- 底部：状态在左，比较/同步在右，和 FFS 一致 -->
@@ -1391,7 +1574,12 @@ async function stopJob(name, btn) {
 // compared. The area is always on screen - it is where the answer appears, and a
 // panel that only materialises afterwards makes the page jump.
 function planCardPlaceholder() {
-  return `<div class="empty">还没有比较结果。点右下角「比较」，先看会改什么，再决定要不要同步。</div>`;
+  return `<div class="empty" style="padding:22px 2px 6px;text-align:center">
+    还没有比较结果。<br>
+    <span style="font-style:normal;font-size:12px;opacity:.75">
+      点右下角「比较」，先看会改什么，再决定要不要同步。
+    </span>
+  </div>`;
 }
 
 function openPlanPanel(name) {
@@ -1402,7 +1590,7 @@ function openPlanPanel(name) {
   }
 
   document.getElementById("plan-job").textContent =
-    "· " + name + (job.plan.at ? " · " + fmtTime(job.plan.at) : "");
+    name + (job.plan.at ? " · " + fmtTime(job.plan.at) : "");
   document.getElementById("plan-body").innerHTML = planHTML(job.plan);
   // The table is injected as a string, so its filter controls need wiring after
   // the fact. Doing it here (not in planHTML) keeps planHTML a pure formatter.
@@ -1412,6 +1600,13 @@ function openPlanPanel(name) {
   // "Run it" makes no sense for a preview that could not be built.
   runBtn.disabled = !!job.plan.error;
   planJob = name;
+
+  // Bring the result into view. On a short window the grid lands below the fold,
+  // so a finished comparison would otherwise look like nothing happened.
+  const card = document.getElementById("plan-card");
+  if (card && card.getBoundingClientRect().top > window.innerHeight - 160) {
+    card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
 }
 
 // planJob is the job the open panel belongs to; "" when the panel is closed.
@@ -1564,12 +1759,13 @@ function compareHTML(p) {
 
   return `<div class="ffs">
     <div class="ffs-tools">
-      <strong class="ffs-title">对比结果</strong>
-      <span class="sub">${rows.length} 项</span>
+      <!-- No title here: the card header above already says 对比结果, and two of
+           them stacked read as a heading followed by another heading. -->
+      <span class="count">${rows.length} 项</span>
       <span class="grow"></span>
+      <input id="cmp-q" type="text" placeholder="过滤路径…" class="ffs-filter">
       <button id="cmp-all" title="全部勾选">全选</button>
       <button id="cmp-none" title="全部取消">全不选</button>
-      <input id="cmp-q" placeholder="过滤路径…" class="ffs-filter">
     </div>
     <div class="ffs-grid">
       <div class="ffs-pick-head">同步</div>
@@ -1585,9 +1781,13 @@ function compareHTML(p) {
     </div>
     <div class="ffs-scroll">
       <table class="ffs-table">
+        <colgroup>
+          <col style="width:34px"><col><col style="width:62px">
+          <col style="width:68px"><col><col style="width:62px">
+        </colgroup>
         <thead>
           <tr>
-            <th style="width:26px"></th>
+            <th></th>
             <th data-sort="name">名称<span class="sarrow"></span></th>
             <th class="ffs-s" data-sort="size">大小<span class="sarrow"></span></th>
             <th class="ffs-a" data-sort="action">动作<span class="sarrow"></span></th>
@@ -1599,7 +1799,7 @@ function compareHTML(p) {
       </table>
     </div>
     <div id="cmp-bar" class="ffs-bar"></div>
-    <div id="cmp-more" class="row" style="margin-top:6px"></div>
+    <div id="cmp-more" class="ffs-more"></div>
   </div>`;
 }
 
@@ -1717,7 +1917,7 @@ function cmpRender() {
       <td class="cmp-box">${box}</td>
       <td class="ffs-n mono">${esc(s.leftName)}</td>
       <td class="ffs-s mono">${s.leftSize}</td>
-      <td class="ffs-a ${m.cls}" title="${esc(r.detail || m.label)}">${m.sym}</td>
+      <td class="ffs-a ${m.cls}" title="${esc(r.detail || m.label)}"><span class="ffs-act">${m.sym}</span></td>
       <td class="ffs-n mono">${esc(s.rightName)}</td>
       <td class="ffs-s mono">${s.rightSize}</td>
     </tr>`;
@@ -1793,11 +1993,16 @@ function cmpRenderFoot() {
   const picked = cmpSelectedPaths().length;
   const total = cmpState.rows.filter(r => !(r.action === "touch" || r.action === "other")).length;
 
-  let html = `<span class="sub">已列出 ${shown} 项（共 ${cmpState.rows.length} 项，其余被分类开关或过滤隐藏）</span>`;
+  let html = "";
+  // The selection hint is the sentence that decides whether 同步 does what the
+  // user expects, so it is a pill rather than another grey line.
   if (picked !== total) {
-    html += `<span class="ffs-total" style="margin-left:10px">已勾选 ${picked} / ${total} 项` +
-      `，同步时只处理勾选的</span>`;
+    html += `<span class="ffs-sel-hint">已勾选 ${picked} / ${total} 项` +
+      `，只处理勾选的</span>`;
   }
+  const hidden = cmpState.rows.length - shown;
+  html += `<span>已列出 ${shown} 项` +
+    (hidden > 0 ? `，另有 ${hidden} 项被分类开关或过滤隐藏` : "") + `</span>`;
   if (list.length > cmpState.shown) {
     html += ` <button id="cmp-show-more">再显示 400 项</button>`;
   }
@@ -2738,7 +2943,7 @@ async function runSession(btn, plan, busyText) {
     if (plan) pendingPlanJob = sel.job;
     await post(q);
     lastSignature = "";
-    status.textContent = plan ? "已开始比较，结果会显示在下方。" : "已开始同步。";
+    status.textContent = plan ? "已开始比较。" : "已开始同步。";
     setTimeout(refresh, 400);
   } catch (err) {
     status.textContent = (plan ? "比较失败：" : "同步失败：") + err.message;
