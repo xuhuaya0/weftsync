@@ -384,15 +384,39 @@ func (d *Daemon) ApplyConfigView(name string, in ConfigView) (job.SaveResult, er
 	previous := target.cfg
 	d.mu.Unlock()
 
-	// The pairs of the previous config give us both the values the form was
-	// shown and a place to keep everything the form cannot represent.
-	prevJobSync := syncView(previous.Job.Sync, jobDefaults(previous))
+	cfg := buildConfig(in, previous, name)
+	res, err := job.Save(cfg, file, job.SaveOptions{Force: true})
+	if err != nil {
+		return res, err
+	}
+
+	// Reload so the next run uses what the user just saved.
+	if err := d.reload(name); err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
+// buildConfig turns an edited view back into a job config.
+//
+// previous supplies two things: the values the form was shown, and somewhere to
+// keep everything the form cannot represent. It may be nil, which is what happens
+// when the console saves a configuration that has no file yet (FFS's "New").
+func buildConfig(in ConfigView, previous *job.Config, name string) *job.Config {
+	var prevJobSync SyncView
+	var prevJobSyncSpec job.SyncSpec
+	var prevPairs []job.Pair
+	if previous != nil {
+		prevJobSyncSpec = previous.Job.Sync
+		prevJobSync = syncView(previous.Job.Sync, jobDefaults(previous))
+		prevPairs = previous.Pair
+	}
 
 	cfg := &job.Config{
 		Job: job.Job{
 			Name:    name,
 			Variant: in.Variant,
-			Sync:    mergeSync(previous.Job.Sync, prevJobSync, in.Sync),
+			Sync:    mergeSync(prevJobSyncSpec, prevJobSync, in.Sync),
 			Schedule: job.ScheduleSpec{
 				Mode:         in.Schedule.Mode,
 				Interval:     in.Schedule.Interval,
@@ -411,10 +435,11 @@ func (d *Daemon) ApplyConfigView(name string, in ConfigView) (job.SaveResult, er
 	}
 
 	for i, pv := range in.Pairs {
-		sync := job.SyncSpec{}
-		if i < len(previous.Pair) {
-			prevResolved, _ := previous.Pair[i].EffectiveSync(previous)
-			sync = mergeSync(previous.Pair[i].Sync, syncView(previous.Pair[i].Sync, prevResolved), pv.Sync)
+		var sync job.SyncSpec
+		if i < len(prevPairs) {
+			prevResolved, _ := prevPairs[i].EffectiveSync(previous)
+			sync = mergeSync(prevPairs[i].Sync,
+				syncView(prevPairs[i].Sync, prevResolved), pv.Sync)
 		} else {
 			sync = mergeSync(job.SyncSpec{}, SyncView{}, pv.Sync)
 		}
@@ -434,22 +459,12 @@ func (d *Daemon) ApplyConfigView(name string, in ConfigView) (job.SaveResult, er
 		}
 		cfg.Pair = append(cfg.Pair, p)
 	}
-	if len(cfg.Pair) == 0 {
+	if len(cfg.Pair) == 0 && previous != nil {
 		// The UI sent nothing usable; keep the pairs we already had rather than
 		// deleting them by accident.
 		cfg.Pair = previous.Pair
 	}
-
-	res, err := job.Save(cfg, file, job.SaveOptions{Force: true})
-	if err != nil {
-		return res, err
-	}
-
-	// Reload so the next run uses what the user just saved.
-	if err := d.reload(name); err != nil {
-		return res, err
-	}
-	return res, nil
+	return cfg
 }
 
 // reload re-reads one job file into its entry.
