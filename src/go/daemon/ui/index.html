@@ -405,6 +405,10 @@
   .menubar nav button:hover { background: var(--line); color: var(--ink); border-color: transparent; }
   .menubar nav button[aria-expanded="true"] { background: var(--line); }
   .menubar .grow { flex: 1; }
+  /* The server clock is the first thing to go when space runs out: it is the
+     least actionable item in the bar, and keeping it wrapped onto two lines made
+     the whole bar taller and pushed 已连接 out of view. */
+  @media (max-width: 820px) { #now { display: none; } }
   .menu-pop {
     position: absolute; z-index: 70; min-width: 190px;
     background: var(--card); border: 1px solid var(--line); border-radius: var(--r-sm);
@@ -435,11 +439,11 @@
 
   /* ---- 工具栏 ----
      五个控件，顺序与 FFS 一致：比较设置 · Compare · 过滤器 · 同步设置 ·
-     Synchronize。两个大按钮的第二行印着当前的方式，FFS 就是这么做的。
+     Synchronize，后面跟一个停止（FFS 没有，但我们的跑可以被打断）。
 
-     这两个按钮要撑满整行。FFS 是固定窗口的程序，按钮定宽就已经铺满；网页是任意
-     宽度的，定宽会让它们挤在左边、右边空出一大片。用 flex 让它们平分剩余空间，
-     保持"控件铺满工具栏"这个特征。 */
+     宽度不靠把按钮拉大来填。拉大会让一个 200px 的内容待在一个 400px 的框里，
+     看上去就是“按钮被撑开了”。实际做法是把多出来的宽度放进两个组之间的空隙：
+     左边是比较相关的，右边是同步相关的，两个设置图标自然落在中间。 */
   .toolbar {
     display: flex; gap: 4px; align-items: stretch; flex-wrap: wrap;
     padding: 6px 8px;
@@ -449,17 +453,16 @@
   }
   .tb-btn {
     display: flex; align-items: center; justify-content: center;
-    flex: none; width: 40px; padding: 4px 0; border-radius: var(--r-sm);
+    flex: none; width: 38px; padding: 4px 0; border-radius: var(--r-sm);
     border: 1px solid var(--line); background: var(--card); color: var(--ink-2);
     font-size: 15px; line-height: 1;
   }
   .tb-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
   .tb-btn.on { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
-  .tb-split { display: flex; flex: 1 1 220px; min-width: 0; }
+  .tb-split { display: flex; flex: none; }
   .tb-action {
-    flex: 1; min-width: 0;
-    display: flex; align-items: center; justify-content: center; gap: 9px;
-    padding: 5px 8px;
+    display: flex; align-items: center; gap: 9px;
+    padding: 5px 14px; min-width: 150px;
     border-radius: var(--r-sm) 0 0 var(--r-sm);
     border: 1px solid var(--line); background: var(--card); color: var(--ink);
   }
@@ -469,9 +472,6 @@
     display: flex; align-items: center;
   }
   .tb-action:hover .ai { color: var(--blue); }
-  /* The icon sits immediately left of the two text lines and the pair is
-     centred together, the way the FFS buttons read. Pinning the icon to the
-     button edge left a stretch of empty space between it and the label. */
   .tb-action .txt { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
   .tb-action .at {
     font-size: 14px; font-weight: 700; letter-spacing: .2px;
@@ -483,10 +483,10 @@
   }
   .tb-action.warn .as { color: var(--warn); font-weight: 600; }
   .tb-arrow {
-    flex: none; width: 22px; padding: 0;
+    flex: none; width: 24px; padding: 0;
     border: 1px solid var(--line); border-left: none;
     border-radius: 0 var(--r-sm) var(--r-sm) 0;
-    background: var(--card); color: var(--muted); font-size: 10px;
+    background: var(--card); color: var(--muted); font-size: 9px;
   }
   .tb-arrow:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
 
@@ -508,30 +508,39 @@
     border-bottom: 1px solid var(--line);
     text-transform: uppercase; letter-spacing: .4px;
   }
+  /* 2x2, like the Configuration panel in FFS. Four in a row left "Save as…"
+     clipped to "Save as" mid-word, which reads as a broken button. */
   .panel-tools {
-    display: grid; grid-template-columns: repeat(4, 1fr);
+    display: grid; grid-template-columns: 1fr 1fr;
     border-bottom: 1px solid var(--line);
   }
   .panel-tools button {
-    border: none; border-right: 1px solid var(--line-2);
+    border: none; border-right: 1px solid var(--line-2); border-bottom: 1px solid var(--line-2);
     background: none; color: var(--ink-2); border-radius: 0;
-    padding: 5px 2px; font-size: 10.5px; display: grid; gap: 2px;
-    justify-items: center;
+    padding: 6px 4px; font-size: 11.5px; display: grid; gap: 3px;
+    justify-items: center; align-items: center;
   }
-  .panel-tools button:last-child { border-right: none; }
+  .panel-tools button:nth-child(2n) { border-right: none; }
+  .panel-tools button:nth-last-child(-n+2) { border-bottom: none; }
   .panel-tools button:hover { background: var(--blue-soft); color: var(--blue); border-color: var(--line-2); }
   .panel-tools .ic { font-size: 14px; line-height: 1; }
 
   .cfg-list { max-height: 168px; overflow: auto; }
   .cfg-list .row {
     display: grid; grid-template-columns: 1fr 16px; gap: 4px;
-    padding: 3px 8px; font-size: 12px; cursor: pointer;
-    border-bottom: 1px solid var(--line-2); color: var(--ink-2);
+    padding: 4px 8px 4px 9px; font-size: 12px; cursor: pointer;
+    border-bottom: 1px solid var(--line-2); border-left: 2px solid transparent;
+    color: var(--ink-2);
   }
   .cfg-list .row:hover { background: var(--bg); }
-  .cfg-list .row.on { background: var(--blue); color: #fff; }
-  .cfg-list .row.on .tick { color: #fff; }
-  @media (prefers-color-scheme: dark) { .cfg-list .row.on { color: #08111c; } }
+  /* A filled blue row was heavier than anything else on the screen, including
+     the primary action. A tint plus an accent bar says "this one" without
+     shouting. */
+  .cfg-list .row.on {
+    background: var(--blue-soft); color: var(--blue); font-weight: 600;
+    border-left-color: var(--blue);
+  }
+  .cfg-list .row.on .tick { color: var(--blue); }
   .cfg-list .tick { text-align: center; color: var(--ok); font-weight: 700; }
   .cfg-list .bad { color: var(--bad); }
   .cfg-list .row.on .bad { color: #fff; }
@@ -548,13 +557,16 @@
   .work { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 
   /* ---- 状态条：左侧状态，右侧统计（FFS 的底栏）---- */
+  /* A status bar, not a card. It used to be a bordered box the width of the work
+     area with one short sentence in it, which read as a stray panel; a status bar
+     is a thin strip that belongs to the window, so it gets a top rule and no box. */
   .statusbar {
     display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-    padding: 5px 10px; font-size: 12px; color: var(--muted);
-    border: 1px solid var(--line); border-radius: var(--r-sm);
-    background: color-mix(in srgb, var(--bg) 55%, var(--card));
+    padding: 6px 2px 2px; font-size: 12px; color: var(--muted);
+    border-top: 1px solid var(--line);
   }
-  /* An empty status bar is a box drawn around nothing. It appears when there is
+  .statusbar .grow { flex: 1; }
+  /* An empty status bar is a rule drawn under nothing. It appears when there is
      something to say and is gone otherwise. */
   .statusbar:has(#s-status:empty) { display: none; }
   .statusbar .grow { flex: 1; }
@@ -591,6 +603,14 @@
     box-shadow: var(--sh-1);
   }
   .pair-row:focus-within { border-color: color-mix(in srgb, var(--blue) 50%, var(--line)); }
+  /* Narrow: the two path boxes stack. Side by side they shrank to about 20px
+     each, which is narrower than the value they hold - the path became
+     unreadable rather than merely truncated. */
+  @media (max-width: 700px) {
+    .pair-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+    .pair-row > .pair-swap { justify-self: center; }
+    .pair-row > .pair-ops { justify-self: end; }
+  }
   .path-box { display: flex; gap: 6px; min-width: 0; }
   .path-box input {
     flex: 1; min-width: 0;
@@ -613,10 +633,10 @@
     transition: color .12s, border-color .12s, background .12s;
   }
   .pair-swap:hover { color: var(--blue); border-color: var(--blue); background: var(--blue-soft); }
-  .pair-ops { display: flex; gap: 3px; align-items: center; }
+  .pair-ops { display: flex; gap: 2px; align-items: center; }
   .pair-ops button {
     border-color: transparent; background: none; color: var(--muted);
-    padding: 5px 8px; font-size: 13px; line-height: 1; border-radius: var(--r-sm);
+    padding: 5px 9px; font-size: 14px; line-height: 1; border-radius: var(--r-sm);
   }
   .pair-ops button:hover { border-color: var(--line); color: var(--ink); background: var(--bg); }
   .pair-ops .p-remove:hover { border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, transparent); }
@@ -829,9 +849,12 @@
   <span id="conn" class="conn-badge">连接中…</span>
 </div>
 
-<!-- 工具栏：五个控件，顺序与 FFS 一致。
-     两个大按钮的第二行印着当前方式，这是 FFS 的做法 —— 不打开对话框也知道设的是什么。
-     图标是内联 SVG 线条画：emoji 在不同系统上会渲染成彩色或方框，那不是图标。 -->
+<!-- 工具栏：控件顺序与 FFS 一致。两个大按钮的第二行印着当前方式，
+     这是 FFS 的做法 —— 不打开对话框也知道设的是什么。
+     图标是内联 SVG 线条画：emoji 在不同系统上会渲染成彩色或方框，那不是图标。
+
+     布局是三组：比较组 · 两个设置 · 同步组。多出来的宽度放进组与组之间，
+     而不是把按钮拉宽 —— 按钮被撑开时内容四周全是空白。 -->
 <div class="toolbar">
   <button class="tb-btn" id="btn-compare-settings" title="比较设置（什么算「不一样」）">
     <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
@@ -854,7 +877,7 @@
         <span class="as" id="tv-compare">—</span>
       </span>
     </button>
-    <button class="tb-arrow" id="btn-compare-menu" title="快速切换比较方式">▾</button>
+    <button class="tb-arrow" id="btn-compare-menu" title="快速切换比较方式">▼</button>
   </div>
   <button class="tb-btn" id="btn-filter" title="过滤器（哪些路径参与同步）">
     <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
@@ -869,6 +892,9 @@
             stroke="currentColor" stroke-width="1.4"/>
     </svg>
   </button>
+
+  <span class="grow"></span>
+
   <div class="tb-split">
     <button class="tb-action" id="s-sync-btn" title="同步：按上面的比较结果执行">
       <span class="ai">
@@ -882,9 +908,10 @@
         <span class="as" id="tv-variant">—</span>
       </span>
     </button>
-    <button class="tb-arrow" id="btn-sync-menu" title="快速切换同步方式">▾</button>
+    <button class="tb-arrow" id="btn-sync-menu" title="快速切换同步方式">▼</button>
   </div>
-  <span class="grow"></span>
+  <!-- 停止紧挨 Synchronize：它打断的就是 Synchronize 启动的那一轮。
+       放到最右边会变成一个和谁都没关系的方块。 -->
   <button class="tb-btn" id="s-stop-btn" title="停止正在跑的那一轮" disabled>
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
       <rect x="4" y="4" width="8" height="8" rx="1" fill="currentColor"/>
@@ -954,8 +981,7 @@
     <div class="statusbar">
       <span id="s-status" class="stat"></span>
       <span class="grow"></span>
-    </div>
-  </div>
+    </div>  </div>
 </div>
 
 <!-- ============ 打开配置 对话框 ============ -->
@@ -2333,7 +2359,7 @@ function cmpRender() {
     const dis = n ? "" : " disabled";
     const on = cmpState.on[cat] ? "true" : "false";
     return `<button class="ffs-cat ${cls}${dis}" data-cat="${cat}"
-      aria-pressed="${on}" title="${esc(label)}：${n} 项（点一下只控制显示）">
+      aria-pressed="${on}" title="${esc(label)}：${n} 项（点一下只控制这一类的显示，不影响同步）">
       <span class="sym">${sym}</span> <b>${n}</b></button>`;
   };
 
@@ -2379,8 +2405,11 @@ function cmpRenderFoot() {
       `，只处理勾选的</span>`;
   }
   const hidden = cmpState.rows.length - shown;
+  // The category buttons carry only a symbol now, so this must not name a
+  // 「显示」 button that no longer exists on screen.
   html += `<span>已列出 ${shown} 项` +
-    (hidden > 0 ? `，另有 ${hidden} 项被上面的「显示」按钮隐藏` : "") + `</span>`;
+    (hidden > 0 ? `，另有 ${hidden} 项被分类开关隐藏（点表格下方的符号切换）` : "") +
+    `</span>`;
   if (list.length > cmpState.shown) {
     html += ` <button id="cmp-show-more">再显示 400 项</button>`;
   }
