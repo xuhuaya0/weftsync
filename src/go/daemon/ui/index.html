@@ -26,7 +26,11 @@
        1280 而不是更大：再宽下去，两个名称列各 500px 装 `reports/new1.txt`，
        单元格里的空白比内容还多。 */
     --shell: 1280px;
-    /* 左侧停靠栏宽度。工具栏要对齐到工作区的左边缘，就得知道这个数。 */
+    /* 左侧停靠栏宽度。工具栏要对齐到工作区的左边缘，就得知道这个数。
+       固定值，不用 vw：先前写成 clamp(240px, 22vw, 320px)，实测工具栏比
+       工作区右偏 16px —— 同一个表达式在「栏宽」和「工具栏内边距」两处没算出
+       同一个值。换成固定值后偏差为 0（工具栏与工作区左边缘同为 x=256）。
+       FFS 的目录树面板也是固定宽度，不随窗口变。 */
     --dock-w: 240px;
     /* 所有「工具条」类横条的底色。差 2% 的两个灰放在同一个卡片里，
        读起来就是一处失误而不是两层意思。 */
@@ -505,10 +509,10 @@
      同步), and the ▼s belong to the buttons they sit on. */
   .tb-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
   .tb-btn.on { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
-  .tb-split { display: flex; flex: none; align-items: stretch; }
+  .tb-split { display: flex; flex: 1 1 auto; max-width: 324px; align-items: stretch; }
   .tb-action {
-    display: flex; align-items: center; gap: 9px;
-    padding: 0 14px; min-width: 176px; height: 40px;
+    display: flex; align-items: center; justify-content: center; gap: 9px;
+    flex: 1 1 auto; min-width: 176px; padding: 0 14px; height: 40px;
     border-radius: var(--r-sm) 0 0 var(--r-sm);
     border: 1px solid var(--line); background: var(--card); color: var(--ink);
   }
@@ -535,15 +539,14 @@
     background: var(--card); color: var(--muted); font-size: 9px;
   }
   .tb-arrow:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
-  /* 宽屏时把同步组甩到右端：比较在左、同步在右，两个主动作各占一端，
-     中间那段空白读作「两组之间的间隔」。
-     门槛算出来的，不是拍的：两组控件最小共占 625px，可用宽 = 视口 - 16。
-     823px 下甩到右边只留 182px 空档 —— 那就又变成被圈出来的那块空白了，
-     而那时留在行尾的 163px 空档反而读作「这行结束了」。900px 起中间空档
-     才有 259px，够读成「间隔」。 */
-  @media (min-width: 900px) {
-    .tb-run { margin-left: auto; }
-  }
+  /* 不再把同步组甩到右端。那一手只在「行很窄」时看着像分组，窗口一大，
+     过滤器与同步之间就空出 400px 以上的空洞 —— 中间的空读作「这里少了个
+     控件」。
+
+     但全部靠左、右边留一大片也不行：1702px 窗口下三个控件只有 526px，
+     占工作区的 52%，又回到「太偏左」。所以两个主动作按钮按可用宽度伸展
+     （有上限）：823px 下伸展到刚好填满，1702px 下各 300px、整行占 80%。
+     按钮内的文字居中，否则按钮被拉宽后内容全贴在左边。 */
 
   /* ---- 左侧停靠面板 ---- */
   .main {
@@ -847,6 +850,16 @@
     margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line);
     font-size: 11.5px; color: var(--muted); line-height: 1.6;
   }
+  /* 三个页的页脚说明用同一个类。过滤器原来用的是 .filter-hint（带分隔线），
+     另外两页什么都没有 —— 翻页时下面那一块时有时无，像是三个不同的窗拼的。 */
+  .dlg-hint {
+    margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line);
+    font-size: 11.5px; color: var(--muted); line-height: 1.6;
+  }
+  .dlg-hint code {
+    background: rgba(127,127,127,.14); padding: 1px 5px; border-radius: 4px;
+  }
+  .filter-col .dlg-sect { margin-bottom: 2px; }
   .filter-hint code {
     background: rgba(127,127,127,.14); padding: 1px 5px; border-radius: 4px;
   }
@@ -1141,13 +1154,15 @@
 <!-- ============ 设置对话框 ============ -->
 <div id="dlg-mask" class="dlg-mask hidden"></div>
 
-<!-- ============ 同步设置：一窗三页 ============
-     比较 / 同步 / 过滤器 是同一份配置的三个面，所以它们在同一个窗里当三页
-     （FFS 的 Synchronization Settings 就是这么分的）。工具栏上的三个入口
-     打开的是同一个窗的不同页：比较▼ → 比较页，过滤器 → 过滤器页，
-     同步▼ → 同步页。 -->
+<!-- ============ 设置：一窗三页 ============
+     比较 / 同步 / 过滤器 是同一份配置的三个面，所以它们在一个窗里当三页，
+     入口是工具栏上那三个控件：比较▼ → 比较页，过滤器 → 过滤器页，同步▼ → 同步页。
+
+     标题跟着页签变（比较设置 / 同步设置 / 过滤器）。FFS 是三个各自命名的窗，
+     而点「过滤器」弹出一个叫「同步设置」的窗就是前后不一致 —— 共用壳，但名字
+     必须是当前这一页的名字。窗宽也固定：三个窗各自定宽会让翻页时整个框跳一下。 -->
 <div id="dlg-settings" class="dlg wide hidden">
-  <div class="dlg-head"><strong>同步设置</strong><span class="grow"></span>
+  <div class="dlg-head"><strong id="dlg-settings-title">比较设置</strong><span class="grow"></span>
     <button class="icon-btn" data-dlg-close title="关闭">✕</button></div>
   <div class="dlg-tabs" role="tablist">
     <button class="dlg-tab" data-tab="compare" role="tab" aria-selected="false">比较</button>
@@ -1156,26 +1171,36 @@
   </div>
   <div class="dlg-body">
     <div class="dlg-pane hidden" data-pane="compare">
-      <div class="dlg-sect">判断两个文件是否相同时，比什么</div>
+      <div class="dlg-sect">比较方式</div>
       <div id="dlg-compare-opts"></div>
+      <div class="dlg-hint">
+        比较只读两边，不改任何东西。选错只是多扫一遍或少发现一些改动。
+      </div>
     </div>
     <div class="dlg-pane hidden" data-pane="sync">
-      <div class="dlg-sect">哪些方向会改动，哪些会被删</div>
+      <div class="dlg-sect">同步方式</div>
       <div id="dlg-sync-opts"></div>
       <div class="note" id="dlg-sync-warn" style="display:none;margin:12px 0 0"></div>
+      <div class="dlg-hint">
+        对应 FFS 的 Two way / Mirror / Update。FFS 还有第四个「自定义」变体
+        （按左右独有、左右更新等类别逐条指定方向）；这里的作业文件只存这三种，
+        所以不摆一个选了也不生效的单选项。
+      </div>
     </div>
     <div class="dlg-pane hidden" data-pane="filter">
       <div class="filter-grid">
         <div class="filter-col">
-          <label>包含（白名单：写了就只同步匹配的，其余一律不动）</label>
+          <div class="dlg-sect">包含</div>
+          <label>白名单：写了就只同步匹配的，其余一律不动。</label>
           <textarea id="dlg-include" rows="5" placeholder="*.xlsx&#10;reports/**"></textarea>
         </div>
         <div class="filter-col">
-          <label>排除（先按包含筛，再把匹配的剔掉）</label>
+          <div class="dlg-sect">排除</div>
+          <label>先按包含筛，再把匹配的剔掉。</label>
           <textarea id="dlg-exclude" rows="5" placeholder="*.tmp&#10;_*&#10;_*/**"></textarea>
         </div>
       </div>
-      <div class="filter-hint">
+      <div class="dlg-hint">
         一行一条，大小写不敏感。<code>/foo</code> 从同步根锚定；<code>**</code> 匹配任意层级。
         这里的规则作用于<strong>所有</strong>目录对。
       </div>
@@ -3436,6 +3461,9 @@ function showSettingsTab(tab) {
   document.querySelectorAll("#dlg-settings .dlg-pane").forEach(p => {
     p.classList.toggle("hidden", p.dataset.pane !== tab);
   });
+  // 标题跟着页签走。点「过滤器」弹出一个叫「同步设置」的窗，就是前后不一致。
+  const titles = { compare: "比较设置", sync: "同步设置", filter: "过滤器" };
+  document.getElementById("dlg-settings-title").textContent = titles[tab] || "设置";
 }
 
 // fillSettings builds all three pages up front. They are a few radio rows and two
