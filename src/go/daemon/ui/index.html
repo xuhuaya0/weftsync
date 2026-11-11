@@ -70,7 +70,8 @@
      it and cannot be clicked. scroll-padding keeps that gap for scrollIntoView
      and for keyboard focus. Measured: clicking the first toolbar button after a
      scroll hit the topbar instead. */
-  html { scroll-padding-top: 68px; }
+  /* 顶栏高度固定，不再需要 scroll-padding-top。 */
+  html { scroll-padding-top: 8px; }
   body {
     margin: 0; padding: 0; background: var(--desk); color: var(--ink);
     font: 13.5px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
@@ -434,32 +435,33 @@
     .app { margin: 0; min-height: 100vh; border: none; border-radius: 0; box-shadow: none; }
   }
 
-  /* ---- 主界面：照 FreeFileSync 的排布 ----
-     从上到下：标题+菜单栏 → 工具栏（比较 / 过滤器 / 同步）→ 左侧停靠面板
-     + 右侧工作区（目录对、结果表、分类条）。
+  /* ---- 顶栏：品牌 + 菜单 + 主操作 + 状态，一行 ----
+     以前是两行：菜单栏 32px + 工具栏 55px。而菜单栏右侧一直是空的，工具栏
+     右侧也是空的 —— 两次都没把宽度用满，合起来还白占 40px 高。同一行的右边
+     空着不用，却在下一行重新开一条从左起排的横条，这是最容易看出「没设计过」
+     的那类安排。
 
-     三者共用 --shell（现在是外框的宽度）：窗口再宽，内容也不跟着无限拉长。 */
+     现在一行：左边品牌与菜单，右边比较 / 过滤器 / 同步 / 停止，最右是时钟与连接。
+     窗口窄时右半截自动换到第二行（flex-wrap），而不是把按钮压挤。 */
   .menubar {
-    display: flex; gap: 0; align-items: center;
-    padding: 0 10px; height: 32px; flex: none;
-    background: var(--bg);
+    display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+    padding: 5px 10px; min-height: 46px; flex: none;
+    background: var(--bg); border-bottom: 1px solid var(--line);
   }
   .menutitle {
-    font-size: 12px; font-weight: 600; color: var(--ink-2);
-    padding-right: 12px; white-space: nowrap;
+    font-size: 12.5px; font-weight: 700; color: var(--ink);
+    padding-right: 4px; white-space: nowrap; letter-spacing: .2px;
   }
-  .menutitle .nm { color: var(--ink); }
-  .menutitle .dirty { color: var(--warn); margin-left: 2px; }
   .menubar nav { display: flex; gap: 0; }
   .menubar nav button {
     border: 1px solid transparent; background: none; color: var(--ink-2);
-    padding: 3px 10px; font-size: 12.5px; border-radius: var(--r-sm);
+    padding: 4px 10px; font-size: 12.5px; border-radius: var(--r-sm);
   }
   .menubar nav button:hover { background: var(--line); color: var(--ink); border-color: transparent; }
   .menubar nav button[aria-expanded="true"] { background: var(--line); }
   .menubar .grow { flex: 1; }
   /* 时钟和连接徽章靠在一起没留缝，屏幕上就变成「17:15已连接」。 */
-  #now { font-size: 11px; color: var(--muted); margin-right: 10px; }
+  #now { font-size: 11px; color: var(--muted); margin: 0 10px 0 12px; }
   #conn { flex: none; }
   /* The server clock is the first thing to go when space runs out: it is the
      least actionable item in the bar, and keeping it wrapped onto two lines made
@@ -493,28 +495,16 @@
   .conn-badge.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
   .conn-badge.bad::before { background: var(--bad); }
 
-  /* ---- 工具栏 ----
-     控件按 FFS 的顺序排成一行：比较设置 · Compare · 过滤器 · 同步设置 ·
-     Synchronize，后面跟一个停止（FFS 没有，但我们的跑可以被打断）。
+  /* ---- 主操作组 ----
+     控件顺序与 FFS 一致：比较▼ · 过滤器 · 同步▼ · 停止。
 
-     两条都是从实际画面上改出来的：
-     1. 不要在中间放空隙。上一版把多出来的宽度放进两组之间，结果是一条 600px
-        的空白夹在工具栏正中 —— 那不是留白，那看起来像这里少了一个控件。
-     2. 工具栏不要做成一条带边框的白条。做了就成了一个矩形，矩形里的空白
-        就是「没填满」；不做，右边的空白只是页面本身，控件像浮在页面上。
-        背景取 --bg 而不是透明，因为它是 sticky 的，滚动时要盖住下面的内容。 */
+     这一组靠右（margin-left: auto）。顶栏是「左边是用来导航的，右边是用来动手的」
+     这种最普通的窗口形状，中间那段空就是两侧分组之间的间隔，不再是一条夹在
+     控件中间的洞。 */
   .toolbar {
     display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
-    /* 从工作区的左边缘开始，不从配置栏上方开始：这行控件管的是右边那一列
-       （目录对、对比结果），压在配置栏上方会让两列的分界在上半部分断开。
-       256 = 1（外框边）+ 8（.main 内边距）+ 240（停靠栏）+ 8（列间距）- 1。 */
-    padding: 6px 10px 8px calc(var(--dock-w) + 15px);
-    background: var(--bg);
-    border-bottom: 1px solid var(--line);
-    flex: none;
+    flex: none; margin-left: auto;
   }
-  /* 窗口窄到停靠栏抽到上面时，左边缘就是外框内侧了。 */
-  @media (max-width: 700px) { .toolbar { padding-left: 10px; } }
   /* 整行都是 40px 高。以前每个控件自己长，两个带副标题的大按钮把整行撑到 51px，
      旁边那四个方按钮就变成 40x51 的竖条 —— 图标缩在中间，看着像个空盒子。 */
   .tb-btn {
@@ -645,6 +635,9 @@
   }
   .cfg-list .row.on .tick { color: var(--blue); }
   .cfg-list .tick { text-align: center; color: var(--ok); font-weight: 700; }
+  /* 未保存的改动标在名字后面。以前它标在标题栏的「weftsync — 配置名」后面，
+     而那个名字已经去掉了（配置名在下面这张表里，重复一遍只是白占最宝贵的一条）。 */
+  .cfg-list .dirty { color: var(--warn); font-weight: 700; }
   .cfg-list .bad { color: var(--bad); }
   .cfg-list .row.on .bad { color: #fff; }
   .overview { font-size: 12px; }
@@ -1008,74 +1001,68 @@
      对话框与抽屉是 fixed 定位，挂在外面。 -->
 <div class="app">
 
-<!-- 菜单栏：标题 = 当前配置的文件名（改了没存就带 *），右边三个菜单。
-     这是 FreeFileSync 的形状：配置是一份文档，New / Open / Save / Save as 在 File 里。 -->
+<!-- 顶栏一行：品牌 + 菜单（左）· 比较▼ 过滤器 同步▼ 停止（右）· 时钟 · 连接。
+     标题栏不再印当前配置名 —— 配置名就在下面「配置」那张表里，还带勾选态；
+     同一条信息写两遍，占掉的却是屏幕上最值钱的一条横带。
+
+     图标是内联 SVG 线条画：emoji 在不同系统上会渲染成彩色或方框，那不是图标。
+     停止紧挨同步：它打断的就是同步启动的那一轮。 -->
 <div class="menubar">
-  <span class="menutitle">
-    weftsync<span class="nm"> — <span id="cfg-name">（未选择）</span></span><span
-      class="dirty" id="cfg-dirty" style="display:none">*</span>
-  </span>
+  <span class="menutitle">weftsync</span>
   <nav>
     <button data-menu="file">文件</button>
     <button data-menu="tools">工具</button>
     <button data-menu="help">帮助</button>
   </nav>
   <span class="grow"></span>
+
+  <div class="toolbar">
+    <div class="tb-split">
+      <button class="tb-action" id="s-compare-btn" title="比较：只扫描，不改任何东西">
+        <span class="ai">
+          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+            <rect x="2" y="3" width="7" height="14" rx="1.2" stroke="currentColor" stroke-width="1.4" fill="none"/>
+            <rect x="11" y="3" width="7" height="14" rx="1.2" stroke="currentColor" stroke-width="1.4" fill="none"/>
+            <path d="M6 8h3M6 11h3M12 8h3M12 11h3" stroke="currentColor" stroke-width="1.2"/>
+          </svg>
+        </span>
+        <span class="txt">
+          <span class="at">比较</span>
+          <span class="as" id="tv-compare">—</span>
+        </span>
+      </button>
+      <button class="tb-arrow" id="btn-compare-menu" title="比较设置：打开设置窗的「比较」页">▼</button>
+    </div>
+    <button class="tb-btn" id="btn-filter" title="过滤器：打开设置窗的「过滤器」页">
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+        <path d="M2 3h12L9.5 8.5V13l-3 1V8.5L2 3z" stroke="currentColor" stroke-width="1.4"
+              fill="none" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <div class="tb-split tb-run">
+      <button class="tb-action" id="s-sync-btn" title="同步：按上面的比较结果执行">
+        <span class="ai">
+          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+            <path d="M3 7h11l-2.5-2.5M17 13H6l2.5 2.5" stroke="currentColor" stroke-width="1.5"
+                  fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <span class="txt">
+          <span class="at">同步</span>
+          <span class="as" id="tv-variant">—</span>
+        </span>
+      </button>
+      <button class="tb-arrow" id="btn-sync-menu" title="同步设置：打开设置窗的「同步」页">▼</button>
+    </div>
+    <button class="tb-btn" id="s-stop-btn" title="停止正在跑的那一轮" disabled>
+      <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+        <rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor"/>
+      </svg>停止
+    </button>
+  </div>
+
   <span id="now"></span>
   <span id="conn" class="conn-badge">连接中…</span>
-</div>
-
-<!-- 工具栏 = 三个控件，和 FFS 一样：比较▼ · 过滤器 · 同步▼。
-     两个 ▼ 不另开菜单，它们打开的是同一个「同步设置」窗的「比较」页和
-     「同步」页；过滤器打开的是同一个窗的「过滤器」页。三件事本来就是同一份
-     配置的三个面，拆成三个窗之后，同一段说明就得在三个不同大小的框里各写一遍。
-
-     图标是内联 SVG 线条画：emoji 在不同系统上会渲染成彩色或方框，那不是图标。
-
-     停止紧挨同步：它打断的就是同步启动的那一轮。 -->
-<div class="toolbar">
-  <div class="tb-split">
-    <button class="tb-action" id="s-compare-btn" title="比较：只扫描，不改任何东西">
-      <span class="ai">
-        <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
-          <rect x="2" y="3" width="7" height="14" rx="1.2" stroke="currentColor" stroke-width="1.4" fill="none"/>
-          <rect x="11" y="3" width="7" height="14" rx="1.2" stroke="currentColor" stroke-width="1.4" fill="none"/>
-          <path d="M6 8h3M6 11h3M12 8h3M12 11h3" stroke="currentColor" stroke-width="1.2"/>
-        </svg>
-      </span>
-      <span class="txt">
-        <span class="at">比较</span>
-        <span class="as" id="tv-compare">—</span>
-      </span>
-    </button>
-    <button class="tb-arrow" id="btn-compare-menu" title="比较设置：打开设置窗的「比较」页">▼</button>
-  </div>
-  <button class="tb-btn" id="btn-filter" title="过滤器：打开设置窗的「过滤器」页">
-    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-      <path d="M2 3h12L9.5 8.5V13l-3 1V8.5L2 3z" stroke="currentColor" stroke-width="1.4"
-            fill="none" stroke-linejoin="round"/>
-    </svg>
-  </button>
-  <div class="tb-split tb-run">
-    <button class="tb-action" id="s-sync-btn" title="同步：按上面的比较结果执行">
-      <span class="ai">
-        <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
-          <path d="M3 7h11l-2.5-2.5M17 13H6l2.5 2.5" stroke="currentColor" stroke-width="1.5"
-                fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </span>
-      <span class="txt">
-        <span class="at">同步</span>
-        <span class="as" id="tv-variant">—</span>
-      </span>
-    </button>
-    <button class="tb-arrow" id="btn-sync-menu" title="同步设置：打开设置窗的「同步」页">▼</button>
-  </div>
-  <button class="tb-btn" id="s-stop-btn" title="停止正在跑的那一轮" disabled>
-    <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
-      <rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor"/>
-    </svg>停止
-  </button>
 </div>
 
 
@@ -2129,7 +2116,7 @@ function planCardPlaceholder() {
     还没有比较结果。
     <br>
     <span style="font-style:normal;font-size:12px;opacity:.75">
-      点左上角「比较」：它只扫描，不改任何东西。看清楚了再点「同步」。
+      点右上角「比较」：它只扫描，不改任何东西。看清楚了再点「同步」。
     </span>
   </div>`;
 }
@@ -3004,7 +2991,7 @@ buildDrawerNav();
 function sessionList() {
   const out = [];
   for (const j of (snapshot && snapshot.jobs) || []) {
-    out.push({ key: j.name, job: j.name, label: j.name });
+    out.push({ key: j.name, job: j.name, label: j.name, file: j.file || "" });
   }
   return out;
 }
@@ -3027,8 +3014,9 @@ function syncSessionPicker() {
       sessionJob = list.length ? list[0].key : "";
     }
     host.innerHTML = list.length
-      ? list.map(s => `<div class="row${s.key === sessionJob ? " on" : ""}" data-key="${esc(s.key)}">
-           <span>${esc(s.label)}</span>
+      ? list.map(s => `<div class="row${s.key === sessionJob ? " on" : ""}" data-key="${esc(s.key)}"
+             title="${esc(s.file)}">
+           <span>${esc(s.label)}<span class="dirty" style="display:none"> *</span></span>
            <span class="tick">${s.key === sessionJob ? "✔" : ""}</span>
          </div>`).join("")
       : `<div class="row"><span class="bad">（没有配置）</span><span></span></div>`;
@@ -3041,25 +3029,18 @@ function syncSessionPicker() {
   return list.find(s => s.key === sessionJob) || null;
 }
 
-// updateTitle mirrors FFS's title bar: the configuration's file name, with a star
-// while there are edits that have not been written.
+// updateTitle marks the active configuration as having unsaved edits.
+//
+// The title bar used to print "weftsync — demo". That said the same thing as the
+// Configuration panel right below it, and it spent the most valuable strip on the
+// screen saying it. The name now lives only where the list is, and the star that
+// used to sit next to the title sits next to the name instead.
 function updateTitle() {
-  const name = document.getElementById("cfg-name");
-  if (!name) return;
-  // The config's name, not its file name: several configs may legitimately be
-  // called job.toml in different folders, and the title would then say nothing.
-  // The path is in the tooltip for when it matters.
-  //
-  // A draft (New, not saved yet) has no name and must not borrow the previous
-  // one, or the title would claim the edits belong to a file they are not in.
-  let label;
-  if (!sessionCfg) label = sessionJob || "（未选择）";
-  else if (sessionCfg.name) label = sessionCfg.name;
-  else label = "（未命名）";
-  name.textContent = label;
-  name.title = (sessionCfg && sessionCfg.file) || "";
-  const star = document.getElementById("cfg-dirty");
-  if (star) star.style.display = dirty ? "" : "none";
+  document.querySelectorAll(".cfg-list .row[data-key]").forEach(row => {
+    const star = row.querySelector(".dirty");
+    if (!star) return;
+    star.style.display = (dirty && row.dataset.key === sessionJob) ? "" : "none";
+  });
 }
 
 // renderOverview fills the second dock panel: one row per pair with what the last
@@ -3126,7 +3107,7 @@ function markDirty() {
   const st = document.getElementById("s-status");
   if (st && !st.classList.contains("busy")) {
     st.className = "stat";
-    st.textContent = "有未保存的改动（File → Save 写入）。";
+    st.textContent = "有未保存的改动（「文件 → 保存」写入）。";
   }
 }
 
@@ -3137,7 +3118,7 @@ async function loadSession() {
   if (!sel) {
     sessionCfg = null;
     renderPairs();
-    status.textContent = "还没有配置。用 File → New 新建一个。";
+    status.textContent = "还没有配置。用「文件 → 新建」建一个。";
     return;
   }
   try {
@@ -3691,7 +3672,7 @@ function newConfig() {
   renderPairs();
   document.getElementById("s-status").className = "stat";
   document.getElementById("s-status").textContent =
-    "新配置（尚未保存）。用 File → Save 选择保存位置。";
+    "新配置（尚未保存）。用「文件 → 保存」选择保存位置。";
   updateTitle();
 }
 
