@@ -22,6 +22,13 @@
     --r-sm: 6px;
     --r: 9px;
     --r-lg: 13px;
+    /* 内容最大宽度。窗口比它宽时居中，不再把每一行拉长。
+       1280 而不是更大：再宽下去，两个名称列各 500px 装 `reports/new1.txt`，
+       单元格里的空白比内容还多。 */
+    --shell: 1280px;
+    /* 所有「工具条」类横条的底色。差 2% 的两个灰放在同一个卡片里，
+       读起来就是一处失误而不是两层意思。 */
+    --tint: color-mix(in srgb, var(--bg) 55%, var(--card));
     --sh-1: 0 1px 2px rgba(16, 24, 40, .05);
     --sh-2: 0 2px 6px rgba(16, 24, 40, .07), 0 1px 2px rgba(16, 24, 40, .05);
     --sh-3: 0 14px 40px rgba(16, 24, 40, .16), 0 2px 8px rgba(16, 24, 40, .08);
@@ -193,15 +200,15 @@
   .ffs { overflow: hidden; }
   .ffs-tools {
     display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-    padding: 7px 12px; border-bottom: 1px solid var(--line);
+    padding: 5px 12px; border-bottom: 1px solid var(--line);
     /* 和表格底下的分类条同一个底色。一处白一处灰，就成了两条各管一套的横条。 */
-    background: color-mix(in srgb, var(--bg) 55%, var(--card));
+    background: var(--tint);
   }
   .ffs-tools .count {
     font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums;
   }
   .ffs-title { font-weight: 600; font-size: 13px; }
-  .ffs-filter { width: 200px; font-size: 12.5px; padding: 4px 9px; }
+  .ffs-filter { width: 200px; font-size: 12.5px; padding: 3px 9px; }
   /* The header strip uses the same six tracks as the table below it (see the
      colgroup), so 本地 / 动作 / 云端 sit exactly above the columns they name.
      Without matching widths the labels drifted a few pixels off the columns and
@@ -295,8 +302,9 @@
   .ffs-act {
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 26px; height: 20px; padding: 0 6px; border-radius: 999px;
-    font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700;
-    background: color-mix(in srgb, currentColor 12%, transparent);
+    /* 不用 mono：等宽字体里的 → 是一条很细的横杠，11px 下和「—」分不出。 */
+    font-family: inherit; font-size: 13px; font-weight: 700; line-height: 1;
+    background: color-mix(in srgb, currentColor 14%, transparent);
   }
   .ffs-a.creates .ffs-act { color: var(--blue); }
   .ffs-a.left .ffs-act { color: var(--ok); }
@@ -305,7 +313,7 @@
   .ffs-bar {
     display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
     padding: 8px 12px; border-top: 1px solid var(--line);
-    background: color-mix(in srgb, var(--bg) 55%, var(--card));
+    background: var(--tint);
   }
   /* 分类开关是「显示过滤器」，不是「选中」。用复选框会让人以为取消勾选 = 不同步，
      而它只影响这张表里看得到什么。所以用按下态按钮（aria-pressed）而不是勾选框。 */
@@ -339,6 +347,8 @@
     display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
     padding: 4px 12px 10px; font-size: 11.5px; color: var(--muted);
   }
+  /* 没话说时这一行不应该还占 14px。 */
+  .ffs-more:empty { display: none; }
   .ffs-sel-hint {
     color: var(--blue); font-weight: 600;
     background: var(--blue-soft); border-radius: 999px; padding: 1px 10px;
@@ -386,9 +396,14 @@
   /* ---- 主界面：照 FreeFileSync 的排布 ----
      从上到下：标题+菜单栏 → 工具栏（比较设置 / Compare / 过滤器 / 同步设置 /
      Synchronize）→ 左侧停靠面板（Configuration、Overview）+ 右侧工作区
-     （目录对、结果表、分类条）。 */
+     （目录对、结果表、分类条）。
+
+     三者共用 --shell：窗口再宽，内容也不跟着无限拉长。
+     实测过 1702px 窗口不加限制的样子：停靠面板 236px 只剩 14%，两个路径输入框
+     553px 一个，表格 1438px 而名称列 606px —— 比例散掉就是这么来的。 */
   .menubar {
     display: flex; gap: 0; align-items: center;
+    max-width: var(--shell); margin: 0 auto;
     padding: 0 8px; height: 30px;
     background: var(--bg);
     position: sticky; top: 0; z-index: 30;
@@ -453,22 +468,25 @@
         就是「没填满」；不做，右边的空白只是页面本身，控件像浮在页面上。
         背景取 --bg 而不是透明，因为它是 sticky 的，滚动时要盖住下面的内容。 */
   .toolbar {
-    display: flex; gap: 6px; align-items: stretch; flex-wrap: wrap;
-    padding: 6px 8px;
+    display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+    max-width: var(--shell); margin: 0 auto;
+    padding: 5px 8px 7px;
     background: var(--bg);
-    border-bottom: 1px solid var(--line);
     position: sticky; top: 30px; z-index: 25;
   }
+  /* 整行都是 40px 高。以前每个控件自己长，两个带副标题的大按钮把整行撑到 51px，
+     旁边那四个方按钮就变成 40x51 的竖条 —— 图标缩在中间，看着像个空盒子。 */
   .tb-btn {
     display: flex; align-items: center; justify-content: center; gap: 6px;
-    flex: none; min-width: 40px; padding: 4px 10px; border-radius: var(--r-sm);
+    flex: none; min-width: 40px; height: 40px; padding: 0 10px;
+    border-radius: var(--r-sm);
     border: 1px solid var(--line); background: var(--card); color: var(--ink-2);
     font-size: 12.5px; font-weight: 600; line-height: 1;
   }
   .tb-btn svg { flex: none; }
   /* A labelled stop button. As a bare grey square it was unreadable: nothing said
      what it stopped, and disabled it looked like a rendering artefact. */
-  #s-stop-btn { padding: 4px 12px; }
+  #s-stop-btn { padding: 0 12px; }
   /* Off, not faded. A greyed-out bordered button still looks like a button that
      is there and broken; with no border it just stops being part of the row. */
   #s-stop-btn:disabled {
@@ -477,14 +495,14 @@
   /* Group separators. Six controls in one undifferentiated row read as a single
      undivided pile; FFS separates the compare cluster from the sync cluster too. */
   .tb-sep {
-    flex: none; width: 1px; margin: 4px 4px; background: var(--line);
+    flex: none; width: 1px; height: 22px; margin: 0 3px; background: var(--line);
   }
   .tb-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
   .tb-btn.on { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
-  .tb-split { display: flex; flex: none; }
+  .tb-split { display: flex; flex: none; align-items: stretch; }
   .tb-action {
     display: flex; align-items: center; gap: 9px;
-    padding: 5px 14px; min-width: 176px;
+    padding: 0 14px; min-width: 176px; height: 40px;
     border-radius: var(--r-sm) 0 0 var(--r-sm);
     border: 1px solid var(--line); background: var(--card); color: var(--ink);
   }
@@ -494,13 +512,13 @@
     display: flex; align-items: center;
   }
   .tb-action:hover .ai { color: var(--blue); }
-  .tb-action .txt { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+  .tb-action .txt { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; gap: 1px; }
   .tb-action .at {
-    font-size: 14px; font-weight: 700; letter-spacing: .2px;
+    font-size: 13.5px; font-weight: 700; letter-spacing: .2px; line-height: 1.15;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
   }
   .tb-action .as {
-    font-size: 11px; color: var(--muted);
+    font-size: 11px; color: var(--muted); line-height: 1.2;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
   }
   .tb-action.warn .as { color: var(--warn); font-weight: 600; }
@@ -511,14 +529,25 @@
     background: var(--card); color: var(--muted); font-size: 9px;
   }
   .tb-arrow:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
+  /* 宽屏时把同步组甩到右端：比较在左、同步在右，两个主动作各占一端，
+     中间那段空白读作「两组之间的间隔」。窄屏不做 —— 823px 下甩出去就是
+     170px 的空档，又变成被圈出来的那块空白了。 */
+  @media (min-width: 1180px) {
+    .tb-run { margin-left: auto; }
+    .tb-sep-run { display: none; }
+  }
 
   /* ---- 左侧停靠面板 ---- */
-  .main { display: flex; align-items: flex-start; gap: 10px; padding: 8px; min-height: calc(100vh - 96px); }
+  .main {
+    display: flex; align-items: flex-start; gap: 8px; padding: 8px;
+    max-width: var(--shell); margin: 0 auto; width: 100%;
+    min-height: calc(100vh - 88px);
+  }
   /* 700 而不是 860：823px 宽下停靠面板一旦抽到上面，首屏就全是「配置 + 概览」，
      要滚动才能看到对比结果 —— 而对比结果才是这一页要看的东西。 */
   @media (max-width: 700px) { .main { flex-direction: column; } }
   .dock {
-    width: 236px; flex: none; display: flex; flex-direction: column; gap: 10px;
+    width: 240px; flex: none; display: flex; flex-direction: column; gap: 8px;
   }
   @media (max-width: 700px) { .dock { width: 100%; } }
   .panel {
@@ -528,7 +557,7 @@
   .panel-head {
     display: flex; align-items: center; gap: 6px;
     padding: 4px 9px; font-size: 11.5px; font-weight: 700; color: var(--ink-2);
-    background: color-mix(in srgb, var(--bg) 55%, var(--card));
+    background: var(--tint);
     border-bottom: 1px solid var(--line);
     text-transform: uppercase; letter-spacing: .4px;
   }
@@ -577,6 +606,10 @@
                          text-transform: uppercase; letter-spacing: .3px; }
 
   .work { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+  /* .card 自带 margin-bottom: 16px（那是给抽屉里一叠卡片用的），放进 .work 就和
+     gap:8 叠成 24 —— 目录对到结果的间隙是 8，结果到状态条的间隙是 24，同一条
+     缝两种宽度。 */
+  .work > .card { margin-bottom: 0; }
 
   /* ---- 状态条：左侧状态，右侧统计（FFS 的底栏）---- */
   /* A status bar, not a card. It used to be a bordered box the width of the work
@@ -605,13 +638,13 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 
   .plan-head {
-    padding: 10px 14px; border-bottom: 1px solid var(--line);
-    background: color-mix(in srgb, var(--bg) 45%, var(--card));
+    padding: 7px 12px; border-bottom: 1px solid var(--line);
+    background: var(--tint);
     border-radius: var(--r) var(--r) 0 0;
   }
 
   /* ---- 文件夹对：一行就是 FFS 的一套「左 ⇄ 右」---- */
-  .pairs { display: flex; flex-direction: column; gap: 7px; }
+  .pairs { display: flex; flex-direction: column; gap: 8px; }
   .pair-row {
     display: grid;
     /* minmax(0,1fr) rather than 1fr: a grid track refuses to shrink below its
@@ -625,13 +658,19 @@
     box-shadow: var(--sh-1);
   }
   .pair-row:focus-within { border-color: color-mix(in srgb, var(--blue) 50%, var(--line)); }
-  /* Narrow: the two path boxes stack. Side by side they shrank to about 20px
-     each, which is narrower than the value they hold - the path became
-     unreadable rather than merely truncated. */
-  @media (max-width: 700px) {
-    .pair-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
-    .pair-row > .pair-swap { justify-self: center; }
-    .pair-row > .pair-ops { justify-self: end; }
+  /* 窄窗口：左右两侧改成上下两行，交换键竖着跨两行，操作键也跨两行。
+     823px 下两栅并排时每个路径框只剩 90px —— 一个同步工具的主要控件只显示
+     13 个字符，那才是真正的不协调。实测：并排 90px / 上下两行 330px。 */
+  @media (max-width: 1023px) {
+    .pair-row {
+      grid-template-columns: 36px minmax(0, 1fr) auto;
+      grid-template-areas: "swap left ops" "swap right ops";
+      gap: 6px 8px;
+    }
+    .pair-row > .p-side-a { grid-area: left; }
+    .pair-row > .p-side-b { grid-area: right; }
+    .pair-row > .pair-swap { grid-area: swap; align-self: center; justify-self: center; }
+    .pair-row > .pair-ops { grid-area: ops; align-self: center; }
   }
   .path-box { display: flex; gap: 6px; min-width: 0; align-items: center; }
   /* 两个路径框长得一模一样，里面又都是被截断的长路径，不标一手分不出哪个是本机。
@@ -927,8 +966,8 @@
     </svg>
   </button>
 
-  <span class="tb-sep"></span>
-  <div class="tb-split">
+  <span class="tb-sep tb-sep-run"></span>
+  <div class="tb-split tb-run">
     <button class="tb-action" id="s-sync-btn" title="同步：按上面的比较结果执行">
       <span class="ai">
         <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
@@ -2195,7 +2234,8 @@ function compareHTML(p) {
     <div class="ffs-tools">
       <input id="cmp-q" type="text" placeholder="按路径筛选…" class="ffs-filter">
       <span class="grow"></span>
-      <span class="count">共 ${rows.length} 项 · 已列出 ${Math.min(cmpState.shown, cmpFiltered().length)} 项</span>
+      <span class="count" title="总数与当前表格里实际列出的行数；差额是被下方分类开关折叠的（例如「内容相同」默认不列）"
+        >共 ${rows.length} 项 · 显示 ${Math.min(cmpState.shown, cmpFiltered().length)} 项</span>
     </div>
     <div class="ffs-grid">
       <div class="ffs-pick-head"></div>
@@ -2460,26 +2500,21 @@ function syncMasterBox() {
   master.indeterminate = on > 0 && on < rows.length;
 }
 
-// cmpRenderFoot updates the row-count line and the "N selected" hint.
+// cmpRenderFoot updates the "N selected" hint and the show-more button.
 function cmpRenderFoot() {
   const list = cmpFiltered();
-  const shown = Math.min(cmpState.shown, list.length);
   const more = document.getElementById("cmp-more");
   const picked = cmpSelectedPaths().length;
   const total = cmpState.rows.filter(r => !(r.action === "touch" || r.action === "other")).length;
 
   let html = "";
   // The selection hint is the sentence that decides whether 同步 does what the
-  // user expects, so it is a pill rather than another grey line.
+  // user expects, so it is a pill rather than another grey line. It is also the
+  // only thing this row says: 「另有 N 项被折叠」 now sits with the count above,
+  // and printing one fact twice just turned this row into a blank strip.
   if (picked !== total) {
     html += `<span class="ffs-sel-hint">已勾选 ${picked} / ${total} 项` +
       `，只处理勾选的</span>`;
-  }
-  const hidden = cmpState.rows.length - shown;
-  // 「已列出 2 项」写在筛选栏上面一行就够了；这里只说为什么少了 ——
-  // 两处都报「几项」时，两个数字对不上就像是糊了。
-  if (hidden > 0) {
-    html += `<span>另有 ${hidden} 项被分类开关隐藏（点表格下方的符号切换）</span>`;
   }
   if (list.length > cmpState.shown) {
     html += ` <button id="cmp-show-more">再显示 400 项</button>`;
@@ -3052,7 +3087,7 @@ function renderPairs() {
   host.innerHTML = pairs.map((p, i) => {
     const own = pairHasOwn(p);
     return `<div class="pair-row" data-idx="${i}">
-      <div class="path-box">
+      <div class="path-box p-side-a">
         <span class="side-tag">本机</span>
         <input type="text" class="p-local" value="${esc(p.local_root || "")}"
                placeholder="D:/data" title="本机目录">
@@ -3066,7 +3101,7 @@ function renderPairs() {
                 stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
-      <div class="path-box">
+      <div class="path-box p-side-b">
         <span class="side-tag">云端</span>
         <input type="text" class="p-remote" value="${esc(p.remote_root || "")}"
                placeholder="feishu:token/dir" title="云端目录">
