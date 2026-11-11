@@ -442,11 +442,29 @@
      的那类安排。
 
      现在一行：左边品牌与菜单，右边比较 / 过滤器 / 同步 / 停止，最右是时钟与连接。
-     窗口窄时右半截自动换到第二行（flex-wrap），而不是把按钮压挤。 */
+     窗口窄时右半截自动换到第二行（flex-wrap），而不是把按钮压挤。
+
+     关键一条：.brandbar 的宽度 = 侧栏宽 + 列间距。顶栏内边距也是 8，与 .main
+     一致，于是工作区的左边缘（外框边 1 + 内边距 8 + 侧栏 240 + 间隙 8）就等于
+     brandbar 的右边缘 —— 「比较」按钮就严格压在目录对、结果卡的左边界上。
+     这不是凑出来的数：两边用的是同一个 --dock-w。 */
   .menubar {
-    display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
-    padding: 5px 10px; min-height: 46px; flex: none;
+    display: flex; gap: 0; align-items: center; flex-wrap: wrap;
+    padding: 5px 8px; min-height: 46px; flex: none;
     background: var(--bg); border-bottom: 1px solid var(--line);
+  }
+  .brandbar {
+    flex: none; width: calc(var(--dock-w) + 8px);
+    display: flex; align-items: center; min-width: 0;
+  }
+  /* 窄屏时侧栏抽到上面（.main 也在 700 断点堆叠），工作区左边缘变成 9px。
+     这时顶栏左段收回成内容宽，主操作组换到第二行整行起排 —— 两边都从 9px
+     开始，「比较」仍然压在目录对上。
+     不加 flex-basis:100% 的话，主操作组会挤在第一行右侧（实测 620px 时
+     比较在 208，而工作区在 9）。 */
+  @media (max-width: 700px) {
+    .brandbar { width: auto; }
+    .toolbar { flex-basis: 100%; }
   }
   .menutitle {
     font-size: 12.5px; font-weight: 700; color: var(--ink);
@@ -456,12 +474,13 @@
   .menubar nav button {
     border: 1px solid transparent; background: none; color: var(--ink-2);
     padding: 4px 10px; font-size: 12.5px; border-radius: var(--r-sm);
+    white-space: nowrap;
   }
   .menubar nav button:hover { background: var(--line); color: var(--ink); border-color: transparent; }
   .menubar nav button[aria-expanded="true"] { background: var(--line); }
   .menubar .grow { flex: 1; }
   /* 时钟和连接徽章靠在一起没留缝，屏幕上就变成「17:15已连接」。 */
-  #now { font-size: 11px; color: var(--muted); margin: 0 10px; }
+  #now { font-size: 11px; color: var(--muted); margin: 0 8px 0 10px; white-space: nowrap; }
   #conn { flex: none; }
   /* The server clock is the first thing to go when space runs out: it is the
      least actionable item in the bar, and keeping it wrapped onto two lines made
@@ -495,19 +514,18 @@
   .conn-badge.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
   .conn-badge.bad::before { background: var(--bad); }
 
-  /* ---- 主操作组 ----
-     控件顺序与 FFS 一致：比较▼ · 过滤器 · 同步▼ · 停止。
+  /* 这一组从左边缘开始（brandbar 的右边缘），吃掉到时钟之间的全部宽度，
+     两个主动作按钮按比例伸展，空隙全由它们吸收。
+     实测 1366：比较与同步各 328px，子元素宽度加间隙之和与容器实测宽度
+     严格相等（830 = 830）—— 真的满了，不是差不多满。
 
-     这一组不能只贴着右边缘。之前用 `margin-left: auto` 把它整组推到右边，
-     菜单「帮助」到「比较」之间就空出 300px 的一条 —— 中间的空读作「这里
-     少了一个控件」。
-
-     现在整组吃掉剩余宽度，两个主动作按钮按比例伸展，空隙被它们吸收：
-     1366px 下比较与同步各约 341px，这一行从头到尾是一条满的。
-     按钮内文字居中，否则按钮被拉宽后内容全贴在左边。 */
+     flex-basis 必须是 0（`flex: 1 1 0`），不能是 auto。写 auto 时它的基准是
+     内容宽（526px），窗口一窄，整组会被换到顶栏第二行，于是「比较」跑到页面
+     左边缘（实测 760px 宽时 comparison left = 9，而工作区在 257）。基准为 0
+     时它宁可自己内部换行，也守住左边缘。 */
   .toolbar {
     display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
-    flex: 1 1 auto; min-width: 0; margin-left: 10px;
+    flex: 1 1 0; min-width: 0;
   }
   /* 整行都是 40px 高。以前每个控件自己长，两个带副标题的大按钮把整行撑到 51px，
      旁边那四个方按钮就变成 40x51 的竖条 —— 图标缩在中间，看着像个空盒子。 */
@@ -982,6 +1000,28 @@
     min-width: 58px;
   }
   .browse-roots .grp > span.pick-none { text-transform: none; letter-spacing: 0; }
+  /* 「+ 新增连接…」和远端按钮长得很像，但它是动作而不是位置 —— 虚线框区分开，
+     免得有人点它以为会跳到某个目录。 */
+  .browse-roots button.pick-new {
+    border: 1px dashed color-mix(in srgb, var(--blue) 45%, var(--line));
+    color: var(--blue); background: none;
+  }
+  .browse-roots button.pick-new:hover {
+    background: var(--blue-soft); border-style: solid;
+  }
+
+  /* ---- 云盘连接的「新增」表单 ---- */
+  .cred-add {
+    border: 1px solid var(--line); border-radius: var(--r);
+    background: color-mix(in srgb, var(--bg) 55%, var(--card));
+    padding: 10px 12px; margin-bottom: 12px;
+  }
+  .cred-add-f { display: flex; flex-direction: column; gap: 3px; flex: 1 1 180px; min-width: 0; }
+  .cred-add-f > span { font-size: 11px; color: var(--muted); }
+  .cred-add-f input, .cred-add-f select { font-size: 12.5px; padding: 5px 8px; width: 100%; }
+  .cred-add-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+  .cred-add-row > button { flex: none; padding: 6px 16px; }
+
   .browse-list {
     overflow: auto; flex: 1; min-height: 120px; padding: 6px 8px;
   }
@@ -1011,12 +1051,14 @@
      图标是内联 SVG 线条画：emoji 在不同系统上会渲染成彩色或方框，那不是图标。
      停止紧挨同步：它打断的就是同步启动的那一轮。 -->
 <div class="menubar">
-  <span class="menutitle">weftsync</span>
-  <nav>
-    <button data-menu="file">文件</button>
-    <button data-menu="tools">工具</button>
-    <button data-menu="help">帮助</button>
-  </nav>
+  <div class="brandbar">
+    <span class="menutitle">weftsync</span>
+    <nav>
+      <button data-menu="file">文件</button>
+      <button data-menu="tools">工具</button>
+      <button data-menu="help">帮助</button>
+    </nav>
+  </div>
 
   <div class="toolbar">
     <div class="tb-split">
@@ -1487,14 +1529,17 @@
 
   <div class="card">
     <div class="row" style="margin-bottom:12px">
-      <strong class="grow">远程凭据</strong>
+      <strong class="grow">云盘连接</strong>
       <span class="sub" style="margin:0">写在 rclone 配置文件里</span>
     </div>
     <div class="note" style="margin-bottom:12px">
-      密钥<strong>不会回显</strong>——这里只显示是否已设置以及字符长度
-      （长度能帮忙发现多打进去的空格或换行）。保存时密钥以 rclone 的模糊形式写入配置文件，
-      在 Linux / macOS 上文件权限会被收紧到 <code>0600</code>。
+      「云端」不是一个内置的东西，而是一条<strong>连接</strong>：先在这里建一条
+      （名字 + 类型，本工具自带飞书 / Lark，另外支持 rclone 的全部后端），
+      填好凭据之后，目录对右边的「云端」路径才有东西可选。
       <div style="margin-top:6px;color:var(--muted)">
+        密钥<strong>不会回显</strong>——这里只显示是否已设置以及字符长度
+        （长度能帮忙发现多打进去的空格或换行）。保存时密钥以 rclone 的模糊形式写入配置文件，
+        在 Linux / macOS 上文件权限会被收紧到 <code>0600</code>。
         字段留空 = 不修改；要清除已存的值，勾选右侧的「清除」。
       </div>
       <div style="margin-top:8px">
@@ -3185,9 +3230,9 @@ function renderPairs() {
       <div class="path-box p-side-b">
         <span class="side-tag">云端</span>
         <input type="text" class="p-remote" value="${esc(p.remote_root || "")}"
-               placeholder="feishu:token/dir" title="云端目录">
+               placeholder="连接名:目录（如 feishu:abc123）" title="云端目录：先选一条云盘连接，再选目录">
         <button class="browse p-browse" data-idx="${i}" data-side="remote"
-                title="浏览云端目录">浏览</button>
+                title="浏览云端目录（没有连接时可以在这里新增）">浏览</button>
       </div>
       <!-- 图标是内联 SVG：⚙ / ● 这类字符在不同系统上会渲染成彩色 emoji 或方框。 -->
       <div class="pair-ops">
@@ -4012,10 +4057,11 @@ let browseTarget = null;   // { idx, side }
 let browsePath = "";
 let browseKind = "local";
 
-function openBrowse(idx, side) {
+function openBrowse(idx, side, startAt) {
   if (!sessionCfg) return;
   browseTarget = { idx, side };
-  const cur = sessionCfg.pairs[idx][side === "local" ? "local_root" : "remote_root"] || "";
+  const key = side === "local" ? "local_root" : "remote_root";
+  const cur = startAt || sessionCfg.pairs[idx][key] || "";
   void syncSessionPicker;
   document.getElementById("browse-side").textContent = side === "local" ? "左：本地" : "右：云端";
   document.getElementById("browse-mask").classList.remove("hidden");
@@ -4032,8 +4078,13 @@ function closeBrowse() {
 // browseRootsHTML renders the two groups of starting points.
 //
 // The labels matter: without them a drive letter and a Feishu folder look like the
-// same kind of thing, and a user with three remotes cannot tell which one holds
+// same kind of thing, and a user with several remotes cannot tell which one holds
 // the folder they want.
+//
+// The cloud group always appears, even when nothing is configured, and always ends
+// with 「+ 新增连接…」. This dialog is where a user discovers that a cloud side is
+// something they have to set up first, so it is also where the way to set it up has
+// to be - a sentence telling them to go and find it somewhere else is not a way.
 function browseRootsHTML(v, go) {
   const parts = [];
 
@@ -4045,15 +4096,18 @@ function browseRootsHTML(v, go) {
   }
 
   const remotes = v.remotes || [];
-  if (remotes.length) {
-    parts.push(`<div class="grp"><span>云端</span>` +
-      remotes.map(r => `<button data-path="${esc(r.name + ":")}" ` +
-        `title="rclone 远程「${esc(r.name)}」，类型 ${esc(r.type)}">` +
-        `${esc(r.name)}: <span class="badge">${esc(r.type)}</span></button>`).join("") +
-      `</div>`);
-  } else if (roots.length) {
-    parts.push(`<div class="grp"><span class="pick-none sub">还没有配置云端远程，` +
-      `去 ⚙ → 全局设置与凭据 添加</span></div>`);
+  parts.push(`<div class="grp"><span>云盘</span>` +
+    remotes.map(r => `<button data-path="${esc(r.name + ":")}" ` +
+      `title="rclone 连接「${esc(r.name)}」，类型 ${esc(r.type)}">` +
+      `${esc(r.name)}: <span class="badge">${esc(r.type)}</span></button>`).join("") +
+    `<button class="pick-new" data-newremote="1" ` +
+    `title="新建一条云盘连接：填名字和类型，再填凭据">+ 新增连接…</button>` +
+    `</div>`);
+
+  if (!remotes.length) {
+    parts.push(`<div class="grp"><span class="pick-none sub">` +
+      `还没有云盘连接。点上面的「+ 新增连接…」建一条（本工具自带飞书 / Lark，` +
+      `也支持 rclone 的其他后端），填好凭据后这里就会出现它。</span></div>`);
   }
 
   const host = document.getElementById("browse-roots");
@@ -4061,6 +4115,40 @@ function browseRootsHTML(v, go) {
   host.querySelectorAll("button[data-path]").forEach(b => {
     b.addEventListener("click", () => go(b.dataset.path));
   });
+  host.querySelectorAll("button[data-newremote]").forEach(b => {
+    b.addEventListener("click", () => openAddConnection());
+  });
+}
+
+// openAddConnection hands the user from "I need a cloud folder" to the form that
+// makes one possible, with the form already open. Closing the picker first is
+// deliberate: the drawer slides over the same area, and leaving a modal behind it
+// means two stacked overlays to escape from.
+function openAddConnection() {
+  // Keep the pair and side so a successful save can come straight back here.
+  credReturnToBrowse = browseTarget ? { idx: browseTarget.idx, side: browseTarget.side, name: "" } : null;
+  closeBrowse();
+  credAddOpen = true;
+  credAddTouched = true;
+  openDrawer("settings");
+  // loadCredentials() is async, so focus happens after the form renders.
+  setTimeout(() => {
+    const el = document.getElementById("cred-new-name");
+    if (el) { el.focus(); el.scrollIntoView({ block: "center", behavior: "smooth" }); }
+  }, 350);
+}
+
+// returnToBrowseAfterSave puts the user back in the cloud picker, opened at the
+// connection they just saved. They came here to point a folder pair at a cloud
+// folder; dropping them in a settings list and letting them find their own way back
+// is how a two-step task becomes a five-step one.
+function returnToBrowseAfterSave(name) {
+  const back = credReturnToBrowse;
+  if (!back || back.name !== name || !sessionCfg) return false;
+  credReturnToBrowse = null;
+  closeDrawer();
+  openBrowse(back.idx, back.side, name + ":");
+  return true;
 }
 
 async function loadBrowse(path) {
@@ -4677,6 +4765,23 @@ let credView = null;
 // clicks 保存 and sees nothing at all, which reads as "it did nothing".
 let credFlash = {};
 
+// credAddOpen keeps the new-connection form open across the re-render that follows
+// a create. It is also set from the browse dialog: a user who opens the cloud
+// picker and finds nothing there is trying to add a connection, and sending them
+// to a drawer where they must then find the button themselves is the same dead end
+// one click later.
+let credAddOpen = false;
+
+// credAddTouched records that the user opened or closed the form themselves.
+// Without it the rule "no connections => show the form" re-opened the form every
+// time somebody pressed 收起 on an empty list, which makes that button dead.
+let credAddTouched = false;
+
+// credReturnToBrowse remembers which folder pair sent the user here, so a successful
+// save can put them back in the cloud picker at that new connection instead of
+// leaving them in the settings drawer to find their own way back.
+let credReturnToBrowse = null;   // { idx, side, name }
+
 async function loadCredentials() {
   const body = document.getElementById("cred-body");
   try {
@@ -4685,7 +4790,7 @@ async function loadCredentials() {
   } catch (e) {
     credView = null;
     body.className = "note err";
-    body.textContent = "读取凭据失败：" + e.message;
+    body.textContent = "读取云盘连接失败：" + e.message;
     return;
   }
   renderCredentials();
@@ -4694,44 +4799,40 @@ async function loadCredentials() {
 function renderCredentials() {
   const body = document.getElementById("cred-body");
   const v = credView;
-  if (!v || !(v.remotes || []).length) {
-    body.className = "empty";
-    body.textContent = "配置文件里还没有远程。先用 `weftsync config` 创建一个。";
-    return;
-  }
+  if (!v) return;
+
+  const remotes = v.remotes || [];
+  // Nothing configured yet is the moment the form must be on screen: this page is
+  // reached precisely because there is no cloud connection to point a pair at.
+  // Unless the user has already dismissed it - see credAddTouched.
+  if (!remotes.length && !credAddTouched) credAddOpen = true;
+
+  const head = `<div class="row" style="margin-bottom:10px">
+      <span class="sub mono grow" style="margin:0" title="写入哪个文件">${esc(v.file || "(未指定配置文件)")}</span>
+      <button id="cred-add" class="${credAddOpen ? "on" : ""}">
+        ${credAddOpen ? "收起" : "+ 新增云盘连接"}
+      </button>
+    </div>` + (credAddOpen ? credAddFormHTML(v.types || []) : "");
+
+  const empty = remotes.length ? "" :
+    `<div class="note" style="margin-bottom:12px">
+       还没有任何云盘连接。在上面填一个名字、选一个类型，创建后同一个卡片里会出现要填的字段。
+       填好并测试通过之后，目录对右边的「云端」就有东西可选了。
+     </div>`;
+
   body.className = "";
+  body.innerHTML = head + empty + remotes.map(r => credCardHTML(v, r)).join("");
 
-  const cards = v.remotes.map(r => {
-    const fields = r.fields.map(f => credField(r.name, f)).join("");
-    const used = (r.used_by || []).length
-      ? `被这些作业使用：<span class="mono">${esc(r.used_by.join(", "))}</span>`
-      : '<span class="warn">没有作业使用这个远程</span>';
-    return `<div class="pair-card">
-      <div class="head">
-        <strong>${esc(r.name)}</strong>
-        <span class="badge">${esc(r.type)}</span>
-        <span class="sub" style="margin:0">${used}</span>
-      </div>
-      ${r.detail ? `<div class="note">${esc(r.detail)}</div>` : ""}
-      ${fields}
-      <div class="row" style="margin-top:10px">
-        <button data-cred-save="${esc(r.name)}">保存</button>
-        <button data-cred-test="${esc(r.name)}" ${r.testable ? "" : "disabled"}>测试连接</button>
-        <span class="sub" id="cred-note-${esc(r.name)}" style="margin:0"></span>
-      </div>
-    </div>`;
-  }).join("");
-
-  body.innerHTML =
-    `<div class="sub mono" style="margin:0 0 10px">${esc(v.file || "(未指定配置文件)")}</div>` +
-    cards;
-
-  body.querySelectorAll("button[data-cred-save]").forEach(b => {
-    b.addEventListener("click", () => saveCredentials(b.dataset.credSave, b));
+  const add = document.getElementById("cred-add");
+  if (add) add.addEventListener("click", () => {
+    credAddOpen = !credAddOpen;
+    credAddTouched = true;
+    renderCredentials();
+    const nameEl = document.getElementById("cred-new-name");
+    if (credAddOpen && nameEl) nameEl.focus();
   });
-  body.querySelectorAll("button[data-cred-test]").forEach(b => {
-    b.addEventListener("click", () => testCredentials(b.dataset.credTest, b));
-  });
+  wireCredAddForm();
+  wireCredCards(body);
 
   // Re-apply any message that was set just before a re-render, then forget it:
   // a "saved" note left over from ten minutes ago is worse than no note.
@@ -4743,6 +4844,102 @@ function renderCredentials() {
     }
     delete credFlash[name];
   }
+}
+
+function credAddFormHTML(types) {
+  // Recommended types first, the rest in a second group. rclone registers around
+  // seventy backends; a single flat list starting with "alias" is a wall.
+  const rec = types.filter(t => t.recommended);
+  const rest = types.filter(t => !t.recommended);
+  const opt = t => `<option value="${esc(t.name)}">` +
+    `${esc(t.name)} — ${esc(t.description || t.name)}</option>`;
+  const groups =
+    (rec.length ? `<optgroup label="常用">${rec.map(opt).join("")}</optgroup>` : "") +
+    (rest.length ? `<optgroup label="其他（rclone 全部后端）">${rest.map(opt).join("")}</optgroup>` : "");
+
+  return `<div class="cred-add">
+    <div class="cred-add-row">
+      <label class="cred-add-f">
+        <span>连接名字</span>
+        <input type="text" id="cred-new-name" placeholder="例如 feishu、backup-s3"
+               title="路径里显示成「名字:目录」，所以不能有冒号、斜杠或反斜杠">
+      </label>
+      <label class="cred-add-f">
+        <span>类型</span>
+        <select id="cred-new-type">${groups}</select>
+      </label>
+      <button class="primary" id="cred-create">创建</button>
+    </div>
+    <div class="sub" id="cred-add-note" style="margin:8px 0 0"></div>
+    <div class="hint" style="margin-top:6px">
+      这里只创建<strong>连接</strong>和它的类型；app_id / app_secret / 目录 token
+      这类凭据在创建后出现的卡片里填，保存前可以先「测试连接」。
+    </div>
+  </div>`;
+}
+
+function wireCredAddForm() {
+  const btn = document.getElementById("cred-create");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    const name = (document.getElementById("cred-new-name").value || "").trim();
+    const type = document.getElementById("cred-new-type").value;
+    const note = document.getElementById("cred-add-note");
+    const say = (cls, text) => { note.className = "sub " + cls; note.textContent = text; };
+
+    if (!name) { say("bad", "先填个名字"); return; }
+    btn.disabled = true;
+    say("", "创建中…");
+    try {
+      const r = await fetch("/api/credentials?name=" + encodeURIComponent(name) +
+                            "&type=" + encodeURIComponent(type), { method: "POST" });
+      const data = await r.json().catch(() => null);
+      if (!r.ok) throw new Error((data && data.error) || ("HTTP " + r.status));
+      credFlash[name] = {
+        cls: "sub ok",
+        text: `已创建 ${name}（${type}）。下面填必填字段，然后点「测试连接」。`,
+      };
+      if (credReturnToBrowse) credReturnToBrowse.name = name;
+      // Keep the form open: adding a second connection is common, and closing it
+      // also scrolls the card that just appeared out of view.
+      await loadCredentials();
+      const card = document.getElementById("cred-note-" + name);
+      if (card) card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    } catch (e) {
+      say("bad", "创建失败：" + e.message);
+      btn.disabled = false;
+    }
+  });
+}
+
+function credCardHTML(v, r) {
+  const fields = r.fields.map(f => credField(r.name, f)).join("");
+  const used = (r.used_by || []).length
+    ? `被这些作业使用：<span class="mono">${esc(r.used_by.join(", "))}</span>`
+    : '<span class="warn">还没有作业使用这条连接</span>';
+  return `<div class="pair-card">
+    <div class="head">
+      <strong>${esc(r.name)}</strong>
+      <span class="badge">${esc(r.type)}</span>
+      <span class="sub" style="margin:0">${used}</span>
+    </div>
+    ${r.detail ? `<div class="note">${esc(r.detail)}</div>` : ""}
+    ${fields}
+    <div class="row" style="margin-top:10px">
+      <button data-cred-save="${esc(r.name)}">保存</button>
+      <button data-cred-test="${esc(r.name)}" ${r.testable ? "" : "disabled"}>测试连接</button>
+      <span class="sub" id="cred-note-${esc(r.name)}" style="margin:0"></span>
+    </div>
+  </div>`;
+}
+
+function wireCredCards(body) {
+  body.querySelectorAll("button[data-cred-save]").forEach(b => {
+    b.addEventListener("click", () => saveCredentials(b.dataset.credSave, b));
+  });
+  body.querySelectorAll("button[data-cred-test]").forEach(b => {
+    b.addEventListener("click", () => testCredentials(b.dataset.credTest, b));
+  });
 }
 
 function credField(remote, f) {
@@ -4821,6 +5018,10 @@ async function saveCredentials(name, btn) {
       cls: "sub ok",
       text: "已保存 " + (data.updated || []).join(", ") + "；下次运行生效",
     };
+    // Came here from the cloud picker: go back there, opened at this connection.
+    // Doing it before the re-read matters - the drawer closes, so there is no
+    // point re-rendering it.
+    if (returnToBrowseAfterSave(name)) return;
     // Re-read so the hints reflect what is actually stored now.
     await loadCredentials();
   } catch (e) {
