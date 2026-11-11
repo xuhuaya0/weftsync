@@ -461,7 +461,7 @@
   .menubar nav button[aria-expanded="true"] { background: var(--line); }
   .menubar .grow { flex: 1; }
   /* 时钟和连接徽章靠在一起没留缝，屏幕上就变成「17:15已连接」。 */
-  #now { font-size: 11px; color: var(--muted); margin: 0 10px 0 12px; }
+  #now { font-size: 11px; color: var(--muted); margin: 0 10px; }
   #conn { flex: none; }
   /* The server clock is the first thing to go when space runs out: it is the
      least actionable item in the bar, and keeping it wrapped onto two lines made
@@ -498,12 +498,16 @@
   /* ---- 主操作组 ----
      控件顺序与 FFS 一致：比较▼ · 过滤器 · 同步▼ · 停止。
 
-     这一组靠右（margin-left: auto）。顶栏是「左边是用来导航的，右边是用来动手的」
-     这种最普通的窗口形状，中间那段空就是两侧分组之间的间隔，不再是一条夹在
-     控件中间的洞。 */
+     这一组不能只贴着右边缘。之前用 `margin-left: auto` 把它整组推到右边，
+     菜单「帮助」到「比较」之间就空出 300px 的一条 —— 中间的空读作「这里
+     少了一个控件」。
+
+     现在整组吃掉剩余宽度，两个主动作按钮按比例伸展，空隙被它们吸收：
+     1366px 下比较与同步各约 341px，这一行从头到尾是一条满的。
+     按钮内文字居中，否则按钮被拉宽后内容全贴在左边。 */
   .toolbar {
     display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
-    flex: none; margin-left: auto;
+    flex: 1 1 auto; min-width: 0; margin-left: 10px;
   }
   /* 整行都是 40px 高。以前每个控件自己长，两个带副标题的大按钮把整行撑到 51px，
      旁边那四个方按钮就变成 40x51 的竖条 —— 图标缩在中间，看着像个空盒子。 */
@@ -527,7 +531,7 @@
      同步), and the ▼s belong to the buttons they sit on. */
   .tb-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
   .tb-btn.on { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
-  .tb-split { display: flex; flex: 1 1 auto; max-width: 324px; align-items: stretch; }
+  .tb-split { display: flex; flex: 1 1 auto; align-items: stretch; min-width: 176px; }
   .tb-action {
     display: flex; align-items: center; justify-content: center; gap: 9px;
     flex: 1 1 auto; min-width: 176px; padding: 0 14px; height: 40px;
@@ -562,9 +566,8 @@
      控件」。
 
      但全部靠左、右边留一大片也不行：1702px 窗口下三个控件只有 526px，
-     占工作区的 52%，又回到「太偏左」。所以两个主动作按钮按可用宽度伸展
-     （有上限）：823px 下伸展到刚好填满，1702px 下各 300px、整行占 80%。
-     按钮内的文字居中，否则按钮被拉宽后内容全贴在左边。 */
+     占工作区的 52%，又回到「太偏左」。所以两个主动作按钮按可用宽度伸展，
+     空隙全由它们吸收。按钮内的文字居中。 */
 
   /* ---- 左侧停靠面板 ---- */
   .main {
@@ -1014,7 +1017,6 @@
     <button data-menu="tools">工具</button>
     <button data-menu="help">帮助</button>
   </nav>
-  <span class="grow"></span>
 
   <div class="toolbar">
     <div class="tb-split">
