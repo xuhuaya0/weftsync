@@ -26,6 +26,8 @@
        1280 而不是更大：再宽下去，两个名称列各 500px 装 `reports/new1.txt`，
        单元格里的空白比内容还多。 */
     --shell: 1280px;
+    /* 左侧停靠栏宽度。工具栏要对齐到工作区的左边缘，就得知道这个数。 */
+    --dock-w: 240px;
     /* 所有「工具条」类横条的底色。差 2% 的两个灰放在同一个卡片里，
        读起来就是一处失误而不是两层意思。 */
     --tint: color-mix(in srgb, var(--bg) 55%, var(--card));
@@ -472,10 +474,15 @@
   .toolbar {
     display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
     max-width: var(--shell); margin: 0 auto;
-    padding: 5px 8px 7px;
+    /* 从工作区的左边缘开始，不从配置栏上方开始：这行控件管的是右边那一列
+       （目录对、对比结果），压在配置栏上方会让两列的分界在上半部分断开。
+       256 = 8（.main 内边距）+ 240（停靠栏）+ 8（列间距）。 */
+    padding: 5px 8px 7px calc(var(--dock-w) + 16px);
     background: var(--bg);
     position: sticky; top: 30px; z-index: 25;
   }
+  /* 窗口窄到停靠栏抽到上面时，左边缘就是页面边缘了。 */
+  @media (max-width: 700px) { .toolbar { padding-left: 8px; } }
   /* 整行都是 40px 高。以前每个控件自己长，两个带副标题的大按钮把整行撑到 51px，
      旁边那四个方按钮就变成 40x51 的竖条 —— 图标缩在中间，看着像个空盒子。 */
   .tb-btn {
@@ -494,11 +501,8 @@
   #s-stop-btn:disabled {
     border-color: transparent; background: none; color: var(--muted); opacity: .5;
   }
-  /* Group separators. Six controls in one undifferentiated row read as a single
-     undivided pile; FFS separates the compare cluster from the sync cluster too. */
-  .tb-sep {
-    flex: none; width: 1px; height: 22px; margin: 0 3px; background: var(--line);
-  }
+  /* Group separators are gone: there are only three controls now (比较、过滤器、
+     同步), and the ▼s belong to the buttons they sit on. */
   .tb-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
   .tb-btn.on { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
   .tb-split { display: flex; flex: none; align-items: stretch; }
@@ -539,7 +543,6 @@
      才有 259px，够读成「间隔」。 */
   @media (min-width: 900px) {
     .tb-run { margin-left: auto; }
-    .tb-sep-run { display: none; }
   }
 
   /* ---- 左侧停靠面板 ---- */
@@ -553,7 +556,7 @@
      让最后一块面板吃掉剩余空间，概览就变成一个 550px 高的空框。
      合并成一条侧栏之后，空白不再属于任何一块内容 —— 它就是侧栏。 */
   .dock {
-    width: 240px; flex: none; display: flex; flex-direction: column;
+    width: var(--dock-w); flex: none; display: flex; flex-direction: column;
     align-self: stretch; overflow: hidden;
     border: 1px solid var(--line); border-radius: var(--r);
     background: var(--card); box-shadow: var(--sh-1);
@@ -777,6 +780,25 @@
   }
   .dlg-head strong { font-size: 14px; letter-spacing: .1px; }
   .dlg-head .grow { flex: 1; }
+  /* 比较 / 同步 / 过滤器是同一个窗的三页，就像 FFS 的 Synchronization Settings。
+     面板标题写成页签而不是三段并排的折叠区：它们互斥，不是同时要看的。 */
+  .dlg-tabs {
+    display: flex; gap: 4px; padding: 8px 12px 0;
+    background: var(--tint); border-bottom: 1px solid var(--line);
+  }
+  .dlg-tab {
+    border: 1px solid transparent; border-bottom: none;
+    border-radius: var(--r-sm) var(--r-sm) 0 0;
+    background: none; color: var(--muted);
+    padding: 6px 18px; margin-bottom: -1px;
+    font-size: 12.5px; font-weight: 600;
+  }
+  .dlg-tab:hover { color: var(--ink); background: color-mix(in srgb, var(--bg) 70%, transparent); }
+  .dlg-tab[aria-selected="true"] {
+    background: var(--card); color: var(--ink);
+    border-color: var(--line);
+  }
+  .dlg-pane.hidden { display: none; }
   .dlg-body { padding: 14px 16px; overflow: auto; }
   .dlg-foot {
     display: flex; gap: 8px; align-items: center;
@@ -951,20 +973,15 @@
   <span id="conn" class="conn-badge">连接中…</span>
 </div>
 
-<!-- 工具栏：控件顺序与 FFS 一致。两个大按钮的第二行印着当前方式，
-     这是 FFS 的做法 —— 不打开对话框也知道设的是什么。
+<!-- 工具栏 = 三个控件，和 FFS 一样：比较▼ · 过滤器 · 同步▼。
+     两个 ▼ 不另开菜单，它们打开的是同一个「同步设置」窗的「比较」页和
+     「同步」页；过滤器打开的是同一个窗的「过滤器」页。三件事本来就是同一份
+     配置的三个面，拆成三个窗之后，同一段说明就得在三个不同大小的框里各写一遍。
+
      图标是内联 SVG 线条画：emoji 在不同系统上会渲染成彩色或方框，那不是图标。
 
-     布局是三组：比较组 · 两个设置 · 同步组。多出来的宽度放进组与组之间，
-     而不是把按钮拉宽 —— 按钮被撑开时内容四周全是空白。 -->
+     停止紧挨同步：它打断的就是同步启动的那一轮。 -->
 <div class="toolbar">
-  <button class="tb-btn" id="btn-compare-settings" title="比较设置（什么算「不一样」）">
-    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-      <rect x="1.4" y="3" width="8" height="10" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none"/>
-      <rect x="6.6" y="3" width="8" height="10" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none"/>
-      <path d="M4.6 5.6h1.2M4.6 8h2.6M4.6 10.4h1.2" stroke="currentColor" stroke-width="1.1"/>
-    </svg>
-  </button>
   <div class="tb-split">
     <button class="tb-action" id="s-compare-btn" title="比较：只扫描，不改任何东西">
       <span class="ai">
@@ -979,25 +996,14 @@
         <span class="as" id="tv-compare">—</span>
       </span>
     </button>
-    <button class="tb-arrow" id="btn-compare-menu" title="快速切换比较方式">▼</button>
+    <button class="tb-arrow" id="btn-compare-menu" title="比较设置：打开设置窗的「比较」页">▼</button>
   </div>
-  <span class="tb-sep"></span>
-  <button class="tb-btn" id="btn-filter" title="过滤器（哪些路径参与同步）">
+  <button class="tb-btn" id="btn-filter" title="过滤器：打开设置窗的「过滤器」页">
     <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
       <path d="M2 3h12L9.5 8.5V13l-3 1V8.5L2 3z" stroke="currentColor" stroke-width="1.4"
             fill="none" stroke-linejoin="round"/>
     </svg>
   </button>
-  <button class="tb-btn" id="btn-sync-settings" title="同步设置（会怎么改两边）">
-    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-      <path d="M1.8 5h7.4M12.4 5H14.2M1.8 11h2.6M6.6 11h7.6"
-            stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-      <circle cx="11.2" cy="5" r="1.8" stroke="currentColor" stroke-width="1.3" fill="none"/>
-      <circle cx="4.8" cy="11" r="1.8" stroke="currentColor" stroke-width="1.3" fill="none"/>
-    </svg>
-  </button>
-
-  <span class="tb-sep tb-sep-run"></span>
   <div class="tb-split tb-run">
     <button class="tb-action" id="s-sync-btn" title="同步：按上面的比较结果执行">
       <span class="ai">
@@ -1011,10 +1017,8 @@
         <span class="as" id="tv-variant">—</span>
       </span>
     </button>
-    <button class="tb-arrow" id="btn-sync-menu" title="快速切换同步方式">▼</button>
+    <button class="tb-arrow" id="btn-sync-menu" title="同步设置：打开设置窗的「同步」页">▼</button>
   </div>
-  <!-- 停止紧挨 Synchronize：它打断的就是 Synchronize 启动的那一轮。
-       放到最右边会变成一个和谁都没关系的方块。 -->
   <button class="tb-btn" id="s-stop-btn" title="停止正在跑的那一轮" disabled>
     <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
       <rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor"/>
@@ -1137,61 +1141,50 @@
 <!-- ============ 设置对话框 ============ -->
 <div id="dlg-mask" class="dlg-mask hidden"></div>
 
-<!-- 比较设置：FFS 的 Comparison Settings -->
-<div id="dlg-compare" class="dlg hidden">
-  <div class="dlg-head"><strong>比较设置</strong><span class="grow"></span>
-    <button class="icon-btn" data-dlg-close title="关闭">✕</button></div>
-  <div class="dlg-body">
-    <div class="dlg-sect">判断两个文件是否相同时，比什么</div>
-    <div id="dlg-compare-opts"></div>
-  </div>
-  <div class="dlg-foot">
-    <span class="grow"></span>
-    <button data-dlg-close>取消</button>
-    <button class="primary" id="dlg-compare-ok">确定</button>
-  </div>
-</div>
-
-<!-- 同步设置：FFS 的 Synchronization Settings -->
-<div id="dlg-sync" class="dlg hidden">
+<!-- ============ 同步设置：一窗三页 ============
+     比较 / 同步 / 过滤器 是同一份配置的三个面，所以它们在同一个窗里当三页
+     （FFS 的 Synchronization Settings 就是这么分的）。工具栏上的三个入口
+     打开的是同一个窗的不同页：比较▼ → 比较页，过滤器 → 过滤器页，
+     同步▼ → 同步页。 -->
+<div id="dlg-settings" class="dlg wide hidden">
   <div class="dlg-head"><strong>同步设置</strong><span class="grow"></span>
     <button class="icon-btn" data-dlg-close title="关闭">✕</button></div>
+  <div class="dlg-tabs" role="tablist">
+    <button class="dlg-tab" data-tab="compare" role="tab" aria-selected="false">比较</button>
+    <button class="dlg-tab" data-tab="sync" role="tab" aria-selected="false">同步</button>
+    <button class="dlg-tab" data-tab="filter" role="tab" aria-selected="false">过滤器</button>
+  </div>
   <div class="dlg-body">
-    <div class="dlg-sect">哪些方向会改动，哪些会被删</div>
-    <div id="dlg-sync-opts"></div>
-    <div class="note" id="dlg-sync-warn" style="display:none;margin:12px 0 0"></div>
+    <div class="dlg-pane hidden" data-pane="compare">
+      <div class="dlg-sect">判断两个文件是否相同时，比什么</div>
+      <div id="dlg-compare-opts"></div>
+    </div>
+    <div class="dlg-pane hidden" data-pane="sync">
+      <div class="dlg-sect">哪些方向会改动，哪些会被删</div>
+      <div id="dlg-sync-opts"></div>
+      <div class="note" id="dlg-sync-warn" style="display:none;margin:12px 0 0"></div>
+    </div>
+    <div class="dlg-pane hidden" data-pane="filter">
+      <div class="filter-grid">
+        <div class="filter-col">
+          <label>包含（白名单：写了就只同步匹配的，其余一律不动）</label>
+          <textarea id="dlg-include" rows="5" placeholder="*.xlsx&#10;reports/**"></textarea>
+        </div>
+        <div class="filter-col">
+          <label>排除（先按包含筛，再把匹配的剔掉）</label>
+          <textarea id="dlg-exclude" rows="5" placeholder="*.tmp&#10;_*&#10;_*/**"></textarea>
+        </div>
+      </div>
+      <div class="filter-hint">
+        一行一条，大小写不敏感。<code>/foo</code> 从同步根锚定；<code>**</code> 匹配任意层级。
+        这里的规则作用于<strong>所有</strong>目录对。
+      </div>
+    </div>
   </div>
   <div class="dlg-foot">
     <span class="grow"></span>
     <button data-dlg-close>取消</button>
-    <button class="primary" id="dlg-sync-ok">确定</button>
-  </div>
-</div>
-
-<!-- 过滤器：FFS 的 Filter -->
-<div id="dlg-filter" class="dlg wide hidden">
-  <div class="dlg-head"><strong>过滤器</strong><span class="grow"></span>
-    <button class="icon-btn" data-dlg-close title="关闭">✕</button></div>
-  <div class="dlg-body">
-    <div class="filter-grid">
-      <div class="filter-col">
-        <label>包含（白名单：写了就只同步匹配的，其余一律不动）</label>
-        <textarea id="dlg-include" rows="5" placeholder="*.xlsx&#10;reports/**"></textarea>
-      </div>
-      <div class="filter-col">
-        <label>排除（先按包含筛，再把匹配的剔掉）</label>
-        <textarea id="dlg-exclude" rows="5" placeholder="*.tmp&#10;_*&#10;_*/**"></textarea>
-      </div>
-    </div>
-    <div class="filter-hint">
-      一行一条，大小写不敏感。<code>/foo</code> 从同步根锚定；<code>**</code> 匹配任意层级。
-      这里的规则作用于<strong>所有</strong>目录对。
-    </div>
-  </div>
-  <div class="dlg-foot">
-    <span class="grow"></span>
-    <button data-dlg-close>取消</button>
-    <button class="primary" id="dlg-filter-ok">确定</button>
+    <button class="primary" id="dlg-settings-ok">确定</button>
   </div>
 </div>
 
@@ -3354,9 +3347,9 @@ function pairHasOwn(p) {
 
 // ---------------------------------------------------------------- dialogs
 //
-// Three dialogs, opened from the toolbar, in FreeFileSync's order. All three edit
-// the in-memory configuration and nothing else: a click on 确定 marks the
-// configuration dirty, and 比较 / 同步 writes it. 取消 restores the snapshot taken
+// Every dialog edits the in-memory configuration and nothing else: a click on 确定
+// marks the configuration dirty, and 比较 / 同步 writes it. 取消 restores the
+// snapshot taken
 // when the dialog opened - without that, a forgotten radio click would be saved
 // by the next compare, which is not what cancel means.
 
@@ -3420,50 +3413,55 @@ function checkedValue(name, fallback) {
   return el ? el.value : fallback;
 }
 
-// ---- comparison settings
+// ---- 同步设置：一窗三页
+//
+// 三个按钮打开同一个窗的不同页。它们改的是同一份 in-memory 配置：确定才
+// markDirty，比较 / 同步 才落盘；取消把快照还原 —— 没有这一步，一次误点单选的
+// "取消" 会被下一次比较悄悄写进文件，那不是取消的意思。
 
-document.getElementById("btn-compare-settings").addEventListener("click", () => {
+let settingsTab = "compare";
+
+function openSettings(tab) {
   if (!sessionCfg) return;
-  dlgOpen("dlg-compare");
-  const cur = (sessionCfg.sync || {}).compare || "time-size";
-  radioList(document.getElementById("dlg-compare-opts"), "dlg-compare", COMPARE_OPTS, cur);
-});
+  dlgOpen("dlg-settings");
+  fillSettings();
+  showSettingsTab(tab || "compare");
+}
 
-document.getElementById("dlg-compare-ok").addEventListener("click", () => {
-  sessionCfg.sync = sessionCfg.sync || {};
-  sessionCfg.sync.compare = checkedValue("dlg-compare", "time-size");
-  dlgOk();
-});
+function showSettingsTab(tab) {
+  settingsTab = tab;
+  document.querySelectorAll("#dlg-settings .dlg-tab").forEach(b => {
+    b.setAttribute("aria-selected", b.dataset.tab === tab ? "true" : "false");
+  });
+  document.querySelectorAll("#dlg-settings .dlg-pane").forEach(p => {
+    p.classList.toggle("hidden", p.dataset.pane !== tab);
+  });
+}
 
-// ---- filter
-
-document.getElementById("btn-filter").addEventListener("click", () => {
-  if (!sessionCfg) return;
-  dlgOpen("dlg-filter");
+// fillSettings builds all three pages up front. They are a few radio rows and two
+// textareas, so populating them eagerly costs nothing and keeps 确定 a single
+// straight-line "read every field" instead of a per-tab branch.
+function fillSettings() {
   const s = sessionCfg.sync || {};
-  document.getElementById("dlg-include").value = s.include || "";
-  document.getElementById("dlg-exclude").value = s.exclude || "";
-});
-
-document.getElementById("dlg-filter-ok").addEventListener("click", () => {
-  sessionCfg.sync = sessionCfg.sync || {};
-  sessionCfg.sync.include = document.getElementById("dlg-include").value;
-  sessionCfg.sync.exclude = document.getElementById("dlg-exclude").value;
-  dlgOk();
-});
-
-// ---- synchronization settings
-
-document.getElementById("btn-sync-settings").addEventListener("click", () => {
-  if (!sessionCfg) return;
-  dlgOpen("dlg-sync");
+  radioList(document.getElementById("dlg-compare-opts"), "dlg-compare",
+    COMPARE_OPTS, s.compare || "time-size");
   radioList(document.getElementById("dlg-sync-opts"), "dlg-sync",
     VARIANT_OPTS, sessionCfg.variant || "update");
+  document.getElementById("dlg-include").value = s.include || "";
+  document.getElementById("dlg-exclude").value = s.exclude || "";
   updateSyncWarn();
+}
+
+document.querySelectorAll("#dlg-settings .dlg-tab").forEach(b => {
+  b.addEventListener("click", () => showSettingsTab(b.dataset.tab));
 });
 
-document.getElementById("dlg-sync-ok").addEventListener("click", () => {
-  sessionCfg.variant = checkedValue("dlg-sync", "update");
+document.getElementById("dlg-settings-ok").addEventListener("click", () => {
+  sessionCfg.sync = sessionCfg.sync || {};
+  sessionCfg.sync.compare = checkedValue("dlg-compare", sessionCfg.sync.compare || "time-size");
+  sessionCfg.variant = checkedValue("dlg-sync", sessionCfg.variant || "update");
+  sessionCfg.sync.include = document.getElementById("dlg-include").value;
+  sessionCfg.sync.exclude = document.getElementById("dlg-exclude").value;
   dlgOk();
 });
 
@@ -3768,51 +3766,24 @@ document.getElementById("cfg-open").addEventListener("click", openConfigDlg);
 document.getElementById("cfg-save").addEventListener("click", saveNow);
 document.getElementById("cfg-saveas").addEventListener("click", saveAsDlg);
 
-// Quick variant switches behind the two ▾ buttons, so changing one does not
-// require opening a dialog first.
+// The three toolbar entry points into the one settings window. The ▼ next to 比较
+// and the ▼ next to 同步 are not "quick switches" and not a second set of settings:
+// they are the settings pages for those two buttons, and 过滤器 is the third page of
+// the same window. A dropdown that changed the method silently was the thing that
+// made this row unreadable - a ▼ that opens nothing and a ▼ that changes behaviour
+// without showing the consequences look identical.
 document.getElementById("btn-compare-menu").addEventListener("click", ev => {
   ev.stopPropagation();
-  quickMenu(ev.currentTarget, COMPARE_OPTS.map(o => ({
-    label: o.nm, fn: () => setCompare(o.v),
-  })));
+  openSettings("compare");
+});
+document.getElementById("btn-filter").addEventListener("click", ev => {
+  ev.stopPropagation();
+  openSettings("filter");
 });
 document.getElementById("btn-sync-menu").addEventListener("click", ev => {
   ev.stopPropagation();
-  quickMenu(ev.currentTarget, VARIANT_OPTS.map(o => ({
-    label: o.nm, fn: () => setVariant(o.v),
-  })));
+  openSettings("sync");
 });
-
-function setCompare(v) {
-  if (!sessionCfg) return;
-  sessionCfg.sync = sessionCfg.sync || {};
-  sessionCfg.sync.compare = v;
-  markDirty();
-  renderPairs();
-}
-
-function setVariant(v) {
-  if (!sessionCfg) return;
-  sessionCfg.variant = v;
-  markDirty();
-  renderPairs();
-}
-
-function quickMenu(anchor, items) {
-  closeMenu();
-  const pop = document.createElement("div");
-  pop.className = "menu-pop";
-  for (const it of items) {
-    const b = document.createElement("button");
-    b.textContent = it.label;
-    b.addEventListener("click", () => { closeMenu(); it.fn(); });
-    pop.appendChild(b);
-  }
-  document.body.appendChild(pop);
-  const r = anchor.getBoundingClientRect();
-  pop.style.left = Math.max(4, r.left - 60) + "px";
-  pop.style.top = (r.bottom + 2) + "px";
-}
 
 // saveSession writes the in-memory view back to the job file.
 //
