@@ -435,7 +435,11 @@
 
   /* ---- 工具栏 ----
      五个控件，顺序与 FFS 一致：比较设置 · Compare · 过滤器 · 同步设置 ·
-     Synchronize。两个大按钮的第二行印着当前的方式，FFS 就是这么做的。 */
+     Synchronize。两个大按钮的第二行印着当前的方式，FFS 就是这么做的。
+
+     这两个按钮要撑满整行。FFS 是固定窗口的程序，按钮定宽就已经铺满；网页是任意
+     宽度的，定宽会让它们挤在左边、右边空出一大片。用 flex 让它们平分剩余空间，
+     保持"控件铺满工具栏"这个特征。 */
   .toolbar {
     display: flex; gap: 4px; align-items: stretch; flex-wrap: wrap;
     padding: 6px 8px;
@@ -445,41 +449,49 @@
   }
   .tb-btn {
     display: flex; align-items: center; justify-content: center;
-    min-width: 40px; padding: 4px 9px; border-radius: var(--r-sm);
+    flex: none; width: 40px; padding: 4px 0; border-radius: var(--r-sm);
     border: 1px solid var(--line); background: var(--card); color: var(--ink-2);
     font-size: 15px; line-height: 1;
   }
   .tb-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
   .tb-btn.on { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
-  .tb-split { display: flex; }
+  .tb-split { display: flex; flex: 1 1 220px; min-width: 0; }
   .tb-action {
-    display: grid; grid-template-columns: auto auto; grid-template-rows: auto auto;
-    gap: 0 7px; align-items: center; text-align: left;
-    padding: 5px 12px; border-radius: var(--r-sm) 0 0 var(--r-sm);
+    flex: 1; min-width: 0;
+    display: flex; align-items: center; justify-content: center; gap: 9px;
+    padding: 5px 8px;
+    border-radius: var(--r-sm) 0 0 var(--r-sm);
     border: 1px solid var(--line); background: var(--card); color: var(--ink);
-    min-width: 168px;
   }
   .tb-action:hover { border-color: var(--blue); background: var(--blue-soft); }
   .tb-action .ai {
-    grid-row: span 2; font-size: 17px; line-height: 1; color: var(--muted);
+    flex: none; font-size: 17px; line-height: 1; color: var(--muted);
     display: flex; align-items: center;
   }
   .tb-action:hover .ai { color: var(--blue); }
-  .tb-action .at { font-size: 13.5px; font-weight: 700; letter-spacing: .1px; }
+  /* The icon sits immediately left of the two text lines and the pair is
+     centred together, the way the FFS buttons read. Pinning the icon to the
+     button edge left a stretch of empty space between it and the label. */
+  .tb-action .txt { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+  .tb-action .at {
+    font-size: 14px; font-weight: 700; letter-spacing: .2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+  }
   .tb-action .as {
     font-size: 11px; color: var(--muted);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
   }
   .tb-action.warn .as { color: var(--warn); font-weight: 600; }
   .tb-arrow {
+    flex: none; width: 22px; padding: 0;
     border: 1px solid var(--line); border-left: none;
     border-radius: 0 var(--r-sm) var(--r-sm) 0;
-    background: var(--card); color: var(--muted); padding: 0 6px; font-size: 10px;
+    background: var(--card); color: var(--muted); font-size: 10px;
   }
   .tb-arrow:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
 
   /* ---- 左侧停靠面板 ---- */
-  .main { display: flex; align-items: flex-start; gap: 10px; padding: 8px; }
+  .main { display: flex; align-items: flex-start; gap: 10px; padding: 8px; min-height: calc(100vh - 96px); }
   @media (max-width: 860px) { .main { flex-direction: column; } }
   .dock {
     width: 236px; flex: none; display: flex; flex-direction: column; gap: 10px;
@@ -542,6 +554,9 @@
     border: 1px solid var(--line); border-radius: var(--r-sm);
     background: color-mix(in srgb, var(--bg) 55%, var(--card));
   }
+  /* An empty status bar is a box drawn around nothing. It appears when there is
+     something to say and is gone otherwise. */
+  .statusbar:has(#s-status:empty) { display: none; }
   .statusbar .grow { flex: 1; }
   .stat { font-size: 12px; color: var(--muted); margin: 0; }
   .stat.busy { color: var(--blue); font-weight: 600; }
@@ -605,19 +620,12 @@
   }
   .pair-ops button:hover { border-color: var(--line); color: var(--ink); background: var(--bg); }
   .pair-ops .p-remove:hover { border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, transparent); }
+  .pair-ops .p-add { color: var(--muted); }
+  .pair-ops .p-add:hover { border-color: var(--ok); color: var(--ok); background: color-mix(in srgb, var(--ok) 8%, transparent); }
   /* A pair that overrides the configuration says so; otherwise a reader has to
      open the dialog to find out why this one row behaves differently. */
   .pair-ops .p-own.has-own { color: var(--blue); }
   .pair-ops .p-own.has-own:hover { border-color: var(--blue); background: var(--blue-soft); }
-  .pair-add {
-    display: block; width: 100%; padding: 9px; margin-top: 7px;
-    border: 1px dashed color-mix(in srgb, var(--line) 90%, var(--muted)); border-radius: var(--r);
-    background: none; color: var(--muted); font-size: 12.5px; font-weight: 500;
-  }
-  .pair-add:hover {
-    border-color: var(--blue); color: var(--blue);
-    background: var(--blue-soft); border-style: solid;
-  }
 
   /* ---- 设置对话框（FFS 的 Comparison / Synchronization / Filter 三个窗）----
      A dialog rather than an inline form because these are choices you make and
@@ -744,12 +752,6 @@
     text-transform: uppercase; letter-spacing: .5px;
   }
   .sect .sub { margin: 0; }
-  .pair-add {
-    display: block; width: 100%; padding: 9px;
-    border: 1px dashed var(--line); border-radius: 10px;
-    background: none; color: var(--muted); font-size: 13px;
-  }
-  .pair-add:hover { border-color: var(--blue); color: var(--blue); background: none; }
 
   .filter-hint {
     grid-column: 1 / -1; font-size: 12px; color: var(--muted);
@@ -833,10 +835,9 @@
 <div class="toolbar">
   <button class="tb-btn" id="btn-compare-settings" title="比较设置（什么算「不一样」）">
     <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-      <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.4" fill="none"/>
-      <circle cx="6" cy="4" r="1.8" fill="currentColor"/>
-      <circle cx="10" cy="8" r="1.8" fill="currentColor"/>
-      <circle cx="5" cy="12" r="1.8" fill="currentColor"/>
+      <rect x="1.4" y="3" width="8" height="10" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none"/>
+      <rect x="6.6" y="3" width="8" height="10" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none"/>
+      <path d="M4.6 5.6h1.2M4.6 8h2.6M4.6 10.4h1.2" stroke="currentColor" stroke-width="1.1"/>
     </svg>
   </button>
   <div class="tb-split">
@@ -848,8 +849,10 @@
           <path d="M6 8h3M6 11h3M12 8h3M12 11h3" stroke="currentColor" stroke-width="1.2"/>
         </svg>
       </span>
-      <span class="at">Compare</span>
-      <span class="as" id="tv-compare">—</span>
+      <span class="txt">
+        <span class="at">Compare</span>
+        <span class="as" id="tv-compare">—</span>
+      </span>
     </button>
     <button class="tb-arrow" id="btn-compare-menu" title="快速切换比较方式">▾</button>
   </div>
@@ -874,8 +877,10 @@
                 fill="none" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </span>
-      <span class="at">Synchronize</span>
-      <span class="as" id="tv-variant">—</span>
+      <span class="txt">
+        <span class="at">Synchronize</span>
+        <span class="as" id="tv-variant">—</span>
+      </span>
     </button>
     <button class="tb-arrow" id="btn-sync-menu" title="快速切换同步方式">▾</button>
   </div>
@@ -886,6 +891,7 @@
     </svg>
   </button>
 </div>
+
 
 <div class="main" id="tab-session">
   <!-- 左侧停靠面板：Configuration（配置列表 + New/Open/Save/Save as）
@@ -930,9 +936,8 @@
   </aside>
 
   <div class="work">
-    <!-- 目录对：一行一套「左 ⇄ 右」 -->
+    <!-- 目录对：一行一套「左 ⇄ 右」，行尾 − 删这一对、+ 在下方加一对 -->
     <div class="pairs" id="pair-rows"></div>
-    <button id="pair-add" class="pair-add">+</button>
 
     <!-- 对比结果 -->
     <div class="card" id="plan-card" style="padding:0;overflow:hidden">
@@ -1956,6 +1961,7 @@ function openPlanPanel(name) {
   runBtn.dataset.job = name;
   // "Run it" makes no sense for a preview that could not be built.
   runBtn.disabled = !!job.plan.error;
+  document.getElementById("plan-close").disabled = false;
   planJob = name;
 
   // Bring the result into view. On a short window the grid lands below the fold,
@@ -1983,6 +1989,8 @@ function clearPlan() {
   document.getElementById("plan-body").innerHTML = planCardPlaceholder();
   document.getElementById("plan-run").dataset.job = "";
   document.getElementById("plan-run").disabled = true;
+  // Nothing to clear once the result area is already empty.
+  document.getElementById("plan-close").disabled = true;
   planJob = "";
   pendingPlanJob = null;
   // Drop the rows too: a stale selection from a previous job must never narrow
@@ -2118,8 +2126,9 @@ function compareHTML(p) {
   Object.assign(cmpState, { rows, pairs, left, right });
 
   if (!rows.length) {
-    // 计划为空有两种情况，必须分清：真的没有变化，还是没采集到。
-    return `<div class="note ok" style="margin-top:10px">对比结果：两侧一致，没有需要变更的内容。</div>`;
+    // The "nothing to change" sentence is already printed by planHTML. Repeating
+    // it here put the same line on screen twice, one above the other.
+    return "";
   }
 
   return `<div class="ffs">
@@ -2864,14 +2873,22 @@ function renderOverview() {
     host.innerHTML = `<div class="orow"><span class="empty">（没有目录对）</span><span></span><span></span></div>`;
     return;
   }
-  let html = `<div class="orow head"><span>Folder</span><span class="num">Items</span><span class="num">Size</span></div>`;
+  // No comparison yet means the numbers are unknown, not zero. Printing 0 Items
+  // next to a folder full of files would be a plain lie.
+  const have = !!(plan && plan.results);
+  // The column is Changes, not Items: the number comes from the last comparison,
+  // so it counts what would be transferred. Calling it Items would claim the
+  // folder holds N files, which this program has not walked to find out.
+  let html = `<div class="orow head"><span>Folder</span>` +
+    `<span class="num" title="上次比较发现的待处理项数">Changes</span>` +
+    `<span class="num">Size</span></div>`;
   for (const p of pairs) {
-    const o = byPair[p.name] || { items: 0, bytes: 0 };
+    const o = have ? (byPair[p.name] || { items: 0, bytes: 0 }) : null;
     const label = String(p.local_root || "").replace(/^.*[\\/]/, "") || p.name;
     html += `<div class="orow" title="${esc(p.local_root || "")}">
       <span>${esc(label)}</span>
-      <span class="num">${o.items}</span>
-      <span class="num">${o.items ? fmtBytes(o.bytes) : "—"}</span>
+      <span class="num">${o ? o.items : "—"}</span>
+      <span class="num">${o && o.items ? fmtBytes(o.bytes) : "—"}</span>
     </div>`;
   }
   host.innerHTML = html;
@@ -2976,6 +2993,7 @@ function renderPairs() {
           ${own ? "●" : "⚙"}
         </button>
         <button class="p-remove" data-idx="${i}" title="删除这一组目录对">−</button>
+        <button class="p-add" data-idx="${i}" title="在下面再加一组目录对">+</button>
       </div>
     </div>`;
   }).join("");
@@ -3011,6 +3029,11 @@ function renderPairs() {
       markDirty();
       renderPairs();
     });
+  });
+  // + sits on each row and inserts below it, the way the pair rows work in FFS:
+  // the button belongs to the row you are looking at, not to the list as a whole.
+  host.querySelectorAll(".p-add").forEach(el => {
+    el.addEventListener("click", () => addPairAfter(Number(el.dataset.idx)));
   });
   host.querySelectorAll(".p-browse").forEach(el => {
     el.addEventListener("click", () => {
@@ -3397,18 +3420,23 @@ function newPair() {
   };
 }
 
-document.getElementById("pair-add").addEventListener("click", () => {
+// addPairAfter inserts a blank pair below row i.
+//
+// The + lives on each row, so "add" means "add one here" rather than "append to
+// the list" - with several pairs the difference matters, and it is how the pair
+// rows behave in FFS.
+function addPairAfter(i) {
   if (!sessionCfg) return;
   sessionCfg.pairs = sessionCfg.pairs || [];
-  sessionCfg.pairs.push(newPair());
+  const at = Math.min(Math.max(i + 1, 0), sessionCfg.pairs.length);
+  sessionCfg.pairs.splice(at, 0, newPair());
   markDirty();
   renderPairs();
   // Focus the path box of the row we just added: adding a pair is always
   // followed by typing a path, and making the user find the new row is busywork.
-  const rows = document.querySelectorAll("#pair-rows .pair-row");
-  const last = rows[rows.length - 1];
-  if (last) last.querySelector(".p-local").focus();
-});
+  const row = document.querySelector(`#pair-rows .pair-row[data-idx="${at}"]`);
+  if (row) row.querySelector(".p-local").focus();
+}
 
 // ------------------------------------------------------------ configuration
 //
