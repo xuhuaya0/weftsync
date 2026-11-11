@@ -323,13 +323,18 @@ func TestRunSurvivesItsRequester(t *testing.T) {
 
 	d.runJob = func(ctx context.Context, cfg *job.Config, w io.Writer, opt job.Options) ([]job.PairResult, error) {
 		close(started)
-		go func() {
-			// Watch the context the run was given for the whole run duration.
-			<-ctx.Done()
-			atomic.AddInt32(&cancelled, 1)
-		}()
 		<-release
+		// Read the context at the moment the run returns, in this goroutine.
+		//
+		// A background `<-ctx.Done()` watcher looks like the obvious way to watch
+		// "the whole run", and it made this test flaky: execute() wraps the run in
+		// `defer cancel()`, so the run's own context is legitimately cancelled as
+		// it unwinds - right after a successful run. The watcher then fired and
+		// raced the assertions below. Measured: FAIL 1 time in 5 with -count=5.
+		// The question this test asks is "was the run's context cancelled while it
+		// was still running", so it has to be answered here.
 		if ctx.Err() != nil {
+			atomic.AddInt32(&cancelled, 1)
 			return nil, ctx.Err()
 		}
 		atomic.AddInt32(&completed, 1)
