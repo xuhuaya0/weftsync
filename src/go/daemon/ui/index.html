@@ -26,6 +26,9 @@
        1280 而不是更大：再宽下去，两个名称列各 500px 装 `reports/new1.txt`，
        单元格里的空白比内容还多。 */
     --shell: 1280px;
+    /* 「桌面」：窗体之外的底色。必须比 --bg 深一档 —— 两边同一个色时，
+       外框只剩一条 1px 的线，明暗上完全融进背景，看着就是「没有外框」。 */
+    --desk: #e3e8ed;
     /* 左侧停靠栏宽度。工具栏要对齐到工作区的左边缘，就得知道这个数。
        固定值，不用 vw：先前写成 clamp(240px, 22vw, 320px)，实测工具栏比
        工作区右偏 16px —— 同一个表达式在「栏宽」和「工具栏内边距」两处没算出
@@ -45,6 +48,7 @@
       --muted: #8b95a1; --line: #262d36; --line-2: #1d232b;
       --ok: #3fb950; --warn: #d29922; --bad: #f85149; --blue: #4d9dff;
       --blue-soft: #12253c;
+      --desk: #05080b;
       --sh-1: 0 1px 2px rgba(0, 0, 0, .4);
       --sh-2: 0 2px 6px rgba(0, 0, 0, .45);
       --sh-3: 0 16px 44px rgba(0, 0, 0, .62);
@@ -68,7 +72,7 @@
      scroll hit the topbar instead. */
   html { scroll-padding-top: 68px; }
   body {
-    margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+    margin: 0; padding: 0; background: var(--desk); color: var(--ink);
     font: 13.5px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
           "Segoe UI", "Microsoft YaHei", sans-serif;
     -webkit-font-smoothing: antialiased;
@@ -245,8 +249,10 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   /* 高度交给外层：结果卡撑满窗口剩余高度，这里就负责在那个高度里滚动。
-     写死 62vh 的话，短列表底部会留一段死白，长列表又比窗口矮一截。 */
-  .ffs-scroll { flex: 1 1 auto; min-height: 140px; overflow: auto; }
+     下限是 0 而不是 140px：窗口矮的时候（实测 538px 高）分类条会被卡片的
+     overflow:hidden 裁掉一半 —— 因为 头+表头+数据区(140)+分类条 的最小高度
+     超过了卡片实际高度。下限归零后由卡片自己保证最小可看高度（见 .work > .card）。 */
+  .ffs-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
   .ffs-table { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: fixed; }
   .ffs-table td { padding: 5px 10px; border-bottom: 1px solid var(--line-2); }
   .ffs-table tr.meta { opacity: .5; }
@@ -401,20 +407,42 @@
   .ffs-legend dt.downloads { color: var(--ok); }
   .ffs-legend dt.deletes { color: var(--bad); }
 
-  /* ---- 主界面：照 FreeFileSync 的排布 ----
-     从上到下：标题+菜单栏 → 工具栏（比较设置 / Compare / 过滤器 / 同步设置 /
-     Synchronize）→ 左侧停靠面板（Configuration、Overview）+ 右侧工作区
-     （目录对、结果表、分类条）。
+  /* ---- 应用外框：整页是一个窗体 ----
+     没有这圈边框时，菜单栏和工具栏直接贴在页面底色上，左右都看不出边界，
+     而下面的停靠面板和卡片各有各的框 —— 读起来是「几块东西散在页面上」，
+     不是「一个程序」。
 
-     三者共用 --shell：窗口再宽，内容也不跟着无限拉长。
-     实测过 1702px 窗口不加限制的样子：停靠面板 236px 只剩 14%，两个路径输入框
-     553px 一个，表格 1438px 而名称列 606px —— 比例散掉就是这么来的。 */
+     外框还让工具栏那条分隔线成立：有了外边界，横线是「分区」；没有外边界，
+     横线画出来的矩形右半边是空的（D61 那条教训）。
+
+     高度写死成 100vh - 16（上下各 8 的外边距），所以窗口本身就是画布，
+     页面不出现滚动条；需要滚的是里面的列表（.main 与 .ffs-scroll）。 */
+  .app {
+    max-width: var(--shell);
+    margin: 8px auto;
+    height: calc(100vh - 16px);
+    display: flex; flex-direction: column;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    box-shadow: var(--sh-2);
+    overflow: hidden;
+  }
+  @media (max-width: 700px) { .app { height: auto; min-height: calc(100vh - 16px); } }
+  /* 窄屏时窗体几乎铺满，「桌面」只剩一条缝，不如去掉外边距让它就是页面本身。 */
+  @media (max-width: 520px) {
+    .app { margin: 0; min-height: 100vh; border: none; border-radius: 0; box-shadow: none; }
+  }
+
+  /* ---- 主界面：照 FreeFileSync 的排布 ----
+     从上到下：标题+菜单栏 → 工具栏（比较 / 过滤器 / 同步）→ 左侧停靠面板
+     + 右侧工作区（目录对、结果表、分类条）。
+
+     三者共用 --shell（现在是外框的宽度）：窗口再宽，内容也不跟着无限拉长。 */
   .menubar {
     display: flex; gap: 0; align-items: center;
-    max-width: var(--shell); margin: 0 auto;
-    padding: 0 8px; height: 30px;
+    padding: 0 10px; height: 32px; flex: none;
     background: var(--bg);
-    position: sticky; top: 0; z-index: 30;
   }
   .menutitle {
     font-size: 12px; font-weight: 600; color: var(--ink-2);
@@ -477,16 +505,16 @@
         背景取 --bg 而不是透明，因为它是 sticky 的，滚动时要盖住下面的内容。 */
   .toolbar {
     display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
-    max-width: var(--shell); margin: 0 auto;
     /* 从工作区的左边缘开始，不从配置栏上方开始：这行控件管的是右边那一列
        （目录对、对比结果），压在配置栏上方会让两列的分界在上半部分断开。
-       256 = 8（.main 内边距）+ 240（停靠栏）+ 8（列间距）。 */
-    padding: 5px 8px 7px calc(var(--dock-w) + 16px);
+       256 = 1（外框边）+ 8（.main 内边距）+ 240（停靠栏）+ 8（列间距）- 1。 */
+    padding: 6px 10px 8px calc(var(--dock-w) + 15px);
     background: var(--bg);
-    position: sticky; top: 30px; z-index: 25;
+    border-bottom: 1px solid var(--line);
+    flex: none;
   }
-  /* 窗口窄到停靠栏抽到上面时，左边缘就是页面边缘了。 */
-  @media (max-width: 700px) { .toolbar { padding-left: 8px; } }
+  /* 窗口窄到停靠栏抽到上面时，左边缘就是外框内侧了。 */
+  @media (max-width: 700px) { .toolbar { padding-left: 10px; } }
   /* 整行都是 40px 高。以前每个控件自己长，两个带副标题的大按钮把整行撑到 51px，
      旁边那四个方按钮就变成 40x51 的竖条 —— 图标缩在中间，看着像个空盒子。 */
   .tb-btn {
@@ -551,8 +579,7 @@
   /* ---- 左侧停靠面板 ---- */
   .main {
     display: flex; align-items: stretch; gap: 8px; padding: 8px;
-    max-width: var(--shell); margin: 0 auto; width: 100%;
-    min-height: calc(100vh - 82px);
+    flex: 1 1 auto; min-height: 0; overflow: auto;
   }
   /* 停靠栏整块拉满窗口高度，两块内容贴在顶部，剩下的部分属于侧栏本身。
      两种做法都试过：不拉，左边就是一块 240×480 的空页，两栏底边不齐；
@@ -638,7 +665,12 @@
      结果卡向上撑满剩下的高度。这不是为了好看：数据区如果不撑开，两张卡就浮在
      窗口上半部，下面三分之二是空页 —— 而「一块有边界的空列表」读作没有文件，
      「一大片空页」读作界面没做完。 */
-  .work > .card { margin-bottom: 0; flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+  .work > .card {
+    margin-bottom: 0; flex: 1 1 auto; display: flex; flex-direction: column;
+    /* 窗再矮也不缩到看不见：低于这个高度就让 .main 出滚动条，
+       而不是把卡片里的分类条裁掉。 */
+    min-height: 240px;
+  }
   #plan-body { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
   #plan-body > .ffs { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
 
@@ -693,8 +725,11 @@
      823px 下两栅并排时每个路径框只剩 90px —— 一个同步工具的主要控件只显示
      13 个字符，那才是真正的不协调。实测：并排 90px / 上下两行 317px。
 
-     断点和工具栏那个（1180）对齐：同一次窗口变窄里，不要一半是宽版一半是窄版。 */
-  @media (max-width: 1179px) {
+     门槛算出来是 ~1010：工作区宽 = 视口 - 266，两个路径框各要 300px，
+     即 (工作区 - 36 交换键 - 86 操作键 - 3×8 间隙) / 2 ≥ 300。
+     先前写成 1179（为了跟一个已经不存在的工具栏断点对齐），结果 1163px 下
+     明明每框还有 380px 也硬要竖排，白占一行高。 */
+  @media (max-width: 1023px) {
     .pair-row {
       grid-template-columns: 36px minmax(0, 1fr) auto;
       grid-template-areas: "swap left ops" "swap right ops";
@@ -969,6 +1004,10 @@
 </head>
 <body>
 
+<!-- 整个窗口 = 一个窗体。菜单栏、工具栏、主区都在这一圈边里；
+     对话框与抽屉是 fixed 定位，挂在外面。 -->
+<div class="app">
+
 <!-- 菜单栏：标题 = 当前配置的文件名（改了没存就带 *），右边三个菜单。
      这是 FreeFileSync 的形状：配置是一份文档，New / Open / Save / Save as 在 File 里。 -->
 <div class="menubar">
@@ -1104,6 +1143,8 @@
       <span class="grow"></span>
     </div>  </div>
 </div>
+
+</div><!-- /.app -->
 
 <!-- ============ 打开配置 对话框 ============ -->
 <div id="dlg-open" class="dlg hidden">
