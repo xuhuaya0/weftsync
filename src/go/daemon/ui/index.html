@@ -530,9 +530,12 @@
   }
   .tb-arrow:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
   /* 宽屏时把同步组甩到右端：比较在左、同步在右，两个主动作各占一端，
-     中间那段空白读作「两组之间的间隔」。窄屏不做 —— 823px 下甩出去就是
-     170px 的空档，又变成被圈出来的那块空白了。 */
-  @media (min-width: 1180px) {
+     中间那段空白读作「两组之间的间隔」。
+     门槛算出来的，不是拍的：两组控件最小共占 625px，可用宽 = 视口 - 16。
+     823px 下甩到右边只留 182px 空档 —— 那就又变成被圈出来的那块空白了，
+     而那时留在行尾的 163px 空档反而读作「这行结束了」。900px 起中间空档
+     才有 259px，够读成「间隔」。 */
+  @media (min-width: 900px) {
     .tb-run { margin-left: auto; }
     .tb-sep-run { display: none; }
   }
@@ -660,8 +663,10 @@
   .pair-row:focus-within { border-color: color-mix(in srgb, var(--blue) 50%, var(--line)); }
   /* 窄窗口：左右两侧改成上下两行，交换键竖着跨两行，操作键也跨两行。
      823px 下两栅并排时每个路径框只剩 90px —— 一个同步工具的主要控件只显示
-     13 个字符，那才是真正的不协调。实测：并排 90px / 上下两行 330px。 */
-  @media (max-width: 1023px) {
+     13 个字符，那才是真正的不协调。实测：并排 90px / 上下两行 317px。
+
+     断点和工具栏那个（1180）对齐：同一次窗口变窄里，不要一半是宽版一半是窄版。 */
+  @media (max-width: 1179px) {
     .pair-row {
       grid-template-columns: 36px minmax(0, 1fr) auto;
       grid-template-areas: "swap left ops" "swap right ops";
@@ -669,7 +674,11 @@
     }
     .pair-row > .p-side-a { grid-area: left; }
     .pair-row > .p-side-b { grid-area: right; }
-    .pair-row > .pair-swap { grid-area: swap; align-self: center; justify-self: center; }
+    /* 交换键拉满两行高，变成一根竖着的「换边」挡条。只给它 32px 高的话，它会浮在
+       两行中间的左侧，上下各空 29px，看着像掉在那里的一个按钮。 */
+    .pair-row > .pair-swap {
+      grid-area: swap; align-self: stretch; justify-self: center; height: auto;
+    }
     .pair-row > .pair-ops { grid-area: ops; align-self: center; }
   }
   .path-box { display: flex; gap: 6px; min-width: 0; align-items: center; }
