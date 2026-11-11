@@ -548,15 +548,20 @@
     max-width: var(--shell); margin: 0 auto; width: 100%;
     min-height: calc(100vh - 82px);
   }
-  /* 停靠栏也拉满高度，由最后一块面板（概览）吃掉剩余空间。
-     不拉的话，左边就是一块 240×480 的空页——那是整个界面上最大的一片空白，
-     而右边的结果卡已经拉满了，两栏底边不齐，看着就像有一栏没做完。 */
+  /* 停靠栏整块拉满窗口高度，两块内容贴在顶部，剩下的部分属于侧栏本身。
+     两种做法都试过：不拉，左边就是一块 240×480 的空页，两栏底边不齐；
+     让最后一块面板吃掉剩余空间，概览就变成一个 550px 高的空框。
+     合并成一条侧栏之后，空白不再属于任何一块内容 —— 它就是侧栏。 */
   .dock {
-    width: 240px; flex: none; display: flex; flex-direction: column; gap: 8px;
-    align-self: stretch;
+    width: 240px; flex: none; display: flex; flex-direction: column;
+    align-self: stretch; overflow: hidden;
+    border: 1px solid var(--line); border-radius: var(--r);
+    background: var(--card); box-shadow: var(--sh-1);
   }
-  .dock > .panel:last-child { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-  .dock > .panel:last-child > .overview { flex: 1 1 auto; min-height: 0; overflow: auto; }
+  .dock::after { content: ""; flex: 1 1 auto; min-height: 0; }
+  /* 两节不再各自套一层边框：侧栏已经有了。 */
+  .dock .panel { border: none; border-radius: 0; box-shadow: none; background: none; }
+  .dock .panel + .panel { border-top: 1px solid var(--line); }
   /* 700 而不是 860：823px 宽下停靠面板一旦抽到上面，首屏就全是「配置 + 概览」，
      要滚动才能看到对比结果 —— 而对比结果才是这一页要看的东西。 */
   @media (max-width: 700px) { .main { flex-direction: column; } }
