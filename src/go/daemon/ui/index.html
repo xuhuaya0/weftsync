@@ -238,7 +238,9 @@
     font-size: 11px; color: var(--muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .ffs-scroll { max-height: 62vh; overflow: auto; }
+  /* 高度交给外层：结果卡撑满窗口剩余高度，这里就负责在那个高度里滚动。
+     写死 62vh 的话，短列表底部会留一段死白，长列表又比窗口矮一截。 */
+  .ffs-scroll { flex: 1 1 auto; min-height: 140px; overflow: auto; }
   .ffs-table { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: fixed; }
   .ffs-table td { padding: 5px 10px; border-bottom: 1px solid var(--line-2); }
   .ffs-table tr.meta { opacity: .5; }
@@ -542,10 +544,19 @@
 
   /* ---- 左侧停靠面板 ---- */
   .main {
-    display: flex; align-items: flex-start; gap: 8px; padding: 8px;
+    display: flex; align-items: stretch; gap: 8px; padding: 8px;
     max-width: var(--shell); margin: 0 auto; width: 100%;
-    min-height: calc(100vh - 88px);
+    min-height: calc(100vh - 82px);
   }
+  /* 停靠栏也拉满高度，由最后一块面板（概览）吃掉剩余空间。
+     不拉的话，左边就是一块 240×480 的空页——那是整个界面上最大的一片空白，
+     而右边的结果卡已经拉满了，两栏底边不齐，看着就像有一栏没做完。 */
+  .dock {
+    width: 240px; flex: none; display: flex; flex-direction: column; gap: 8px;
+    align-self: stretch;
+  }
+  .dock > .panel:last-child { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .dock > .panel:last-child > .overview { flex: 1 1 auto; min-height: 0; overflow: auto; }
   /* 700 而不是 860：823px 宽下停靠面板一旦抽到上面，首屏就全是「配置 + 概览」，
      要滚动才能看到对比结果 —— 而对比结果才是这一页要看的东西。 */
   @media (max-width: 700px) { .main { flex-direction: column; } }
@@ -611,8 +622,14 @@
   .work { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
   /* .card 自带 margin-bottom: 16px（那是给抽屉里一叠卡片用的），放进 .work 就和
      gap:8 叠成 24 —— 目录对到结果的间隙是 8，结果到状态条的间隙是 24，同一条
-     缝两种宽度。 */
-  .work > .card { margin-bottom: 0; }
+     缝两种宽度。
+
+     结果卡向上撑满剩下的高度。这不是为了好看：数据区如果不撑开，两张卡就浮在
+     窗口上半部，下面三分之二是空页 —— 而「一块有边界的空列表」读作没有文件，
+     「一大片空页」读作界面没做完。 */
+  .work > .card { margin-bottom: 0; flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+  #plan-body { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+  #plan-body > .ffs { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
 
   /* ---- 状态条：左侧状态，右侧统计（FFS 的底栏）---- */
   /* A status bar, not a card. It used to be a bordered box the width of the work
@@ -2045,9 +2062,10 @@ async function stopJob(name, btn) {
 // panel that only materialises afterwards makes the page jump.
 function planCardPlaceholder() {
   return `<div class="empty" style="padding:22px 2px 6px;text-align:center">
-    还没有比较结果。<br>
+    还没有比较结果。
+    <br>
     <span style="font-style:normal;font-size:12px;opacity:.75">
-      点左上角「Compare」，先看会改什么，再决定要不要 Synchronize。
+      点左上角「比较」：它只扫描，不改任何东西。看清楚了再点「同步」。
     </span>
   </div>`;
 }
@@ -2090,6 +2108,13 @@ let planJob = "";
 // column layout with it.
 function closePlanPanel() {
   clearPlan();
+  // 底部那行还写着「比较完成：N 项要处理」，而卡里已经是「还没有比较结果」——
+  // 两处说法对不上。清除结果是一个动作，它得有自己的回话。
+  const st = document.getElementById("s-status");
+  if (st) {
+    st.className = "stat";
+    st.textContent = "已清除比较结果（没有改动任何文件）。";
+  }
 }
 
 function clearPlan() {
