@@ -4894,51 +4894,36 @@ function renderCredentials() {
 }
 
 function credAddFormHTML(types) {
-  // Three groups, because the three answer different questions:
-  //   常用   - what most people want
-  //   其他   - usable, just less common (wrappers live here: their one field is
-  //            a text box naming another connection)
-  //   待开发 - listed so the page does not silently pretend they do not exist,
-  //            but not selectable: rclone's OAuth backends need a browser
-  //            handshake this page does not do yet.
+  // Two groups, as before. A type that is not built yet stays where it belongs
+  // and is marked in its own name - `drive（待开发）` - instead of being swept
+  // into a group of its own.
   //
-  // Types that could never work here at all (memory) are filtered out by the
-  // server and therefore never reach this function - a greyed-out row for
-  // something that cannot be made to work invites a question with no answer.
-  const usable = types.filter(t => !t.pending);
-  const pending = types.filter(t => t.pending);
-  const rec = usable.filter(t => t.recommended);
-  const rest = usable.filter(t => !t.recommended);
+  // The previous version had a 「待开发（还不能在这里创建）」 group with fourteen
+  // rows, each repeating the same sentence. Fourteen identical lines is not
+  // information; it is noise that pushed the usable types off the panel. One
+  // suffix in the name says the same thing once.
+  const rec = types.filter(t => t.recommended);
+  const rest = types.filter(t => !t.recommended);
 
-  // The option text is the NAME ONLY. Putting rclone's description in it was the
-  // bug behind "啥也看不见": the native popup is as wide as its widest option, and
-  // s3's description is 405 characters, so the list came up thousands of pixels
-  // wide and all that reached the screen was a blank slab. The description is
-  // shown below the picker instead, where it can wrap.
-  const opt = t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`;
+  // The option text is the NAME ONLY, plus the marker when there is something to
+  // mark. Putting rclone's description in it was the bug behind "啥也看不见":
+  // the native popup is as wide as its widest option, and s3's description is
+  // 405 characters, so the list came up thousands of pixels wide and all that
+  // reached the screen was a blank slab.
+  const opt = t => t.pending
+    ? `<option value="${esc(t.name)}" disabled>${esc(t.name)}（待开发）</option>`
+    : `<option value="${esc(t.name)}">${esc(t.name)}</option>`;
   const groups =
     (rec.length ? `<optgroup label="常用">${rec.map(opt).join("")}</optgroup>` : "") +
-    (rest.length ? `<optgroup label="其他">${rest.map(opt).join("")}</optgroup>` : "") +
-    (pending.length
-      ? `<optgroup label="待开发（还不能在这里创建）">` +
-        pending.map(t => `<option value="${esc(t.name)}" disabled>` +
-          `${esc(t.name)} — ${esc(t.reason)}</option>`).join("") +
-        `</optgroup>`
-      : "");
+    (rest.length ? `<optgroup label="其他">${rest.map(opt).join("")}</optgroup>` : "");
 
   // Kept for the description line; the select itself only carries names.
   credTypeInfo = {};
   for (const t of types) {
-    credTypeInfo[t.name] = t.pending ? "（待开发）" + t.reason : (t.description || "");
+    credTypeInfo[t.name] = t.pending
+      ? "待开发：需要浏览器登录授权，本页还不能创建"
+      : (t.description || "");
   }
-
-  const pendingNote = pending.length
-    ? `<div class="hint" style="margin-top:6px">
-        灰色那 ${pending.length} 种要经过一次浏览器登录授权，<strong>这个流程还没做</strong>
-        —— 不是做不了。暂时可以先用 <code>rclone config</code> 建好，建好之后它会出现在
-        上面的连接列表里，在这里照样能编辑字段、测试连接。
-       </div>`
-    : "";
 
   return `<div class="cred-add">
     <div class="cred-add-row">
@@ -4954,7 +4939,6 @@ function credAddFormHTML(types) {
       <button class="primary" id="cred-create">创建</button>
     </div>
     <div class="cred-type-desc" id="cred-type-desc"></div>
-    ${pendingNote}
     <div class="sub" id="cred-add-note" style="margin:8px 0 0"></div>
     <div class="hint" style="margin-top:6px">
       这里只创建<strong>连接</strong>和它的类型；凭据（app_id / app_secret / 目录 token
