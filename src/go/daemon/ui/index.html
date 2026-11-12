@@ -222,6 +222,20 @@
     white-space: pre-wrap;
   }
   .note code { background: rgba(127,127,127,.16); padding: 1px 5px; border-radius: 4px; }
+  /* .note 是警告样式：warn 描边 + 浅黄底。拿它装普通说明，等于把说明书当成了
+     故障灯 —— 同一件事已经犯过三次（过滤规则卡、开机自启、冲突页）。
+     给 .note 加一个中性变体：版式一样，但底色取 --tint、描边取 --line，
+     不再借警告色。改颜色而不是新造一个类，是因为它们的形状本来就该一致。 */
+  .note.info {
+    background: var(--tint);
+    border-color: var(--line);
+  }
+  /* 空表不用一行居中的斜体字：一整页什么都没有时，要回答的是「为什么空」
+     和「怎么让它不空」，一句话不够。 */
+  .empty-block { padding: 6px 2px 2px; }
+  .empty-block strong { display: block; margin-bottom: 7px; font-size: 13px; }
+  .empty-block .hint { line-height: 1.7; }
+  .empty-block .hint + .hint { margin-top: 4px; }
   .save-note { margin: 10px 0 0; }
   .save-note:empty { display: none; }
 
@@ -997,6 +1011,11 @@
     background: none; border: 1px solid transparent; border-bottom: none;
     border-radius: var(--r-sm) var(--r-sm) 0 0;
     margin-bottom: -1px; color: var(--muted);
+    /* 页签切换不能有过渡。全局 button 规则带着 `transition: background .12s`，
+       于是选中的底色是从透明淡入的 —— 内容区已经换了，而「你在这一页」的底色
+       晚 120ms 才到。实测：切换后同一帧读到 rgba(0,0,0,0)，
+       而有 12 个 transition 在跑（两个页签 × 6 个属性）。 */
+    transition: none;
   }
   .drawer-nav button:hover {
     color: var(--ink); background: color-mix(in srgb, var(--bg) 65%, transparent);
@@ -1500,22 +1519,39 @@
   <div class="card">
     <div class="row" style="margin-bottom:12px">
       <strong class="grow">冲突列表</strong>
-      <span class="sub" style="margin:0">来自每个作业最近一次运行</span>
+      <span class="sub" style="margin:0">来自各作业最近一次比较</span>
     </div>
-    <div class="note" style="margin-bottom:12px">
-      这里两个按钮都不会删除任何云端文件。<strong>以本地为准</strong>改的是同步快照，
-      下次运行用本地版覆盖云端那一份；<strong>以云端为准</strong>会把云端那份
-      <strong>下载覆盖本地文件</strong>，然后记为已同步。
-      想在云端同时保留两份，请把该 pair 的冲突策略设为 <code>keep-both</code>（配置页）。
-      <div style="margin-top:6px;color:var(--muted)">
-        列表来自最近一次运行。守护进程重启后会清空 —— 到「作业」点一次
-        <strong>预览</strong> 即可重新检测（预览不会改动任何东西）。
-      </div>
+
+    <!-- 说明只在真的有冲突时出现。以前它是一张常驻的黄色 .note，写的是「这里两个
+         按钮都不会删……」—— 而表为空时压根没有按钮，这一段在指点不存在的东西。
+         现在：有行时给一条中性说明（.note.info，不是警告色），没有行时给空状态。
+
+         措辞上的三处修正：
+         1. 「到「作业」点一次预览」——「作业」这个页签已经不叫这个名字了（D77）。
+            同一个重命名让「（配置页）」也失效，改成「配置表单」。
+         2. 「来自最近一次运行」不准确：这份列表也会读预览结果（renderConflicts 里
+            last_result 和 plan.results 都收），只做过预览的人会以为没数据。
+            改成「最近一次比较」。
+         3. 原文 5 行里有 4 个加粗。全强调等于没强调，改用「」引控件名 —— 这个界
+            面本来就用「」指代控件。 -->
+    <div id="conflict-hint" class="note info hidden" style="margin-bottom:12px">
+      两个按钮都不删云端文件。<br>
+      「以本地为准」现在什么都不动，下次运行用本地版覆盖云端。<br>
+      「以云端为准」现在就把云端那份下载下来覆盖本地，会先问你 —— 这是唯一会丢本地改动的一个。<br>
+      两份都想留着：把该目录对的「冲突策略」改成 <code>keep-both</code>（配置表单）。
     </div>
-    <table>
+
+    <table id="conflict-table" class="hidden">
       <thead><tr><th>作业</th><th>路径</th><th>类型</th><th>说明</th><th style="width:1%"></th></tr></thead>
-      <tbody id="conflicts"><tr><td colspan="5" class="empty">暂无冲突</td></tr></tbody>
+      <tbody id="conflicts"></tbody>
     </table>
+
+    <div id="conflicts-empty" class="empty-block">
+      <strong>暂无冲突</strong>
+      <div class="hint">没有需要你在两边之间做选择的文件。</div>
+      <div class="hint">这是最近一次比较的结果，守护进程重启后会清空 ——
+        到「作业列表」点一次「预览」可以重新检测，预览不改任何东西。</div>
+    </div>
   </div>
 </section>
 
@@ -2014,6 +2050,43 @@ function fmtDuration(seconds) {
   return Math.floor(m / 60) + "h" + (m % 60) + "m";
 }
 
+// CONFLICT_KIND and conflictDetail turn the backend's machine tokens and English
+// prose into this console's language.
+//
+// The backend reports `kind: "remote-replaced"` and `detail: "this name now carries
+// a different file than the one we uploaded"` - correct for logs and for the CLI,
+// which is English, but on a Chinese page that is two lines of English in a table
+// that is otherwise Chinese. The 类型 column showed the raw token, so it wrapped
+// onto two lines at the drawer's width (`remote-` / `replaced`).
+//
+// The sentences are composed from structured fields (found / recorded) rather than
+// by translating `detail` with string matching: a wording change in the backend
+// must not silently empty this column. Unknown kinds fall back to `detail`, so a
+// new backend conflict type still appears rather than vanishing.
+const CONFLICT_KIND = {
+  "remote-deleted": "云端已删除",
+  "remote-replaced": "云端已替换",
+  "duplicate-name": "云端重名",
+};
+
+function conflictDetail(c) {
+  const n = (c.found || []).length;
+  switch (c.kind) {
+    case "remote-deleted":
+      return "上次同步记下的那份已经不在云端了";
+    case "remote-replaced":
+      return "这个位置的云端文件与上次同步的不是同一份";
+    case "duplicate-name":
+      // `recorded` empty means the snapshot never had this path, so these copies
+      // are not just "different from ours" - they are somebody else's entirely.
+      return c.recorded
+        ? `云端有 ${n} 个同名文件，都不是上次同步的那份`
+        : `云端有 ${n} 个同名文件，且都不在同步记录里`;
+    default:
+      return c.detail || "";
+  }
+}
+
 function renderConflicts() {
   const tbody = document.getElementById("conflicts");
   const rows = [];
@@ -2045,15 +2118,29 @@ function renderConflicts() {
       }
     }
   }
+  // Three pieces take turns: the table, the explanation of its two buttons, and
+  // the empty state. The explanation may only appear with the table - it names
+  // buttons that do not exist on an empty list.
+  const hintEl = document.getElementById("conflict-hint");
+  const tableEl = document.getElementById("conflict-table");
+  const emptyEl = document.getElementById("conflicts-empty");
+
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无冲突</td></tr>';
+    tbody.innerHTML = "";
+    if (tableEl) tableEl.classList.add("hidden");
+    if (emptyEl) emptyEl.classList.remove("hidden");
+    if (hintEl) hintEl.classList.add("hidden");
     return;
   }
+  if (tableEl) tableEl.classList.remove("hidden");
+  if (emptyEl) emptyEl.classList.add("hidden");
+  if (hintEl) hintEl.classList.remove("hidden");
+
   tbody.innerHTML = rows.map(c => `<tr>
     <td>${esc(c.job)}${c.pair ? `<div class="sub mono" style="margin:0">${esc(c.pair)}</div>` : ""}</td>
     <td class="mono">${esc(c.path)}</td>
-    <td><span class="pill warn">${esc(c.kind)}</span></td>
-    <td>${esc(c.detail)}</td>
+    <td><span class="pill warn" title="${esc(c.kind)}">${esc(CONFLICT_KIND[c.kind] || c.kind)}</span></td>
+    <td>${esc(conflictDetail(c))}</td>
     <td class="actions">
       <button data-resolve="push" data-job="${esc(c.job)}" data-pair="${esc(c.pair)}"
               data-path="${esc(c.path)}" title="下次运行用本地版覆盖云端那一份">以本地为准</button>
@@ -4983,7 +5070,7 @@ function renderCredentials() {
     </div>` + (credAddOpen ? credAddFormHTML(v.types || []) : "");
 
   const empty = remotes.length ? "" :
-    `<div class="note" style="margin-bottom:12px">
+    `<div class="note info" style="margin-bottom:12px">
        还没有任何云盘连接。在上面填一个名字、选一个类型，创建后同一个卡片里会出现要填的字段。
        填好并测试通过之后，目录对右边的「云端」就有东西可选了。
      </div>`;
