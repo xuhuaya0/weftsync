@@ -1337,7 +1337,7 @@
       <div class="dlg-hint">
         一行一条，大小写不敏感。<code>/foo</code> 从同步根锚定；<code>**</code> 匹配任意层级。
         这里的规则作用于<strong>本配置</strong>的所有目录对；全局那一份在
-        「全局设置与凭据 → 过滤规则」，叠在这之上。
+        「全局设置与凭据 → 全局排除规则」，叠在这之上。
       </div>
     </div>
   </div>
@@ -1611,7 +1611,12 @@
 
   <div class="card">
     <div class="row" style="margin-bottom:12px">
-      <strong class="grow">全局过滤规则</strong>
+      <strong class="grow">全局排除规则</strong>
+      <!-- 「存在哪里」这句话放到卡头，和上面「云盘连接」卡头的「写在 rclone 配置文件里」
+           同一句式同一位置。以前它是正文最后一行右对齐的完整绝对路径 —— 56 个字符
+           的 mono 堆在 842px 卡片底部，离左边的保存按钮 300 多像素，看着像页脚水印。
+           完整路径不丢，挂在 title 上。 -->
+      <span id="set-file" class="sub" style="margin:0"></span>
     </div>
     <div id="set-filter" class="empty">载入中…</div>
   </div>
@@ -4728,31 +4733,40 @@ async function loadSettings() {
 
   // --- filters
   //
-  // 这里写「叠加在各配置自己的过滤器之上」，因为工具栏上的「过滤器」也是过滤，
-  // 两边以前都只说「作用于所有」，读起来像同一件事。区别只在于作用域：
-  // 这里一份 settings.json 管每一份配置；那里一份作业文件只管它自己的目录对。
+  // 一张卡里原来只有三个东西可用：一个 5 行文本框、一个保存、一个路径行。
+  // 但最显眼的是中间那块 3 行的黄色 .note —— 而它讲的都是普通信息，不是警告。
+  // .note 是 warn 色（专用来标问题），拿它装「语法是这样」就是把说明当成了故障。
+  //
+  // 改法：说明降到 .hint（muted、12px）紧贴在输入框下面；块中的「这是全局的」删掉
+  // （标题就写着全局，D74 的错不再犯）；rclone 三字删掉（用户不需要知道包了谁），
+  // 换成能直接用的两条：/foo 锁根、** 任意层级。
+  //
+  // 标题从「全局过滤规则」改成「全局排除规则」—— 这张卡只有 exclude，没有 include
+  // 白名单，叫「过滤」会让人去找包含在哪。
   const patterns = v.exclude || [];
   filterBox.className = "";
-  filterBox.innerHTML = `<div class="note" style="margin-bottom:10px">
-      这是<strong>全局</strong>的：写在这里的规则叠加到每一份配置上（包括以后新建的）。
-      语法与 rclone 过滤相同：<code>*.tmp</code>、<code>.git/**</code>、<code>/cache/**</code>。
-      规则只能排除 —— 配置自己排除掉的文件，这里加不回来。
-    </div>
-    <div class="field" style="align-items:flex-start">
-      <label style="padding-top:7px">规则（每行一条）</label>
-      <div style="flex:1 1 320px;min-width:0">
-        <textarea id="set-exclude" rows="5" style="width:100%" placeholder="*.tmp&#10;.git/**">${esc(patterns.join("\n"))}</textarea>
-      </div>
-    </div>
+  const fileEl = document.getElementById("set-file");
+  if (fileEl) {
+    fileEl.textContent = v.settings_file ? "写在 " + baseName(v.settings_file) + " 里" : "";
+    fileEl.title = v.settings_file || "";
+  }
+  // 没有左侧标签：卡标题就是「全局排除规则」，再来一个「排除规则」标签是把标题砍掉
+  // 两个字再说一遍（D74 的错）。少一列 130px 的标签栏，输入框从 523px 变成 663px，
+  // 一条规则一行的东西本来就该宽。
+  filterBox.innerHTML = `<textarea id="set-exclude" rows="4" style="width:100%;display:block" placeholder="*.tmp&#10;.git/**&#10;/cache/**">${esc(patterns.join("\n"))}</textarea>
+    <div class="hint" style="margin-top:6px">每行一条，对所有配置生效（含以后新建的）。<code>/foo</code> 锚定同步根，<code>**</code> 任意层级。<br>只有排除，没有包含 —— 作业用「包含」点名要的文件，这里拦不住。</div>
     <div class="row" style="margin-top:10px">
       <button id="set-save">保存</button>
       <span id="set-flash" class="hint" style="margin:0"></span>
-    </div>
-    ${v.settings_file
-      ? `<div class="hint" style="margin-top:8px;word-break:break-all">存在
-           <span class="mono">${esc(v.settings_file)}</span>，与作业文件分开。</div>`
-      : ""}`;
+    </div>`;
   document.getElementById("set-save").addEventListener("click", saveSettings);
+}
+
+// baseName is the last path segment, used where the full path would only add noise
+// (the card header says 写在 settings.json 里; the title carries the rest).
+function baseName(p) {
+  const parts = String(p || "").split(/[\\/]/);
+  return parts[parts.length - 1] || p;
 }
 
 async function saveSettings() {
