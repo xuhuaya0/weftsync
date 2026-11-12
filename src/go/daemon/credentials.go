@@ -122,20 +122,30 @@ func (d *Daemon) usedRemotes() map[string][]string {
 	return out
 }
 
-// pairRemoteName is the rclone remote a pair writes to.
+// pairRemoteName is the rclone remote a pair writes to, or "" when the pair's
+// cloud side is not a named remote at all.
 //
 // A pair may name the remote either as pair.remote.backend or inline in
 // pair.remote.root ("remote:path"), and the two are the same thing as far as the
 // credentials page is concerned.
+//
+// The root case delegates to isRemotePath instead of splitting at the first colon.
+// Doing the split here was wrong in exactly the way that matters for "is this
+// connection in use": a pair whose cloud side is a local path looks identical to a
+// remote unless the colon is read carefully, so "C:/data/dst" produced a reference
+// to a remote named "C" and ":local:C:/dst" produced one named ":local". Both are
+// local paths; neither names a connection. isRemotePath already knows the three
+// cases (drive letter, the :local: prefix, and a real "name:path"), so there is one
+// place to be right instead of two.
 func pairRemoteName(p *job.Pair) string {
 	if b := strings.TrimSpace(p.Remote.Backend); b != "" {
 		return b
 	}
 	root := strings.TrimSpace(p.Remote.Root)
-	if i := strings.Index(root, ":"); i > 0 {
-		return root[:i]
+	if !isRemotePath(root) {
+		return ""
 	}
-	return ""
+	return root[:strings.Index(root, ":")]
 }
 
 // CredentialViews describes every remote in the config file.
