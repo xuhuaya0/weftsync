@@ -3948,3 +3948,76 @@ remote，而失败要到下一次运行才以「didn't find section in config fi
 
 **教训**：一个事实说一遍就够。当同一句话在同一个界面里出现 N 次，那不是强调，
 是噪音；而噪音的代价是把真正可用的东西挤到屏幕外。
+
+## D73 · 「你没有对应的所有检查吗」——没有，所以补上，一次抓到三个 bug（2026-11-12）
+
+用户加了一条 SMB 连接，发现字段样式不一致：
+
+> 我试了添加smb这个，然后发现填写的样式仍然有不一致的，我没办法逐个检查吧，
+> 你没有对应的的所有检查吗
+
+**没有。** 我只看了 feishu 一张卡，其余 47 种假设它一样。补上检查之后，一次抓到
+三个光看一张卡永远发现不了的缺陷。
+
+### 三个缺陷
+
+| # | 现象 | 真因 |
+|---|---|---|
+| 1 | SMB 卡里 `pass` 一行的提示跑到别的 x | 行是 `flex-wrap` 自由排布；只有 secret 字段多一个「清除」勾选框，于是它的提示位置和别的行不同 |
+| 2 | s3 渲染出 **23 行都叫 `endpoint`** | rclone 按 provider 各声明一个 `endpoint`，用 `Option.Provider` 限定；面板完全忽略了这一项 |
+| 3 | 修了 #2 之后，Minio 一个 `endpoint` 都没有 | `Provider` 的取值**可以是否定式**：`"!AWS,ArvanCloud,...,IBMCOS,..."` 表示「除这些以外都适用」。`strings.EqualFold` 永远匹配不上否定式 → 这些字段对**所有人**被丢掉 |
+
+第 3 个最危险：它不是我主动忽略，而是「看起来对、实际错」的比较。
+
+正确判据是 rclone 自己导出的 `fs.MatchProvider`（顺带处理空 provider 与逗号列表）；
+example 取值也按 provider 过滤，和 rclone 配置器一致。
+
+### 顺带补的两件（同一批缺陷推出来的）
+
+- **列表型字段渲染成下拉**，不是文本框。s3 的 `provider` 有 39 个取值，靠手打
+  `IBMCOS` 迟早拼错，而拼错要到认证失败才暴露。`provider` 改动即时保存（它决定
+  **还有哪些字段存在**，服务端按已存值推导），保存时把卡上其它已填的值一起带上，
+  否则切一下 provider 就把刚填的凭据丢了。
+- **`provider` 未存值时报告实际生效值**（AWS），而不是空白。同一原则：描述「会用哪个」，
+  而不是「没存」。
+
+### 检查（这才是这次真正的交付）
+
+**每次 `go test` 都跑：**
+
+| 测试 | 断言 |
+|---|---|
+| `TestEveryBackendRendersSaneFields` | 走遍全部 62 种类型；48 种可创建的各有一条完整断言 |
+| `TestRenderedFieldsMatchTheBackend` | 无重名字段、不发明字段、**选中的 provider 适用的必填项必须都在** |
+| `TestProviderFilterMatchesRcloneContract` | 用**独立实现**的参考过滤器（照 rclone 文档写的否定/逗号语义）比对 `applicableOptions`，覆盖 **59 组** provider/后端组合 |
+| `TestChoiceFieldsCarryTheirChoices` | 列表型字段必须带列表，且 Alibaba 的 `storage_class` 不能是 AWS 那 8 个 |
+
+用独立实现而不是再调一次 `fs.MatchProvider`，是因为要钉住**契约**；调同一个函数
+两次等于没用。
+
+**按需在浏览器里跑：** `scripts/check_field_layout.js` 量渲染后的 DOM（每行 4 格、
+label/input/hint 的 x 对齐、输入框宽度一致、不溢出、是否写明已设置/未设置、密码框不带
+value），`scripts/create_all_types.ps1` 为每种可创建后端建一条临时连接（可 `-Cleanup`）。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 48 种后端全部渲染（49 张卡） | ✅ 布局检查 **0 失败** |
+| 反向验证 · CSS | ✅ 去掉 select 的 `width:100%` → 报 **17 处**失败（说明「通过」有意义） |
+| 反向验证 · provider | ✅ 换回 `EqualFold` → `s3 provider="AWS": missing [acl server_side_encryption sse_kms_key_id]` |
+| s3 各 provider 字段 | ✅ AWS 11 / IBMCOS 10（含 `ibm_*`）/ Alibaba 7（`storage_class` 3 个） |
+| 浏览器里切 provider | ✅ 字段实时变化，提示 x 仍全对齐 |
+| SMB 卡 | ✅ 7 行提示全在同一 x，`pass` 有勾选框也不偏 |
+| 真实配置 | ✅ 全程只动 `.scratch\check.conf`（已删），`rclone-test.conf` 一次没碰 |
+
+### 教训
+
+1. **「我看过一张卡」不是验证**。用户没法逐个检查，我也不能；所以要么有自动化检查，
+   要么就是没检查。
+2. **检查本身要做反向验证**。故意把代码改坏一次，确认它报红 —— 否则「0 失败」
+   可能只是「检查不到东西」。
+3. **`EqualFold` 这类「看着对」的比较是 bug 温床**。字段语义如果是「列表 / 否定列表」，
+   就必须用提供者的判定函数，别自己比字符串。
+4. **一处不一致背后往往是一类问题**。SMB 的对齐问题是 1 个 CSS 缺陷，但顺着同一句抱怨
+   去查「所有类型」，挖出了 2 个功能性缺陷（字段丢失）。
