@@ -58,7 +58,7 @@ align_to_start = true
 | POST | `/api/conflict/resolve?job=&pair=&path=&action=push\|pull` | 处理一条冲突 |
 | GET | `/api/autostart` | 开机自启状态（是否启用、写在哪、命令是什么、是否与当前进程一致） |
 | POST | `/api/autostart` | `{"enabled":true|false}` 打开/关闭开机自启 |
-| GET | `/api/info` | 这个进程实际在用什么：版本（构建时的 git 提交）、平台、监听地址、启动时间/已运行、加载的作业文件、rclone 配置路径、拆分账本目录、缓冲大小 |
+| GET | `/api/info` | 「帮助 → 关于 weftsync」的数据：版本（构建时的 git 提交）、平台、监听地址、已运行、加载的作业文件、rclone 配置路径、拆分账本目录（仅在 `--split-dir` 设过时） |
 | GET | `/api/settings` | 全局设置（通知开关、过滤规则）|
 | POST | `/api/settings` | 保存全局设置，立即生效 |
 | GET | `/api/health` | 存活检查 |

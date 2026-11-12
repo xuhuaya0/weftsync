@@ -9,14 +9,19 @@ import (
 	"github.com/rclone/rclone/fs/config"
 )
 
-// Runtime information for the settings page.
+// Runtime information for the About window (Help -> About weftsync).
 //
-// The point of this page is not to be pretty: it answers the questions that come
-// up when something behaves unexpectedly and the console does not explain why -
-// "which binary is this?", "which job files did it actually load?", "where would
-// a split ledger go?", "how long has it been up?". Every one of those has
-// cost a debugging session at some point because the answer was only in the
-// process command line.
+// The point of this list is not to be pretty: every row answers a question that
+// comes up when something behaves unexpectedly and the console does not explain
+// why - "which binary is this?", "which job files did it actually load?", "where
+// would a split ledger go?", "how long has it been up?". Each one has cost a
+// debugging session at some point because the answer was only in the process
+// command line.
+//
+// Rows that were here and are gone: the in-memory history/log counters (the
+// history and log pages already show the real numbers, and a buffer length is
+// not something anyone acts on) and the wall-clock start time (the same fact as
+// the uptime row, written twice).
 type InfoView struct {
 	// Version comes from the build metadata, so it is the revision that was
 	// compiled rather than a number somebody remembered to bump.
@@ -31,22 +36,15 @@ type InfoView struct {
 	// StartedAt and UptimeSeconds describe this process, not the jobs.
 	StartedAt     time.Time `json:"started_at"`
 	UptimeSeconds int64     `json:"uptime_seconds"`
-	// ServerNow lets the page compare its clock with the daemon's; a large
-	// difference explains timestamps that look wrong.
-	ServerNow time.Time `json:"server_now"`
 
 	// JobFiles are the files this daemon loaded, in order. A job missing from
 	// here was never passed on the command line.
 	JobFiles []string `json:"job_files"`
 	// ConfigFile is the rclone configuration holding the credentials.
 	ConfigFile string `json:"config_file"`
-	// SplitDir is where split ledgers are written.
+	// SplitDir is where split ledgers are written. Empty means the default
+	// location, which is not worth a row of its own.
 	SplitDir string `json:"split_dir"`
-
-	// HistoryRuns and LogLines are how much this process is holding in memory,
-	// which is what "the log only goes back so far" means in practice.
-	HistoryRuns int `json:"history_runs"`
-	LogLines    int `json:"log_lines"`
 }
 
 // handleInfo reports what this process is and where it reads from.
@@ -64,7 +62,6 @@ func (a *API) handleInfo(w http.ResponseWriter, r *http.Request) {
 		Addr:       a.Addr,
 		ConfigFile: config.GetConfigPath(),
 		SplitDir:   a.SplitDir,
-		ServerNow:  time.Now(),
 	}
 	if a.StartedAt.IsZero() {
 		a.StartedAt = time.Now()
@@ -75,8 +72,6 @@ func (a *API) handleInfo(w http.ResponseWriter, r *http.Request) {
 	for _, st := range a.D.Status() {
 		view.JobFiles = append(view.JobFiles, st.File)
 	}
-	view.HistoryRuns = a.D.HistoryLen()
-	view.LogLines = a.D.LogLen()
 	writeJSON(w, http.StatusOK, view)
 }
 

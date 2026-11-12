@@ -155,7 +155,10 @@
   legend { padding: 0 6px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
   .field { display: flex; gap: 10px; align-items: center; margin-bottom: 9px; flex-wrap: wrap; }
   .field label { min-width: 130px; color: var(--muted); }
-  .field .hint { color: var(--muted); font-size: 12px; }
+  /* `.hint` 原来只在 .field / .cred-field 下面定义，其余调用点（保存提示、弹窗说明）
+     落到继承的正文色 13px —— 同一种信息两种字号。基础规则放这里，那两条就不用
+     重复写字号。 */
+  .hint { color: var(--muted); font-size: 12px; }
   /* 云盘凭据的字段用固定四列：标签 · 输入 · 清除框 · 提示。
      .field 本身是自由换行的（别处还有 6 个调用点依赖它），所以这里只用
      .cred-field 覆盖，不动共用样式。
@@ -216,7 +219,13 @@
   .bar > i { display: block; height: 100%; background: var(--blue); width: 0; }
   .prog { font-size: 12px; color: var(--muted); }
   .prog .cur { word-break: break-all; }
-  .plan-grid { display: grid; grid-template-columns: 1fr auto; gap: 6px 14px; align-items: baseline; }
+  /* 「标签 · 值」两列。第一列必须是 max-content：用 1fr auto 时，长路径的
+     max-content 把 auto 那一列抬到 479px，标签列只剩 33px —— 实测「rclone 配置」
+     被摸成两行，而且和右边的值叠在一起。 */
+  .about-grid {
+    display: grid; grid-template-columns: max-content minmax(0, 1fr);
+    gap: 7px 14px; align-items: baseline;
+  }
   .plan-pair { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; margin-bottom: 10px; }
   .plan-pair .head { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
   .danger { color: var(--bad); font-weight: 600; }
@@ -1327,7 +1336,8 @@
       </div>
       <div class="dlg-hint">
         一行一条，大小写不敏感。<code>/foo</code> 从同步根锚定；<code>**</code> 匹配任意层级。
-        这里的规则作用于<strong>所有</strong>目录对。
+        这里的规则作用于<strong>本配置</strong>的所有目录对；全局那一份在
+        「全局设置与凭据 → 过滤规则」，叠在这之上。
       </div>
     </div>
   </div>
@@ -1369,6 +1379,24 @@
     <span class="grow"></span>
     <button data-dlg-close>取消</button>
     <button class="primary" id="dlg-pair-ok">确定</button>
+  </div>
+</div>
+
+<!-- ============ 关于 ============
+     这里放的是「这个进程到底是什么」。它以前是设置页里的一张只读卡片，
+     占着那一页近一半高度，而菜单里的「关于 weftsync」却什么也没打开。 -->
+<div id="dlg-about" class="dlg hidden">
+  <div class="dlg-head">
+    <strong>关于 weftsync</strong>
+    <span class="grow"></span>
+    <button class="icon-btn" data-dlg-close title="关闭">✕</button>
+  </div>
+  <div class="dlg-body">
+    <div id="about-body" class="empty">载入中…</div>
+  </div>
+  <div class="dlg-foot">
+    <span class="grow"></span>
+    <button class="primary" data-dlg-close>关闭</button>
   </div>
 </div>
 
@@ -1549,10 +1577,11 @@
 </section>
 
 <section id="tab-settings" class="tab hidden">
-  <!-- 云盘连接在最前。它现在是这个页面的主角：没有连接就没有云端目录可选，
-       而其余四张卡是排查用的（运行信息、通知、过滤规则、开机自启）。
-       以前它排最后，页内滚动 1500px 才到 —— 从「浏览 → 新增连接」跳进来的人
-       看到的是运行信息，完全不知道要的东西在哪。 -->
+  <!-- 这一页只剩能改的东西：云盘连接、通知、过滤规则、开机自启。
+       原来的「运行信息」是一张 530px 的只读卡片 —— 页面上最高的一块内容，
+       却一条都改不了，而它正好是「为什么行为和预想不一样」时要看的。
+       只读的排查信息已移到「帮助 → 关于 weftsync」，那里以前是空的
+       （菜单项直接打开了这一页）。 -->
   <div class="card" id="card-credentials">
     <div class="row" style="margin-bottom:10px">
       <strong class="grow">云盘连接</strong>
@@ -1575,18 +1604,6 @@
 
   <div class="card">
     <div class="row" style="margin-bottom:12px">
-      <strong class="grow">运行信息</strong>
-      <button id="info-refresh">刷新</button>
-    </div>
-    <div class="note" style="margin-bottom:12px">
-      这些是这个进程<strong>实际</strong>在用的东西。排查「为什么行为和预想不一样」时先看这里：
-      作业文件没被列出来，说明它压根没传给 daemon。
-    </div>
-    <div id="info-body" class="empty">载入中…</div>
-  </div>
-
-  <div class="card">
-    <div class="row" style="margin-bottom:12px">
       <strong class="grow">通知</strong>
     </div>
     <div id="set-notify" class="empty">载入中…</div>
@@ -1594,13 +1611,15 @@
 
   <div class="card">
     <div class="row" style="margin-bottom:12px">
-      <strong class="grow">过滤规则（对所有作业生效）</strong>
+      <strong class="grow">全局过滤规则</strong>
     </div>
     <div id="set-filter" class="empty">载入中…</div>
   </div>
 
   <div class="card">
-    <strong>开机自启</strong>
+    <div class="row" style="margin-bottom:12px">
+      <strong class="grow">开机自启</strong>
+    </div>
     <div id="as-body" class="empty">载入中…</div>
   </div>
 </section>
@@ -2988,9 +3007,7 @@ function openDrawer(tab) {
 
   if (drawerTab === "config") { syncJobPicker(); loadConfig(); }
   if (drawerTab === "split") { loadSplit(); }
-  if (drawerTab === "settings") {
-    loadInfo(); loadSettings(); loadAutostart(); loadCredentials();
-  }
+  if (drawerTab === "settings") { loadSettings(); loadAutostart(); loadCredentials(); }
 }
 
 function closeDrawer() {
@@ -3021,7 +3038,7 @@ const MENUS = {
     { label: "全局设置与凭据", fn: () => openDrawer("settings") },
   ],
   help: [
-    { label: "关于 weftsync", fn: () => openDrawer("settings") },
+    { label: "关于 weftsync", fn: () => openAbout() },
   ],
 };
 
@@ -4611,11 +4628,18 @@ document.getElementById("sp-job").addEventListener("change", () => {
 document.getElementById("sp-check").addEventListener("click", splitCheck);
 document.getElementById("sp-refresh-snaps").addEventListener("click", refreshSnapshots);
 
-// ------------------------------------------------------------------ settings: info
-// Everything here answers a question that used to require reading the command
-// line of the running process: which binary, which job files, which config.
-async function loadInfo() {
-  const body = document.getElementById("info-body");
+// ------------------------------------------------------------------ about
+//
+// 「帮助 → 关于 weftsync」。这份信息以前是设置页里一张 530px 的只读卡片：
+// 页面上最高的一块内容，却一条都改不了 —— 能改的东西才应该在设置里。
+//
+// 留下的六行都是「报错时回答不了就得去拆命令行」的事实。删掉的三行是：
+// 历史/日志的缓冲条数（历史页和日志页各自已经在显示真实数据）、
+// 启动时刻（和「已运行」是同一件事，写两行）。
+// 拆分账本目录只在 --split-dir 真的设过时才显示：没设时写「默认在 state 旁边」
+// 只是在解释实现，不回答任何问题。
+async function loadAbout() {
+  const body = document.getElementById("about-body");
   let v;
   try {
     v = await getJSON("/api/info");
@@ -4626,29 +4650,32 @@ async function loadInfo() {
   }
   body.className = "";
 
-  const row = (label, value, mono) => {
+  const row = (label, value) => {
     if (!value && value !== 0) return "";
-    return `<span>${esc(label)}</span>` +
-      `<span class="${mono === false ? "" : "mono"}" style="word-break:break-all">${esc(String(value))}</span>`;
+    return `<span class="hint">${esc(label)}</span>` +
+      `<span class="mono" style="word-break:break-all">${esc(String(value))}</span>`;
   };
-  const jobFiles = (v.job_files || []);
-  body.innerHTML = `<div class="plan-grid">
-    ${row("版本", v.version)}
-    ${row("进程", v.goos + " / " + v.goarch + " · " + v.go_version)}
-    ${row("监听地址", v.addr)}
-    ${row("已运行", fmtDuration(v.uptime_seconds))}
-    ${row("启动于", fmtTime(v.started_at))}
-    ${row("rclone 配置", v.config_file || "（未设置，用环境变量或默认位置）")}
-    ${row("拆分账本目录", v.split_dir || "（默认：state 文件旁边）")}
-    ${row("内存中的历史", v.history_runs + " 条")}
-    ${row("内存中的日志", v.log_lines + " 行")}
-  </div>
-  <div class="note" style="margin-top:12px">
-    作业文件（${jobFiles.length}）：${jobFiles.length
-      ? `<div class="mono" style="margin-top:6px">` +
-        jobFiles.map(f => esc(f)).join("<br>") + `</div>`
-      : "一个都没有 —— 这不是正常状态"}
-  </div>`;
+  const jobFiles = v.job_files || [];
+  body.innerHTML = `<div class="about-grid">
+      ${row("版本", v.version)}
+      ${row("进程", v.goos + " / " + v.goarch + " · " + v.go_version)}
+      ${row("监听地址", v.addr)}
+      ${row("已运行", fmtDuration(v.uptime_seconds))}
+      ${row("rclone 配置", v.config_file || "（未设置，用环境变量或默认位置）")}
+      ${row("拆分账本目录", v.split_dir)}
+    </div>
+    <div class="dlg-sect" style="margin-top:16px">加载的作业文件（${jobFiles.length}）</div>
+    ${jobFiles.length
+      ? `<div class="mono" style="line-height:1.9;word-break:break-all">${jobFiles.map(f => esc(f)).join("<br>")}</div>`
+      : `<div class="note">一个都没有 —— 这个进程没收到任何作业文件。</div>`}
+    <div class="hint" style="margin-top:9px">
+      作业文件没列在这里，说明它压根没传给这个进程。
+    </div>`;
+}
+
+function openAbout() {
+  dlgOpen("dlg-about");
+  loadAbout();
 }
 
 function fmtDuration(seconds) {
@@ -4680,42 +4707,52 @@ async function loadSettings() {
   }
 
   // --- notifications
+  //
+  // 没有托盘时，开关依然在这里，只是置灰。以前这一支是一整张只有说明文字的卡：
+  // 一个什么都做不了的控件，和一段解释它为什么做不了 —— 两行文字占了整张卡。
+  // 现在控件还在（置灰），旁边一句说原因，看得出「这个设置存在，此时不可用」。
   const on = v.notify_enabled !== false;
   const available = !!v.notifications_available;
   notifyBox.className = "";
-  if (!available) {
-    notifyBox.innerHTML = `<div class="note">当前进程没有托盘图标（Linux 或未加 <code>--tray</code>），
-      所以没有地方弹通知。这一项在这里无法开启 —— 日志里仍会记录
-      <code>notify:</code> 行。</div>`;
-  } else {
-    notifyBox.innerHTML = `<label class="row" style="gap:8px;align-items:center">
-      <input type="checkbox" id="set-notify-on" ${on ? "checked" : ""}>
+  notifyBox.innerHTML = `<label class="row" style="gap:8px;align-items:center">
+      <input type="checkbox" id="set-notify-on"${on ? " checked" : ""}${available ? "" : " disabled"}>
       <span>失败 / 被闸门拦下 / 有冲突时弹托盘通知</span>
     </label>
     <div class="hint" style="margin-top:6px">
-      成功、预览、手动停止都不通知 —— 每次都弹等于让人关掉通知。
+      ${available
+        ? "成功、预览、手动停止都不通知 —— 每次都弹等于让人关掉通知。"
+        : "这个进程没有托盘图标（不是 Windows 桌面，或启动时没加 <code>--tray</code>），" +
+          "所以没有地方弹；日志里仍会记录 <code>notify:</code> 行。"}
     </div>`;
-    document.getElementById("set-notify-on").addEventListener("change", saveSettings);
-  }
+  document.getElementById("set-notify-on").addEventListener("change", saveSettings);
 
   // --- filters
+  //
+  // 这里写「叠加在各配置自己的过滤器之上」，因为工具栏上的「过滤器」也是过滤，
+  // 两边以前都只说「作用于所有」，读起来像同一件事。区别只在于作用域：
+  // 这里一份 settings.json 管每一份配置；那里一份作业文件只管它自己的目录对。
   const patterns = v.exclude || [];
   filterBox.className = "";
   filterBox.innerHTML = `<div class="note" style="margin-bottom:10px">
-      这里写的规则会加到<strong>每个</strong>作业上，语法与 rclone 过滤相同：
-      <code>*.tmp</code>、<code>.git/**</code>、<code>/cache/**</code>。
-      规则只能排除，不能把作业自己排除掉的文件再加回来。
+      这是<strong>全局</strong>的：写在这里的规则叠加到每一份配置上（包括以后新建的）。
+      语法与 rclone 过滤相同：<code>*.tmp</code>、<code>.git/**</code>、<code>/cache/**</code>。
+      规则只能排除 —— 配置自己排除掉的文件，这里加不回来。
     </div>
-    <div class="field">
-      <label>规则（每行一条）</label>
-      <textarea id="set-exclude" rows="5" placeholder="*.tmp&#10;.git/**">${esc(patterns.join("\n"))}</textarea>
+    <div class="field" style="align-items:flex-start">
+      <label style="padding-top:7px">规则（每行一条）</label>
+      <div style="flex:1 1 320px;min-width:0">
+        <textarea id="set-exclude" rows="5" style="width:100%" placeholder="*.tmp&#10;.git/**">${esc(patterns.join("\n"))}</textarea>
+      </div>
     </div>
     <div class="row" style="margin-top:10px">
-      <button id="set-save" class="grow">保存</button>
+      <button id="set-save">保存</button>
       <span id="set-flash" class="hint" style="margin:0"></span>
-    </div>`;
+    </div>
+    ${v.settings_file
+      ? `<div class="hint" style="margin-top:8px;word-break:break-all">存在
+           <span class="mono">${esc(v.settings_file)}</span>，与作业文件分开。</div>`
+      : ""}`;
   document.getElementById("set-save").addEventListener("click", saveSettings);
-  filterBox.dataset.settingsFile = v.settings_file || "";
 }
 
 async function saveSettings() {
@@ -4751,8 +4788,6 @@ async function saveSettings() {
 // ------------------------------------------------------------------ settings: autostart
 let autostartView = null;
 
-document.getElementById("info-refresh").addEventListener("click", loadInfo);
-
 async function loadAutostart() {
   const body = document.getElementById("as-body");
   try {
@@ -4786,7 +4821,7 @@ function renderAutostart() {
   }
 
   body.innerHTML = note +
-    `<div class="field" style="margin-top:12px">
+    `<div class="field">
        <label>开机自启</label>
        <input type="checkbox" id="as-enabled" ${v.enabled ? "checked" : ""}>
        <span class="hint">登录 Windows / Linux 桌面时自动启动这个守护进程</span>
@@ -4795,10 +4830,12 @@ function renderAutostart() {
        <label>写入位置</label>
        <span class="mono">${esc(v.location)}</span>
      </div>
-     <div class="field">
-       <label>当前命令</label>
-       <span class="mono" style="word-break:break-all">${v.command ? esc(v.command) : "（未设置）"}</span>
-     </div>
+     ${v.command
+       ? `<div class="field">
+            <label>当前命令</label>
+            <span class="mono" style="word-break:break-all">${esc(v.command)}</span>
+          </div>`
+       : ""}
      <div id="as-save-note" class="note save-note"></div>`;
 
   document.getElementById("as-enabled").addEventListener("change", saveAutostart);

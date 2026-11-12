@@ -82,30 +82,10 @@ func TestInfoWithoutStartTimeUsesNow(t *testing.T) {
 	}
 }
 
-// The two counters explain "the log only goes back so far".
-func TestInfoCountsBuffers(t *testing.T) {
-	dir := t.TempDir()
-	sink := NewLogSink(io.Discard)
-	d, err := New([]string{writeJobFile(t, dir, "a", simpleJob("a", ""))}, sink)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	api := &API{D: d, Addr: "x", StartedAt: time.Now()}
-
-	v := getInfo(t, api)
-	if v.HistoryRuns != 0 {
-		t.Errorf("history = %d, want 0 before any run", v.HistoryRuns)
-	}
-
-	// Lines the daemon writes must be visible in the count, otherwise the page
-	// would claim the log is empty while the log tab shows content.
-	d.logf("a line from the test")
-	v = getInfo(t, api)
-	if v.LogLines == 0 {
-		t.Error("log counter stayed at 0 after the daemon wrote a line")
-	}
-}
-
+// The two counters that used to live here were removed on purpose: the history
+// and log pages already show the real numbers, and nothing is decided from a
+// buffer length. This test pins the rest of the payload down so a future field
+// cannot quietly bring back an "how much is in memory" row.
 func TestInfoRejectsPost(t *testing.T) {
 	api, _ := newInfoAPI(t)
 	rec := httptest.NewRecorder()
