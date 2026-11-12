@@ -226,9 +226,13 @@ func TestRemoteTypesFromFiltersAndOrders(t *testing.T) {
 	}
 }
 
-// A backend that cannot be configured by typing values must be marked and sorted
-// last, not silently offered. Both signals come from rclone's own declarations.
-func TestRemoteTypesBlockWhatCannotBeFilledIn(t *testing.T) {
+// Three different situations, and the picker must not conflate them:
+//
+//	usable anyway            -> listed, recommended group
+//	usable with a text field -> listed too (wrappers: one upstream name)
+//	not built yet            -> listed greyed as pending, with the reason
+//	impossible here          -> not listed at all
+func TestRemoteTypesClassifyEveryCase(t *testing.T) {
 	wrapper := &fs.RegInfo{
 		Name: "alias", Description: "Alias for an existing remote",
 		Options: fs.Options{{Name: "remote", Required: true}},
@@ -252,50 +256,91 @@ func TestRemoteTypesBlockWhatCannotBeFilledIn(t *testing.T) {
 	for _, v := range got {
 		byName[v.Name] = v
 	}
-	for _, n := range []string{"alias", "drive", "memory"} {
-		if !byName[n].Blocked || byName[n].Reason == "" {
-			t.Errorf("%s should be blocked with a reason, got %+v", n, byName[n])
-		}
-		if byName[n].Recommended {
-			t.Errorf("%s is both blocked and recommended", n)
-		}
+
+	// A wrapper is configured by naming another connection - a required text
+	// field, which the form already renders. It must NOT be withheld.
+	if w, ok := byName["alias"]; !ok {
+		t.Error("alias was dropped; naming an upstream is a plain text field")
+	} else if w.Pending {
+		t.Errorf("alias is marked pending but needs nothing special: %+v", w)
 	}
-	if byName["webdav"].Blocked {
+
+	// OAuth is not built yet. It is listed, greyed, and says so.
+	if d, ok := byName["drive"]; !ok {
+		t.Error("drive should be listed as pending, not hidden")
+	} else if !d.Pending || d.Reason == "" {
+		t.Errorf("drive should be pending with a reason: %+v", d)
+	} else if d.Recommended {
+		t.Error("drive is both pending and recommended")
+	}
+
+	// memory can never be a sync target, so it is not mentioned at all.
+	if _, ok := byName["memory"]; ok {
+		t.Error("memory should be hidden, not offered")
+	}
+
+	if byName["webdav"].Pending {
 		t.Errorf("webdav should be usable: %+v", byName["webdav"])
 	}
-	if last := got[len(got)-1]; !last.Blocked {
-		t.Errorf("last entry %q is not blocked; blocked ones must come last", last.Name)
+	if last := got[len(got)-1]; !last.Pending {
+		t.Errorf("last entry %q is not pending; pending ones must come last", last.Name)
 	}
 }
 
-// The create endpoint refuses a blocked type instead of producing a connection
-// that can never authenticate.
-func TestCreateRemoteRefusesBlockedType(t *testing.T) {
+// The create endpoint refuses a type this page has no flow for instead of
+// producing a connection that can never authenticate.
+func TestCreateRemoteRefusesPendingType(t *testing.T) {
 	withTempConfig(t, "")
 	a := credentialAPI(t)
 
-	// alias/union are registered by backend/all in production; this test binary
-	// links feishu only, so use whichever blocked type it does know about.
-	var blocked string
+	// The daemon's test binary links only feishu, so there may be nothing pending
+	// to test against; skip rather than pretend.
+	var pending string
 	for _, v := range a.remoteTypes() {
-		if v.Blocked {
-			blocked = v.Name
+		if v.Pending {
+			pending = v.Name
 			break
 		}
 	}
-	if blocked == "" {
-		t.Skip("this test binary links no blocked backend")
+	if pending == "" {
+		t.Skip("this test binary links no pending backend")
 	}
 
-	rec := postCredentials(a, "?name=w&type="+blocked, "")
+	rec := postCredentials(a, "?name=w&type="+pending, "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "不能在这个页面创建") {
-		t.Errorf("the refusal does not explain itself: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "还没支持") {
+		t.Errorf("the refusal should say \"not yet\", got: %s", rec.Body.String())
 	}
 	if _, ok := config.FileGetValue("w", "type"); ok {
-		t.Error("a blocked type was written to the config anyway")
+		t.Error("a pending type was written to the config anyway")
+	}
+}
+
+// A wrapper backend is configured by naming another connection - one required
+// text field, which the form already renders (feishu's three required fields are
+// covered by TestCreateRemoteWritesOnlyTheType). So it must not be withheld, and
+// it must not be labelled "not built yet".
+func TestWrapperTypesAreNotPending(t *testing.T) {
+	for _, name := range []string{"alias", "crypt", "union", "chunker",
+		"compress", "cache", "hasher", "combine"} {
+		// The rule itself: an upstream is a text field, not a missing feature.
+		wrapper := &fs.RegInfo{
+			Name: name, Description: "wrapper",
+			Options: fs.Options{{Name: "remote", Required: true}},
+		}
+		if r := pendingReason(wrapper); r != "" {
+			t.Errorf("%s was classified as pending: %q", name, r)
+		}
+		if _, hidden := hiddenTypes[name]; hidden {
+			t.Errorf("%s is hidden but should be creatable", name)
+		}
+		// And it gets a human label for the field, because "remote" alone does not
+		// tell anyone what to type.
+		if fieldLabels[name]["remote"] == "" && fieldLabels[name]["upstreams"] == "" {
+			t.Errorf("%s has no label for its upstream field", name)
+		}
 	}
 }
 
@@ -402,8 +447,14 @@ func TestRemoteTypesRealRegistryStartsWithFeishu(t *testing.T) {
 		if v.Name == "local" {
 			t.Error("local leaked into the cloud type list")
 		}
-		if v.Blocked && v.Recommended {
-			t.Errorf("%s is both blocked and recommended", v.Name)
+		if v.Name == "memory" {
+			t.Error("memory should be hidden")
+		}
+		if v.Pending && v.Recommended {
+			t.Errorf("%s is both pending and recommended", v.Name)
+		}
+		if v.Pending && v.Reason == "" {
+			t.Errorf("%s is pending without saying why", v.Name)
 		}
 	}
 }

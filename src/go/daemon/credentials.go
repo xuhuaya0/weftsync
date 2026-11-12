@@ -159,6 +159,16 @@ var fieldLabels = map[string]map[string]string{
 		"base_url":   "API 地址",
 		"qps":        "每秒请求数上限",
 	},
+	// Wrapper backends are configured by naming another connection. That is a text
+	// field like any other, but "remote" as a label tells nobody what to type.
+	"alias":    {"remote": "上游连接名（如 feishu:）"},
+	"crypt":    {"remote": "上游连接名（如 feishu:）", "password": "加密口令"},
+	"chunker":  {"remote": "上游连接名（如 feishu:）"},
+	"compress": {"remote": "上游连接名（如 feishu:）"},
+	"cache":    {"remote": "上游连接名（如 feishu:）"},
+	"hasher":   {"remote": "上游连接名（如 feishu:）"},
+	"union":    {"upstreams": "上游连接名，逗号分隔"},
+	"combine":  {"upstreams": "上游连接名，逗号分隔"},
 }
 
 func (a *API) credentialView(name, typ string, usedBy []string) CredentialView {
@@ -243,64 +253,54 @@ type RemoteType struct {
 	// Recommended marks the backends shown first. rclone registers ~70 of them,
 	// and a new-connection form whose first row is "alias" helps nobody.
 	Recommended bool `json:"recommended,omitempty"`
-	// Blocked means this backend cannot be set up by typing values into a form,
-	// with Reason saying why. Such types are listed separately and refused by the
-	// create endpoint: offering a choice that produces a connection which can
-	// never authenticate is worse than not offering it.
-	Blocked bool   `json:"blocked,omitempty"`
+	// Pending means this type needs a flow the page does not have YET, and Reason
+	// says which one. It is deliberately not called "blocked": the distinction
+	// that matters to a reader is "we have not built it" versus "it cannot work",
+	// and only the first is worth showing.
+	Pending bool   `json:"pending,omitempty"`
 	Reason  string `json:"reason,omitempty"`
+}
+
+// hiddenTypes are registered backends that can never be a sync target here, so
+// the picker does not mention them at all.
+//
+// Hiding is the honest option for these: there is nothing the user could do to
+// make them work, and a greyed-out row would only invite the question "why is
+// this here". Everything that CAN work - now or later - stays visible.
+var hiddenTypes = map[string]string{
+	"memory": "in-memory storage, lost on exit; cannot hold a sync target",
 }
 
 // recommendedOrder is the short list put at the top of the type picker.
 //
 // feishu first because it is this program's own backend and what its
-// documentation is about; then the cloud drives people actually sync to.
-// Types that need OAuth or wrap another remote are filtered out of the picker
-// before this order is applied, so drive/onedrive/dropbox/box being named here is
-// harmless - they simply never match.
+// documentation is about; then the storage people actually sync to.
 var recommendedOrder = []string{
 	"feishu", "s3", "webdav", "sftp", "ftp", "b2", "azureblob", "swift",
 	"qingstor", "smb", "mega",
 }
 
-// blockedReason says why a backend cannot be created from this form.
+// pendingReason explains what a backend needs that this page does not do yet.
 //
-// Two families:
-//   - wrappers (alias, crypt, union, chunker, compress, hasher, cache, combine)
-//     are configured with another remote as their value; a form with one field per
-//     credential has nothing to put there.
-//   - OAuth backends (drive, onedrive, dropbox, box, ...) need a browser handshake
-//     that only `rclone config` can perform. Their token field is a secret produced
-//     by that handshake, not something a user can type.
+// Only one real case: rclone's OAuth backends (drive, onedrive, dropbox, box, ...)
+// need a browser handshake - the config value they end up storing is a token
+// produced by that handshake, not something a user can type. Building it is a
+// matter of driving rclone's config state machine over HTTP; it is not done yet,
+// and saying so is more useful than pretending the type does not exist.
 //
-// The signal is taken from rclone's own declarations rather than a hand-written
-// list, so a future backend is classified by what it actually needs:
-//
-//	required option named remote/upstreams -> wrapper
-//	Config function + a token option       -> OAuth
-func blockedReason(ri *fs.RegInfo) string {
-	hasRequiredUpstream := false
+// Wrapper backends (alias, crypt, union, chunker, compress, hasher, cache,
+// combine) are NOT pending: they need one text field naming another connection,
+// which is exactly what a required option already renders as. An earlier version
+// of this function refused them, which was simply wrong.
+func pendingReason(ri *fs.RegInfo) string {
 	hasToken := false
-	for _, o := range ri.Options {
-		if !o.Required {
-			continue
-		}
-		if o.Name == "remote" || o.Name == "upstreams" {
-			hasRequiredUpstream = true
-		}
-	}
 	for _, o := range ri.Options {
 		if o.Name == "token" {
 			hasToken = true
 		}
 	}
-	switch {
-	case hasRequiredUpstream:
-		return "要指定另一条连接作为它的上游，只能在命令行用 rclone config 建"
-	case ri.Config != nil && hasToken:
-		return "需要浏览器 OAuth 登录，只能在命令行用 rclone config 建"
-	case ri.Name == "memory":
-		return "内存盘，退出即丢，不能作为同步目标"
+	if ri.Config != nil && hasToken {
+		return "需要浏览器登录授权（OAuth），本页还没做这个流程"
 	}
 	return ""
 }
@@ -317,10 +317,6 @@ func (a *API) remoteTypes() []RemoteType {
 // whichever backends the test binary happens to link - the daemon's own tests link
 // one, while main.go links all of them, so the test would prove nothing about the
 // list a user sees.
-//
-// Blocked types are returned too, sorted last, because the page describes them
-// instead of hiding them: "we support rclone's backends" is true, and the honest
-// version of it is "these two dozen need the command line first".
 func remoteTypesFrom(reg []*fs.RegInfo) []RemoteType {
 	rank := make(map[string]int, len(recommendedOrder))
 	for i, n := range recommendedOrder {
@@ -334,21 +330,24 @@ func remoteTypesFrom(reg []*fs.RegInfo) []RemoteType {
 			// show this in the configurator" flag.
 			continue
 		}
-		reason := blockedReason(ri)
+		if _, hidden := hiddenTypes[ri.Name]; hidden {
+			continue
+		}
+		reason := pendingReason(ri)
 		_, rec := rank[ri.Name]
 		out = append(out, RemoteType{
 			Name:        ri.Name,
 			Description: ri.Description,
 			Recommended: rec && reason == "",
-			Blocked:     reason != "",
+			Pending:     reason != "",
 			Reason:      reason,
 		})
 	}
 
 	sort.SliceStable(out, func(i, j int) bool {
-		// Blocked ones go last regardless of how recommendable they are.
-		if out[i].Blocked != out[j].Blocked {
-			return !out[i].Blocked
+		// Pending ones go last regardless of how recommendable they are.
+		if out[i].Pending != out[j].Pending {
+			return !out[i].Pending
 		}
 		ri, iok := rank[out[i].Name]
 		rj, jok := rank[out[j].Name]
@@ -410,11 +409,12 @@ func (a *API) handleCredentialCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("不认识的类型 %q：%v", typ, err))
 		return
 	}
-	if reason := blockedReason(reg); reason != "" {
+	if reason := pendingReason(reg); reason != "" {
 		// A connection created here would be permanently unusable, and the user
-		// would find out two steps later as "authentication failed". Say it now.
+		// would find out two steps later as "authentication failed". Say it now,
+		// and say it as "not yet" - because that is what it is.
 		writeError(w, http.StatusBadRequest,
-			fmt.Sprintf("类型 %q 不能在这个页面创建：%s", typ, reason))
+			fmt.Sprintf("类型 %q 还没支持：%s", typ, reason))
 		return
 	}
 	if _, exists := config.FileGetValue(name, "type"); exists {

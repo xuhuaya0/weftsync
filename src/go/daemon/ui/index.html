@@ -4895,14 +4895,18 @@ function renderCredentials() {
 
 function credAddFormHTML(types) {
   // Three groups, because the three answer different questions:
-  //   常用          - what most people want
-  //   其他          - usable, just less common
-  //   需要命令行配置 - listed so the page is honest about rclone's coverage, but
-  //                   not selectable: OAuth needs a browser handshake and wrappers
-  //                   need another connection as their value, so a connection
-  //                   created here could never authenticate.
-  const usable = types.filter(t => !t.blocked);
-  const blocked = types.filter(t => t.blocked);
+  //   常用   - what most people want
+  //   其他   - usable, just less common (wrappers live here: their one field is
+  //            a text box naming another connection)
+  //   待开发 - listed so the page does not silently pretend they do not exist,
+  //            but not selectable: rclone's OAuth backends need a browser
+  //            handshake this page does not do yet.
+  //
+  // Types that could never work here at all (memory) are filtered out by the
+  // server and therefore never reach this function - a greyed-out row for
+  // something that cannot be made to work invites a question with no answer.
+  const usable = types.filter(t => !t.pending);
+  const pending = types.filter(t => t.pending);
   const rec = usable.filter(t => t.recommended);
   const rest = usable.filter(t => !t.recommended);
 
@@ -4915,9 +4919,9 @@ function credAddFormHTML(types) {
   const groups =
     (rec.length ? `<optgroup label="常用">${rec.map(opt).join("")}</optgroup>` : "") +
     (rest.length ? `<optgroup label="其他">${rest.map(opt).join("")}</optgroup>` : "") +
-    (blocked.length
-      ? `<optgroup label="需要命令行配置（选不了）">` +
-        blocked.map(t => `<option value="${esc(t.name)}" disabled>` +
+    (pending.length
+      ? `<optgroup label="待开发（还不能在这里创建）">` +
+        pending.map(t => `<option value="${esc(t.name)}" disabled>` +
           `${esc(t.name)} — ${esc(t.reason)}</option>`).join("") +
         `</optgroup>`
       : "");
@@ -4925,14 +4929,14 @@ function credAddFormHTML(types) {
   // Kept for the description line; the select itself only carries names.
   credTypeInfo = {};
   for (const t of types) {
-    credTypeInfo[t.name] = t.blocked ? "（需要命令行配置）" + t.reason : (t.description || "");
+    credTypeInfo[t.name] = t.pending ? "（待开发）" + t.reason : (t.description || "");
   }
 
-  const blockedNote = blocked.length
+  const pendingNote = pending.length
     ? `<div class="hint" style="margin-top:6px">
-        灰色那 ${blocked.length} 种需要先做一次浏览器 OAuth 登录，或者要指定另一条连接作为
-        上游，只能在命令行用 <code>rclone config</code> 创建。建好之后它们会出现在上面的
-        连接列表里，可以在这里编辑字段。
+        灰色那 ${pending.length} 种要经过一次浏览器登录授权，<strong>这个流程还没做</strong>
+        —— 不是做不了。暂时可以先用 <code>rclone config</code> 建好，建好之后它会出现在
+        上面的连接列表里，在这里照样能编辑字段、测试连接。
        </div>`
     : "";
 
@@ -4950,7 +4954,7 @@ function credAddFormHTML(types) {
       <button class="primary" id="cred-create">创建</button>
     </div>
     <div class="cred-type-desc" id="cred-type-desc"></div>
-    ${blockedNote}
+    ${pendingNote}
     <div class="sub" id="cred-add-note" style="margin:8px 0 0"></div>
     <div class="hint" style="margin-top:6px">
       这里只创建<strong>连接</strong>和它的类型；凭据（app_id / app_secret / 目录 token
@@ -5105,6 +5109,17 @@ function credField(remote, f) {
   }
   if (f.required) hint.push("必填");
   if (f.from_env) hint.push("来自环境变量，这里改不了");
+
+  // A wrapper backend (alias / crypt / union / ...) is configured by naming another
+  // connection. Listing what is available turns "remote" from a guessing game into
+  // a choice, and it is the only context this form has about the other remotes.
+  if (f.name === "remote" || f.name === "upstreams") {
+    const others = ((credView && credView.remotes) || [])
+      .map(r => r.name).filter(n => n !== remote);
+    hint.push(others.length
+      ? `可填已有的连接名：${others.join("、")}`
+      : "还没有别的连接可以引用，先建一条普通的连接");
+  }
 
   // A secret never gets a value attribute, not even a masked one.
   const input = f.secret
