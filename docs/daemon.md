@@ -214,9 +214,10 @@ daemon **只决定什么时候跑**，不改变任何一个 pair 的安全规则
 | `GET /api/log?level=&contains=&limit=&since=` | 日志（服务端过滤，级别由文本推断） |
 | `GET /api/log/export?level=&contains=` | 过滤后的日志，作为 `attachment` 文本下载 |
 | `POST /api/conflict/resolve?job=&pair=&path=&action=` | 处理一条冲突（`push` / `pull`） |
-| `GET /api/credentials` | 云盘连接列表（字段清单、被哪些作业使用、可选的类型表），**永不返回密钥** |
-| `POST /api/credentials?name=&type=` | **新建**一条连接：只写入 `type`，凭据随后单独提交 |
+| `GET /api/credentials` | 云盘连接列表（字段清单、被哪些作业使用、类型表含 blocked 标记），**永不返回密钥** |
+| `POST /api/credentials?name=&type=` | **新建**一条连接：只写入 `type`；OAuth / 包装型后端被拒绝并说明原因 |
 | `POST /api/credentials?name=` | 保存字段（密钥写入前混淆；`""` 清除，`null` 不动）；名字不存在时 404 并说明如何新建 |
+| `DELETE /api/credentials?name=&force=1` | 删除一条连接；被作业使用时 409 并列出作业名，`force=1` 才强制 |
 | `POST /api/credentials/test?name=` | 真实认证 + 列根目录，验证这份凭据能用 |
 历史与日志都是**固定容量环形缓冲**：无人值守跑几周，无界切片会一路长到进程被 OOM 杀掉。
 

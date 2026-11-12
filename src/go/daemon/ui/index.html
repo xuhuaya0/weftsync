@@ -4885,7 +4885,7 @@ function renderCredentials() {
   // a "saved" note left over from ten minutes ago is worse than no note.
   for (const [name, flash] of Object.entries(credFlash)) {
     const el = document.getElementById("cred-note-" + name);
-    if (el) {
+    if (el && flash) {
       el.className = flash.cls;
       el.textContent = flash.text;
     }
@@ -4894,10 +4894,18 @@ function renderCredentials() {
 }
 
 function credAddFormHTML(types) {
-  // Recommended types first, the rest in a second group. rclone registers around
-  // seventy backends; a single flat list starting with "alias" is a wall.
-  const rec = types.filter(t => t.recommended);
-  const rest = types.filter(t => !t.recommended);
+  // Three groups, because the three answer different questions:
+  //   常用          - what most people want
+  //   其他          - usable, just less common
+  //   需要命令行配置 - listed so the page is honest about rclone's coverage, but
+  //                   not selectable: OAuth needs a browser handshake and wrappers
+  //                   need another connection as their value, so a connection
+  //                   created here could never authenticate.
+  const usable = types.filter(t => !t.blocked);
+  const blocked = types.filter(t => t.blocked);
+  const rec = usable.filter(t => t.recommended);
+  const rest = usable.filter(t => !t.recommended);
+
   // The option text is the NAME ONLY. Putting rclone's description in it was the
   // bug behind "啥也看不见": the native popup is as wide as its widest option, and
   // s3's description is 405 characters, so the list came up thousands of pixels
@@ -4906,11 +4914,27 @@ function credAddFormHTML(types) {
   const opt = t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`;
   const groups =
     (rec.length ? `<optgroup label="常用">${rec.map(opt).join("")}</optgroup>` : "") +
-    (rest.length ? `<optgroup label="其他（rclone 全部后端）">${rest.map(opt).join("")}</optgroup>` : "");
+    (rest.length ? `<optgroup label="其他">${rest.map(opt).join("")}</optgroup>` : "") +
+    (blocked.length
+      ? `<optgroup label="需要命令行配置（选不了）">` +
+        blocked.map(t => `<option value="${esc(t.name)}" disabled>` +
+          `${esc(t.name)} — ${esc(t.reason)}</option>`).join("") +
+        `</optgroup>`
+      : "");
 
   // Kept for the description line; the select itself only carries names.
   credTypeInfo = {};
-  for (const t of types) credTypeInfo[t.name] = t.description || "";
+  for (const t of types) {
+    credTypeInfo[t.name] = t.blocked ? "（需要命令行配置）" + t.reason : (t.description || "");
+  }
+
+  const blockedNote = blocked.length
+    ? `<div class="hint" style="margin-top:6px">
+        灰色那 ${blocked.length} 种需要先做一次浏览器 OAuth 登录，或者要指定另一条连接作为
+        上游，只能在命令行用 <code>rclone config</code> 创建。建好之后它们会出现在上面的
+        连接列表里，可以在这里编辑字段。
+       </div>`
+    : "";
 
   return `<div class="cred-add">
     <div class="cred-add-row">
@@ -4926,6 +4950,7 @@ function credAddFormHTML(types) {
       <button class="primary" id="cred-create">创建</button>
     </div>
     <div class="cred-type-desc" id="cred-type-desc"></div>
+    ${blockedNote}
     <div class="sub" id="cred-add-note" style="margin:8px 0 0"></div>
     <div class="hint" style="margin-top:6px">
       这里只创建<strong>连接</strong>和它的类型；凭据（app_id / app_secret / 目录 token
@@ -4986,13 +5011,15 @@ function wireCredAddForm() {
 function credCardHTML(v, r) {
   const fields = r.fields.map(f => credField(r.name, f)).join("");
   const used = (r.used_by || []).length
-    ? `被这些作业使用：<span class="mono">${esc(r.used_by.join(", "))}</span>`
+    ? `被作业 <span class="mono">${esc(r.used_by.join("、"))}</span> 使用`
     : '<span class="warn">还没有作业使用这条连接</span>';
   return `<div class="pair-card">
     <div class="head">
       <strong>${esc(r.name)}</strong>
       <span class="badge">${esc(r.type)}</span>
-      <span class="sub" style="margin:0">${used}</span>
+      <span class="sub grow" style="margin:0">${used}</span>
+      <button class="danger-btn" data-cred-del="${esc(r.name)}"
+              title="从配置文件里删掉这条连接">删除</button>
     </div>
     ${r.detail ? `<div class="note">${esc(r.detail)}</div>` : ""}
     ${fields}
@@ -5011,6 +5038,54 @@ function wireCredCards(body) {
   body.querySelectorAll("button[data-cred-test]").forEach(b => {
     b.addEventListener("click", () => testCredentials(b.dataset.credTest, b));
   });
+  body.querySelectorAll("button[data-cred-del]").forEach(b => {
+    b.addEventListener("click", () => deleteCredential(b.dataset.credDel, b));
+  });
+}
+
+// deleteCredential removes a connection from the config file.
+//
+// The confirmation names the consequences rather than asking "are you sure": a
+// connection that jobs point at will be refused by the server, and a connection
+// that no job uses disappears without any other trace. Both are worth saying
+// before the click, not after.
+async function deleteCredential(name, btn) {
+  const v = credView || {};
+  const rec = (v.remotes || []).find(r => r.name === name) || {};
+  const used = rec.used_by || [];
+  const lines = [
+    `从配置文件里删除连接「${name}」（类型 ${rec.type || "?"}）？`,
+    "",
+    "只删这条连接和它保存的凭据，本机文件、云端文件、目录对都不会动。",
+  ];
+  if (used.length) {
+    lines.push("", `注意：作业 ${used.join("、")} 还在用它，服务器会拒绝删除 —— ` +
+                   `先把目录对换成别的连接。`);
+  }
+  if (!confirm(lines.join("\n"))) return;
+
+  btn.disabled = true;
+  btn.textContent = "删除中…";
+  try {
+    const r = await fetch("/api/credentials?name=" + encodeURIComponent(name), { method: "DELETE" });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((data && data.error) || ("HTTP " + r.status));
+    credFlash[name] = null;              // nothing to flash: the card is gone
+    // The server returns the new list, so the panel re-renders without a second
+    // round trip - and without a window where the deleted card is still on screen.
+    credView = data;
+    renderCredentials();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "删除";
+    const note = document.getElementById("cred-note-" + name);
+    if (note) {
+      note.className = "sub bad";
+      note.textContent = "删除失败：" + e.message;
+    } else {
+      alert("删除失败：" + e.message);
+    }
+  }
 }
 
 function credField(remote, f) {

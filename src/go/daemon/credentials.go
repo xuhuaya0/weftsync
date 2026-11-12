@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rclone/rclone/fs"
+	"github.com/rclone/rclone/fs/cache"
 	"github.com/rclone/rclone/fs/config"
 
 	"weftsync/job"
@@ -242,15 +243,66 @@ type RemoteType struct {
 	// Recommended marks the backends shown first. rclone registers ~70 of them,
 	// and a new-connection form whose first row is "alias" helps nobody.
 	Recommended bool `json:"recommended,omitempty"`
+	// Blocked means this backend cannot be set up by typing values into a form,
+	// with Reason saying why. Such types are listed separately and refused by the
+	// create endpoint: offering a choice that produces a connection which can
+	// never authenticate is worse than not offering it.
+	Blocked bool   `json:"blocked,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // recommendedOrder is the short list put at the top of the type picker.
 //
 // feishu first because it is this program's own backend and what its
 // documentation is about; then the cloud drives people actually sync to.
+// Types that need OAuth or wrap another remote are filtered out of the picker
+// before this order is applied, so drive/onedrive/dropbox/box being named here is
+// harmless - they simply never match.
 var recommendedOrder = []string{
-	"feishu", "drive", "onedrive", "s3", "webdav", "sftp", "dropbox", "box",
-	"b2", "azureblob", "ftp",
+	"feishu", "s3", "webdav", "sftp", "ftp", "b2", "azureblob", "swift",
+	"qingstor", "smb", "mega",
+}
+
+// blockedReason says why a backend cannot be created from this form.
+//
+// Two families:
+//   - wrappers (alias, crypt, union, chunker, compress, hasher, cache, combine)
+//     are configured with another remote as their value; a form with one field per
+//     credential has nothing to put there.
+//   - OAuth backends (drive, onedrive, dropbox, box, ...) need a browser handshake
+//     that only `rclone config` can perform. Their token field is a secret produced
+//     by that handshake, not something a user can type.
+//
+// The signal is taken from rclone's own declarations rather than a hand-written
+// list, so a future backend is classified by what it actually needs:
+//
+//	required option named remote/upstreams -> wrapper
+//	Config function + a token option       -> OAuth
+func blockedReason(ri *fs.RegInfo) string {
+	hasRequiredUpstream := false
+	hasToken := false
+	for _, o := range ri.Options {
+		if !o.Required {
+			continue
+		}
+		if o.Name == "remote" || o.Name == "upstreams" {
+			hasRequiredUpstream = true
+		}
+	}
+	for _, o := range ri.Options {
+		if o.Name == "token" {
+			hasToken = true
+		}
+	}
+	switch {
+	case hasRequiredUpstream:
+		return "要指定另一条连接作为它的上游，只能在命令行用 rclone config 建"
+	case ri.Config != nil && hasToken:
+		return "需要浏览器 OAuth 登录，只能在命令行用 rclone config 建"
+	case ri.Name == "memory":
+		return "内存盘，退出即丢，不能作为同步目标"
+	}
+	return ""
 }
 
 // remoteTypes lists the backends a remote can be created from.
@@ -265,6 +317,10 @@ func (a *API) remoteTypes() []RemoteType {
 // whichever backends the test binary happens to link - the daemon's own tests link
 // one, while main.go links all of them, so the test would prove nothing about the
 // list a user sees.
+//
+// Blocked types are returned too, sorted last, because the page describes them
+// instead of hiding them: "we support rclone's backends" is true, and the honest
+// version of it is "these two dozen need the command line first".
 func remoteTypesFrom(reg []*fs.RegInfo) []RemoteType {
 	rank := make(map[string]int, len(recommendedOrder))
 	for i, n := range recommendedOrder {
@@ -274,21 +330,26 @@ func remoteTypesFrom(reg []*fs.RegInfo) []RemoteType {
 	out := make([]RemoteType, 0, len(reg))
 	for _, ri := range reg {
 		if ri == nil || ri.Name == "" || ri.Hide || ri.Name == "local" {
-			// local is not a cloud connection; crypt/union/chunker-style wrappers
-			// reference another remote and would only confuse a form that has one
-			// field for credentials. Hide is rclone's own "do not show this in the
-			// configurator" flag.
+			// local is not a cloud connection, and Hide is rclone's own "do not
+			// show this in the configurator" flag.
 			continue
 		}
+		reason := blockedReason(ri)
 		_, rec := rank[ri.Name]
 		out = append(out, RemoteType{
 			Name:        ri.Name,
 			Description: ri.Description,
-			Recommended: rec,
+			Recommended: rec && reason == "",
+			Blocked:     reason != "",
+			Reason:      reason,
 		})
 	}
 
 	sort.SliceStable(out, func(i, j int) bool {
+		// Blocked ones go last regardless of how recommendable they are.
+		if out[i].Blocked != out[j].Blocked {
+			return !out[i].Blocked
+		}
 		ri, iok := rank[out[i].Name]
 		rj, jok := rank[out[j].Name]
 		if iok != jok {
@@ -344,8 +405,16 @@ func (a *API) handleCredentialCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "the type query parameter is required to create a remote")
 		return
 	}
-	if _, err := fs.Find(typ); err != nil {
+	reg, err := fs.Find(typ)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("不认识的类型 %q：%v", typ, err))
+		return
+	}
+	if reason := blockedReason(reg); reason != "" {
+		// A connection created here would be permanently unusable, and the user
+		// would find out two steps later as "authentication failed". Say it now.
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("类型 %q 不能在这个页面创建：%s", typ, reason))
 		return
 	}
 	if _, exists := config.FileGetValue(name, "type"); exists {
@@ -368,6 +437,55 @@ func (a *API) handleCredentialCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"created": name,
 		"remote":  a.credentialView(name, typ, a.D.usedRemotes()[name]),
+	})
+}
+
+// handleCredentialDelete removes a remote section from the config file.
+//
+// Refused while a loaded job still points at it. Deleting would leave that job
+// with a path whose remote no longer exists, and the failure would surface later
+// as a confusing "didn't find section in config file" in the middle of a run. The
+// panel already shows which jobs use a connection, so the refusal can name them.
+func (a *API) handleCredentialDelete(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "the name query parameter is required")
+		return
+	}
+	typ, ok := config.FileGetValue(name, "type")
+	if !ok || typ == "" {
+		writeError(w, http.StatusNotFound, "没有这条连接："+name)
+		return
+	}
+
+	if jobs := a.D.usedRemotes()[name]; len(jobs) > 0 && r.URL.Query().Get("force") != "1" {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": fmt.Sprintf("连接 %q 还在被作业 %s 使用，先把它从目录对里换掉再删",
+				name, strings.Join(jobs, "、")),
+			"used_by": jobs,
+		})
+		return
+	}
+
+	config.Data().DeleteSection(name)
+	config.SaveConfig()
+	if err := restrictToOwner(config.GetConfigPath()); err != nil {
+		writeError(w, http.StatusInternalServerError,
+			"已删除，但配置文件权限没能收紧："+err.Error())
+		return
+	}
+
+	// Drop any cached filesystem for this name. Deleting a section and creating a
+	// new remote with the same name later would otherwise reuse the old handle -
+	// and its old credentials - for the lifetime of the process. rclone keeps that
+	// cache in fs/cache, not on the ConfigFs hook.
+	cache.ClearConfig(name)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deleted": name,
+		"remotes": a.CredentialViews(),
+		"types":   a.remoteTypes(),
+		"file":    config.GetConfigPath(),
 	})
 }
 
@@ -395,8 +513,11 @@ func (a *API) handleCredentials(w http.ResponseWriter, r *http.Request) {
 		}
 		a.handleCredentialSave(w, r)
 
+	case http.MethodDelete:
+		a.handleCredentialDelete(w, r)
+
 	default:
-		writeError(w, http.StatusMethodNotAllowed, "GET or POST only")
+		writeError(w, http.StatusMethodNotAllowed, "GET, POST or DELETE only")
 	}
 }
 

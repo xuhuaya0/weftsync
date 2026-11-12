@@ -1,14 +1,17 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config"
+	"github.com/rclone/rclone/fs/config/configmap"
 )
 
 // Creating a remote from the console.
@@ -223,6 +226,167 @@ func TestRemoteTypesFromFiltersAndOrders(t *testing.T) {
 	}
 }
 
+// A backend that cannot be configured by typing values must be marked and sorted
+// last, not silently offered. Both signals come from rclone's own declarations.
+func TestRemoteTypesBlockWhatCannotBeFilledIn(t *testing.T) {
+	wrapper := &fs.RegInfo{
+		Name: "alias", Description: "Alias for an existing remote",
+		Options: fs.Options{{Name: "remote", Required: true}},
+	}
+	oauth := &fs.RegInfo{
+		Name: "drive", Description: "Google Drive",
+		Options: fs.Options{{Name: "token"}, {Name: "scope"}},
+		Config: func(context.Context, string, configmap.Mapper, fs.ConfigIn) (*fs.ConfigOut, error) {
+			return nil, nil
+		},
+	}
+	plain := &fs.RegInfo{
+		Name: "webdav", Description: "WebDAV",
+		Options: fs.Options{{Name: "url", Required: true}},
+	}
+	mem := &fs.RegInfo{Name: "memory", Description: "in memory"}
+
+	got := remoteTypesFrom([]*fs.RegInfo{oauth, wrapper, plain, mem})
+
+	byName := map[string]RemoteType{}
+	for _, v := range got {
+		byName[v.Name] = v
+	}
+	for _, n := range []string{"alias", "drive", "memory"} {
+		if !byName[n].Blocked || byName[n].Reason == "" {
+			t.Errorf("%s should be blocked with a reason, got %+v", n, byName[n])
+		}
+		if byName[n].Recommended {
+			t.Errorf("%s is both blocked and recommended", n)
+		}
+	}
+	if byName["webdav"].Blocked {
+		t.Errorf("webdav should be usable: %+v", byName["webdav"])
+	}
+	if last := got[len(got)-1]; !last.Blocked {
+		t.Errorf("last entry %q is not blocked; blocked ones must come last", last.Name)
+	}
+}
+
+// The create endpoint refuses a blocked type instead of producing a connection
+// that can never authenticate.
+func TestCreateRemoteRefusesBlockedType(t *testing.T) {
+	withTempConfig(t, "")
+	a := credentialAPI(t)
+
+	// alias/union are registered by backend/all in production; this test binary
+	// links feishu only, so use whichever blocked type it does know about.
+	var blocked string
+	for _, v := range a.remoteTypes() {
+		if v.Blocked {
+			blocked = v.Name
+			break
+		}
+	}
+	if blocked == "" {
+		t.Skip("this test binary links no blocked backend")
+	}
+
+	rec := postCredentials(a, "?name=w&type="+blocked, "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "不能在这个页面创建") {
+		t.Errorf("the refusal does not explain itself: %s", rec.Body.String())
+	}
+	if _, ok := config.FileGetValue("w", "type"); ok {
+		t.Error("a blocked type was written to the config anyway")
+	}
+}
+
+func deleteCredentials(a *API, query string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodDelete, "/api/credentials"+query, nil)
+	rec := httptest.NewRecorder()
+	a.handleCredentials(rec, req)
+	return rec
+}
+
+func TestDeleteRemote(t *testing.T) {
+	path := withTempConfig(t, twoRemotes)
+	a := credentialAPI(t)
+
+	rec := deleteCredentials(a, "?name=other&force=1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	var out struct {
+		Deleted string           `json:"deleted"`
+		Remotes []CredentialView `json:"remotes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Deleted != "other" {
+		t.Errorf("deleted = %q", out.Deleted)
+	}
+	if _, ok := config.FileGetValue("other", "type"); ok {
+		t.Error("the section is still in the config")
+	}
+	for _, r := range out.Remotes {
+		if r.Name == "other" {
+			t.Error("the deleted remote is still listed")
+		}
+	}
+	// The other remote survived.
+	if typ, ok := config.FileGetValue("edge", "type"); !ok || typ != "feishu" {
+		t.Errorf("edge was collateral damage: %q %v", typ, ok)
+	}
+	// And it is gone from the file on disk, not just from memory.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if strings.Contains(string(data), "[other]") {
+		t.Errorf("the section is still on disk:\n%s", data)
+	}
+}
+
+// A connection a loaded job still points at must not be deleted silently: the job
+// would keep a path whose remote no longer exists, and the failure would surface
+// mid-run.
+func TestDeleteRemoteRefusesWhileUsed(t *testing.T) {
+	withTempConfig(t, twoRemotes)
+	a := credentialAPI(t) // its job uses remote "edge"
+
+	rec := deleteCredentials(a, "?name=edge")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "sync") {
+		t.Errorf("the refusal does not name the job: %s", rec.Body.String())
+	}
+	if _, ok := config.FileGetValue("edge", "type"); !ok {
+		t.Error("the remote was deleted despite being in use")
+	}
+
+	// force=1 is the explicit override.
+	rec = deleteCredentials(a, "?name=edge&force=1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("forced delete: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := config.FileGetValue("edge", "type"); ok {
+		t.Error("forced delete did not remove the section")
+	}
+}
+
+func TestDeleteRemoteRejectsUnknown(t *testing.T) {
+	withTempConfig(t, twoRemotes)
+	a := credentialAPI(t)
+
+	for _, q := range []string{"?name=nosuch", "?name="} {
+		rec := deleteCredentials(a, q)
+		if rec.Code != http.StatusNotFound && rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d (%s)", q, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 // The real registry (whatever this binary links) must still surface feishu first:
 // it is the backend this program ships and documents.
 func TestRemoteTypesRealRegistryStartsWithFeishu(t *testing.T) {
@@ -237,6 +401,9 @@ func TestRemoteTypesRealRegistryStartsWithFeishu(t *testing.T) {
 	for _, v := range types {
 		if v.Name == "local" {
 			t.Error("local leaked into the cloud type list")
+		}
+		if v.Blocked && v.Recommended {
+			t.Errorf("%s is both blocked and recommended", v.Name)
 		}
 	}
 }
