@@ -1018,9 +1018,15 @@
   }
   .cred-add-f { display: flex; flex-direction: column; gap: 3px; flex: 1 1 180px; min-width: 0; }
   .cred-add-f > span { font-size: 11px; color: var(--muted); }
-  .cred-add-f input, .cred-add-f select { font-size: 12.5px; padding: 5px 8px; width: 100%; }
+  .cred-add-f input, .cred-add-f select { font-size: 12.5px; padding: 5px 8px; width: 100%; min-width: 0; }
   .cred-add-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
   .cred-add-row > button { flex: none; padding: 6px 16px; }
+  /* 选中类型的说明：一行、可换行、不抢注意力。原来这段文字塞在 option 里，
+     把原生下拉撑到几千像素宽，屏幕上只剩一片白。 */
+  .cred-type-desc {
+    margin-top: 6px; font-size: 11.5px; color: var(--muted); line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
 
   .browse-list {
     overflow: auto; flex: 1; min-height: 120px; padding: 6px 8px;
@@ -1496,6 +1502,35 @@
 </section>
 
 <section id="tab-settings" class="tab hidden">
+  <!-- 云盘连接在最前。它现在是这个页面的主角：没有连接就没有云端目录可选，
+       而其余四张卡是排查用的（运行信息、通知、过滤规则、开机自启）。
+       以前它排最后，页内滚动 1500px 才到 —— 从「浏览 → 新增连接」跳进来的人
+       看到的是运行信息，完全不知道要的东西在哪。 -->
+  <div class="card" id="card-credentials">
+    <div class="row" style="margin-bottom:10px">
+      <strong class="grow">云盘连接</strong>
+      <span class="sub" style="margin:0">写在 rclone 配置文件里</span>
+    </div>
+    <div class="note" style="margin-bottom:12px">
+      「云端」不是内置的一个东西，而是一条<strong>连接</strong>：先在这里建一条
+      （名字 + 类型），填好凭据之后，目录对右边的「云端」路径才有东西可选。
+      <div style="margin-top:6px;color:var(--muted)">
+        密钥<strong>不会回显</strong>：只显示是否已设置和字符长度。
+        字段留空 = 不修改；要清除已存的值，勾选右侧的「清除」。
+        <details style="margin-top:6px">
+          <summary style="cursor:pointer">这个配置文件安全吗？</summary>
+          <div style="margin-top:5px">
+            rclone 的「模糊」（obscure）是<strong>混淆，不是加密</strong>：它用一个固定算法
+            把明文转成不可读的串，但没有密钥保护，所以<strong>能读到这个文件的人就能还原出
+            app_secret</strong>。这里能保证的是「文件只给本人读」（Linux / macOS 上权限 0600）
+            以及「密钥不出现在网页上」。需要防磁盘被读，请用系统级加密。
+          </div>
+        </details>
+      </div>
+    </div>
+    <div id="cred-body" class="empty">载入中…</div>
+  </div>
+
   <div class="card">
     <div class="row" style="margin-bottom:12px">
       <strong class="grow">运行信息</strong>
@@ -1525,32 +1560,6 @@
   <div class="card">
     <strong>开机自启</strong>
     <div id="as-body" class="empty">载入中…</div>
-  </div>
-
-  <div class="card">
-    <div class="row" style="margin-bottom:12px">
-      <strong class="grow">云盘连接</strong>
-      <span class="sub" style="margin:0">写在 rclone 配置文件里</span>
-    </div>
-    <div class="note" style="margin-bottom:12px">
-      「云端」不是一个内置的东西，而是一条<strong>连接</strong>：先在这里建一条
-      （名字 + 类型，本工具自带飞书 / Lark，另外支持 rclone 的全部后端），
-      填好凭据之后，目录对右边的「云端」路径才有东西可选。
-      <div style="margin-top:6px;color:var(--muted)">
-        密钥<strong>不会回显</strong>——这里只显示是否已设置以及字符长度
-        （长度能帮忙发现多打进去的空格或换行）。保存时密钥以 rclone 的模糊形式写入配置文件，
-        在 Linux / macOS 上文件权限会被收紧到 <code>0600</code>。
-        字段留空 = 不修改；要清除已存的值，勾选右侧的「清除」。
-      </div>
-      <div style="margin-top:8px">
-        <strong>威胁模型要说清楚：</strong>rclone 的「模糊」（obscure）是
-        <strong>混淆，不是加密</strong> —— 它用一个固定算法把明文转成不可读的串，
-        但没有密钥保护。换句话说：<strong>能读到这个配置文件的人，就能还原出 app_secret</strong>。
-        这里能保证的是「文件不给别人读」（权限 0600），以及「密钥不出现在网页上」。
-        如果需要防止本地磁盘被读，请用操作系统级的加密（BitLocker / LUKS / FileVault）。
-      </div>
-    </div>
-    <div id="cred-body" class="empty">载入中…</div>
   </div>
 </section>
   </div>
@@ -4124,18 +4133,49 @@ function browseRootsHTML(v, go) {
 // makes one possible, with the form already open. Closing the picker first is
 // deliberate: the drawer slides over the same area, and leaving a modal behind it
 // means two stacked overlays to escape from.
-function openAddConnection() {
+//
+// The scroll is awaited rather than timed. The first version used
+// `setTimeout(..., 350)` to wait for loadCredentials(), which is a guess: on a cold
+// start the fetch takes longer, the timer fires first, the form does not exist yet,
+// and the user is left staring at the top of the settings page - "啥也看不见".
+async function openAddConnection() {
   // Keep the pair and side so a successful save can come straight back here.
   credReturnToBrowse = browseTarget ? { idx: browseTarget.idx, side: browseTarget.side, name: "" } : null;
   closeBrowse();
   credAddOpen = true;
   credAddTouched = true;
   openDrawer("settings");
-  // loadCredentials() is async, so focus happens after the form renders.
-  setTimeout(() => {
-    const el = document.getElementById("cred-new-name");
-    if (el) { el.focus(); el.scrollIntoView({ block: "center", behavior: "smooth" }); }
-  }, 350);
+  await waitForCredentials();
+  revealAddForm();
+}
+
+// waitForCredentials resolves when the settings tab has credentials on screen.
+// openDrawer fires loadCredentials() without awaiting it, so there is nothing to
+// await from the outside; polling the element is the honest version of "wait a
+// moment" because it reacts to the actual render instead of to a guess.
+function waitForCredentials() {
+  return new Promise(resolve => {
+    const started = Date.now();
+    const tick = () => {
+      if (document.getElementById("cred-add") || Date.now() - started > 5000) {
+        resolve();
+        return;
+      }
+      setTimeout(tick, 60);
+    };
+    tick();
+  });
+}
+
+// revealAddForm scrolls the new-connection form into view and focuses the name
+// field. Both matter: the card sits below the explanation, so on a short window it
+// is still below the fold even after the tab has rendered.
+function revealAddForm() {
+  if (!credAddOpen) { credAddOpen = true; credAddTouched = true; renderCredentials(); }
+  const el = document.getElementById("cred-new-name");
+  if (!el) return;
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  el.focus();
 }
 
 // returnToBrowseAfterSave puts the user back in the cloud picker, opened at the
@@ -4782,6 +4822,11 @@ let credAddTouched = false;
 // leaving them in the settings drawer to find their own way back.
 let credReturnToBrowse = null;   // { idx, side, name }
 
+// credTypeInfo maps a backend type to rclone's description of it. Filled while the
+// new-connection form renders, so the picker can stay a list of plain names while
+// the sentence describing the selected one is still on screen.
+let credTypeInfo = {};
+
 async function loadCredentials() {
   const body = document.getElementById("cred-body");
   try {
@@ -4807,8 +4852,10 @@ function renderCredentials() {
   // Unless the user has already dismissed it - see credAddTouched.
   if (!remotes.length && !credAddTouched) credAddOpen = true;
 
-  const head = `<div class="row" style="margin-bottom:10px">
-      <span class="sub mono grow" style="margin:0" title="写入哪个文件">${esc(v.file || "(未指定配置文件)")}</span>
+  const head = `<div class="row" style="margin-bottom:10px;gap:8px">
+      <span class="sub mono grow" style="margin:0;min-width:0;overflow:hidden;
+            text-overflow:ellipsis;white-space:nowrap"
+            title="${esc(v.file || "")}">${esc(v.file || "(未指定配置文件)")}</span>
       <button id="cred-add" class="${credAddOpen ? "on" : ""}">
         ${credAddOpen ? "收起" : "+ 新增云盘连接"}
       </button>
@@ -4851,11 +4898,19 @@ function credAddFormHTML(types) {
   // seventy backends; a single flat list starting with "alias" is a wall.
   const rec = types.filter(t => t.recommended);
   const rest = types.filter(t => !t.recommended);
-  const opt = t => `<option value="${esc(t.name)}">` +
-    `${esc(t.name)} — ${esc(t.description || t.name)}</option>`;
+  // The option text is the NAME ONLY. Putting rclone's description in it was the
+  // bug behind "啥也看不见": the native popup is as wide as its widest option, and
+  // s3's description is 405 characters, so the list came up thousands of pixels
+  // wide and all that reached the screen was a blank slab. The description is
+  // shown below the picker instead, where it can wrap.
+  const opt = t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`;
   const groups =
     (rec.length ? `<optgroup label="常用">${rec.map(opt).join("")}</optgroup>` : "") +
     (rest.length ? `<optgroup label="其他（rclone 全部后端）">${rest.map(opt).join("")}</optgroup>` : "");
+
+  // Kept for the description line; the select itself only carries names.
+  credTypeInfo = {};
+  for (const t of types) credTypeInfo[t.name] = t.description || "";
 
   return `<div class="cred-add">
     <div class="cred-add-row">
@@ -4870,10 +4925,11 @@ function credAddFormHTML(types) {
       </label>
       <button class="primary" id="cred-create">创建</button>
     </div>
+    <div class="cred-type-desc" id="cred-type-desc"></div>
     <div class="sub" id="cred-add-note" style="margin:8px 0 0"></div>
     <div class="hint" style="margin-top:6px">
-      这里只创建<strong>连接</strong>和它的类型；app_id / app_secret / 目录 token
-      这类凭据在创建后出现的卡片里填，保存前可以先「测试连接」。
+      这里只创建<strong>连接</strong>和它的类型；凭据（app_id / app_secret / 目录 token
+      等等）在创建后出现的卡片里填，保存前可以先「测试连接」。
     </div>
   </div>`;
 }
@@ -4881,9 +4937,24 @@ function credAddFormHTML(types) {
 function wireCredAddForm() {
   const btn = document.getElementById("cred-create");
   if (!btn) return;
+
+  // The description line follows the picker. Without it the picker is a list of
+  // bare names, and "s3" / "swift" / "sia" tell a first-time user nothing.
+  const sel = document.getElementById("cred-new-type");
+  const desc = document.getElementById("cred-type-desc");
+  const syncDesc = () => {
+    if (!desc) return;
+    const d = (credTypeInfo && credTypeInfo[sel.value]) || "";
+    desc.textContent = d ? `${sel.value} — ${d}` : sel.value;
+  };
+  if (sel) {
+    sel.addEventListener("change", syncDesc);
+    syncDesc();
+  }
+
   btn.addEventListener("click", async () => {
     const name = (document.getElementById("cred-new-name").value || "").trim();
-    const type = document.getElementById("cred-new-type").value;
+    const type = sel.value;
     const note = document.getElementById("cred-add-note");
     const say = (cls, text) => { note.className = "sub " + cls; note.textContent = text; };
 
