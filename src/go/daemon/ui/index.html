@@ -35,6 +35,13 @@
        同一个值。换成固定值后偏差为 0（工具栏与工作区左边缘同为 x=256）。
        FFS 的目录树面板也是固定宽度，不随窗口变。 */
     --dock-w: 240px;
+    /* 外框四周内容离边框的距离。顶栏与主工作区必须用同一个值，否则「比较」按钮
+       就压不到目录对的左边界上（顶栏左侧 = inset + 侧栏 + 间隙，工作区左侧 =
+       inset + 侧栏 + 间隙，只有 inset 相同才相等）。
+       8 太小：顶栏控件离窗框 8px，而窗框圆角是 13px，看着像被挤进角里；
+       16 又偏大，顶栏会显得空。12 让顶栏控件与卡片内边距（16）接近但不相等，
+       因为顶栏是「框架」、卡片是「内容」。 */
+    --inset: 12px;
     /* 所有「工具条」类横条的底色。差 2% 的两个灰放在同一个卡片里，
        读起来就是一处失误而不是两层意思。 */
     --tint: color-mix(in srgb, var(--bg) 55%, var(--card));
@@ -511,27 +518,34 @@
      现在一行：左边品牌与菜单，右边比较 / 过滤器 / 同步 / 停止，最右是时钟与连接。
      窗口窄时右半截自动换到第二行（flex-wrap），而不是把按钮压挤。
 
-     关键一条：.brandbar 的宽度 = 侧栏宽 + 列间距。顶栏内边距也是 8，与 .main
-     一致，于是工作区的左边缘（外框边 1 + 内边距 8 + 侧栏 240 + 间隙 8）就等于
-     brandbar 的右边缘 —— 「比较」按钮就严格压在目录对、结果卡的左边界上。
-     这不是凑出来的数：两边用的是同一个 --dock-w。 */
+     关键一条：.brandbar 的宽度 = 侧栏宽 + 列间距。顶栏内边距和 .main 的相同
+     （都用 --inset），于是工作区的左边缘（外框边 1 + inset 12 + 侧栏 240 +
+     间隙 8）就等于 brandbar 的右边缘 —— 「比较」按钮就严格压在目录对、
+     结果卡的左边界上。这不是凑出来的数：两边用的是同一个 --dock-w，边距用的是
+     同一个 --inset。改其中一处而不改另一处，对齐立刻断掉，所以两处都读变量。
+
+     四边留白：原来是 `5px 8px`，而卡片内边距是 16 —— 顶栏控件离窗框只有 8px，
+     而窗框圆角是 13px，看上去像被挤到边角里。横向加到 12（与 .main 同步），
+     纵向 8（与全局的 8px 节奏一致）。 */
   .menubar {
     display: flex; gap: 0; align-items: center; flex-wrap: wrap;
-    padding: 5px 8px; min-height: 46px; flex: none;
+    padding: 8px var(--inset); min-height: 46px; flex: none;
     background: var(--bg); border-bottom: 1px solid var(--line);
   }
   .brandbar {
     flex: none; width: calc(var(--dock-w) + 8px);
     display: flex; align-items: center; min-width: 0;
   }
-  /* 窄屏时侧栏抽到上面（.main 也在 700 断点堆叠），工作区左边缘变成 9px。
-     这时顶栏左段收回成内容宽，主操作组换到第二行整行起排 —— 两边都从 9px
+  /* 窄屏时侧栏抽到上面（.main 也在 700 断点堆叠），工作区左边缘变成 13px。
+     这时顶栏左段收回成内容宽，主操作组换到第二行整行起排 —— 两边都从 13px
      开始，「比较」仍然压在目录对上。
-     不加 flex-basis:100% 的话，主操作组会挤在第一行右侧（实测 620px 时
-     比较在 208，而工作区在 9）。 */
+     注意：`.toolbar { flex-basis: 100% }` 必须写在 `.toolbar` 基础规则之后。
+     它原来写在前面，而基础规则里的 `flex: 1 1 0` 是简写、含 flex-basis，
+     于是这条媒体查询**从来没生效过**：实测 620px 时 flex-basis 仍是 0，
+     工具栏挤在品牌右侧的 355px 里自己换行，「比较」跑到 x=212，
+     而工作区在 x=13。 */
   @media (max-width: 700px) {
     .brandbar { width: auto; }
-    .toolbar { flex-basis: 100%; }
   }
   .menutitle {
     font-size: 12.5px; font-weight: 700; color: var(--ink);
@@ -646,6 +660,11 @@
     background: var(--card); color: var(--muted); font-size: 9px;
   }
   .tb-arrow:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
+  /* 放在 .toolbar 之后：基础规则里的 `flex: 1 1 0` 会连带设回 flex-basis，
+     写在它前面就会被覆盖掉（实测这条曾经完全没生效）。 */
+  @media (max-width: 700px) {
+    .toolbar { flex-basis: 100%; }
+  }
   /* 不再把同步组甩到右端。那一手只在「行很窄」时看着像分组，窗口一大，
      过滤器与同步之间就空出 400px 以上的空洞 —— 中间的空读作「这里少了个
      控件」。
@@ -656,7 +675,7 @@
 
   /* ---- 左侧停靠面板 ---- */
   .main {
-    display: flex; align-items: stretch; gap: 8px; padding: 8px;
+    display: flex; align-items: stretch; gap: 8px; padding: var(--inset);
     flex: 1 1 auto; min-height: 0; overflow: auto;
   }
   /* 停靠栏整块拉满窗口高度，两块内容贴在顶部，剩下的部分属于侧栏本身。
@@ -676,9 +695,6 @@
   /* 700 而不是 860：823px 宽下停靠面板一旦抽到上面，首屏就全是「配置 + 概览」，
      要滚动才能看到对比结果 —— 而对比结果才是这一页要看的东西。 */
   @media (max-width: 700px) { .main { flex-direction: column; } }
-  .dock {
-    width: 240px; flex: none; display: flex; flex-direction: column; gap: 8px;
-  }
   @media (max-width: 700px) { .dock { width: 100%; } }
   .panel {
     border: 1px solid var(--line); border-radius: var(--r);
