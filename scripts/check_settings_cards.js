@@ -134,6 +134,58 @@
     return out;
   }
 
+  // Every text-like control on the page must look like the same control.
+  //
+  // Where this came from: `input[type=password]` was left out of the CSS selector
+  // list (text / number / no-type were in it), so every secret field rendered with
+  // the browser default - 2px inset border, square corners, 1px 2px padding, 21px
+  // tall next to 32px siblings. A one-line selector list, one omitted type, and the
+  // only place it shows is the one place a user is most careful.
+  //
+  // The rule is not "password looks right": it is "single-line controls look like
+  // one control, and multi-line controls look like one control". Two groups, not
+  // one: a textarea is legitimately a different shape (monospace, taller padding),
+  // and collapsing the two would just teach the check to be ignored.
+  function checkInputConsistency() {
+    const out = [];
+    const all = [...document.querySelectorAll("input, select, textarea")]
+      .filter(el => !["checkbox", "radio", "hidden", "submit", "button"].includes(el.type || ""))
+      .filter(el => el.getClientRects().length > 0 || el.closest("#drawer, .dlg, .browse-dlg"));
+    if (all.length < 6) return [`只找到 ${all.length} 个文本类控件，检查无法得出结论`];
+
+    const shape = el => {
+      const cs = getComputedStyle(el);
+      return [cs.borderTopWidth, cs.borderTopStyle, cs.borderTopLeftRadius,
+              cs.paddingTop, cs.paddingLeft, cs.fontSize].join("|");
+    };
+    const groups = { "单行输入框": [], "多行输入框": [] };
+    for (const el of all) {
+      (el.tagName === "TEXTAREA" ? groups["多行输入框"] : groups["单行输入框"]).push(el);
+    }
+
+    for (const [groupName, els] of Object.entries(groups)) {
+      if (els.length < 2) continue;
+      const counts = new Map();
+      for (const el of els) counts.set(shape(el), (counts.get(shape(el)) || 0) + 1);
+      const [major] = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+      if (!major) continue;
+      const [majorShape, majorCount] = major;
+      for (const el of els) {
+        if (shape(el) === majorShape) continue;
+        const label = (el.closest("label") || {}).textContent ||
+                      (el.closest(".cred-field, .field") || {}).textContent ||
+                      el.id || el.name || el.tagName;
+        const cs = getComputedStyle(el);
+        out.push(`${groupName}「${String(label).trim().slice(0, 18)}」（${el.tagName.toLowerCase()}` +
+                 `${el.type ? " type=" + el.type : ""}）样式与同类不一致：` +
+                 `${cs.borderTopWidth} ${cs.borderTopStyle} / radius ${cs.borderTopLeftRadius}` +
+                 ` / padding ${cs.paddingTop} ${cs.paddingLeft} / ${cs.fontSize}` +
+                 `（多数：${majorShape}，${majorCount}/${els.length} 个）`);
+      }
+    }
+    return out;
+  }
+
   window.__checkSettingsCards = async function () {
     const drawer = document.getElementById("drawer");
     if (!drawer.classList.contains("open")) openDrawer("settings");
@@ -160,6 +212,7 @@
     }, 4000);
     failures = failures.concat(checkAboutDialog());
     dlgCancel();
+    failures = failures.concat(checkInputConsistency());
 
     const checked = cards.length;
     if (failures.length) {

@@ -4378,3 +4378,82 @@ include 排在前面，所以点名要的文件照样同步。
 作业列表那张表在 625px 卡片里，`调度 / 下次 / 上次 / 上次结果` 四个表头
 被挤成竖排（每行一个字，表头高 89px）。窄屏下这张表本来就不够宽，
 要修得动列结构，不属于本次两个红框，记在这里。
+## D78 · 密码框不是「样式不一样」，是压根没被样式选中（2026-11-12）
+
+用户问：为什么所有的密码类输入框的 UI 样式都与正常的输入框不一致？
+
+答案在 CSS 选择器里：
+
+```css
+select, input:not([type]), input[type=text], input[type=number] { ... }
+```
+
+**名单里没有 `input[type=password]`。** 于是密钥框一路用浏览器默认外观。
+实测同一张凭据卡上三个框：
+
+| 字段 | 高度 | 边框 | radius | padding | 字号 |
+|---|---|---|---|---|---|
+| 应用 App ID（text） | 32 | `1px solid #e2e6eb` | 6px | 5px 9px | 13px |
+| 应用 App Secret（password） | **21** | **`2px inset #767676`** | **0** | **1px 2px** | **13.3333px** |
+| 目录 token（text） | 32 | `1px solid #e2e6eb` | 6px | 5px 9px | 13px |
+
+宽度是 555 三个都一样 —— 因为 `.cred-field > .f-input > input { width: 100% }` 也命中它。
+所以不是「没管」，是**只管住了宽度，没管住外观**，看起来更像一个外来控件。
+
+### 一、修法：不列举，改为排除
+
+```css
+select,
+input:not([type=checkbox]):not([type=radio]) { ... }
+```
+
+为什么不是把 `input[type=password]` 补进名单：**这个名单已经漏过一次。**
+2026-11 早先那条注释记的是同一类事故 —— `input:not([type])` 不在 `input[type=text]`
+里，结果「结果过滤器」那个框在暗色模式下是纯白方块。当时的修法是把漏掉的那一个
+补进名单；这次漏的是 password。列举法的失败模式是固定的：**每加一种类型就漏一次，
+而且只在用到它的那张卡上显现。**
+
+改成排除法后，勾选类（checkbox / radio）之外的一切 `input` 都是同一个外观 ——
+以后加 email / url / date 也不会再漏。
+
+### 二、顺带补的：不可编辑的框要看得出来
+
+凭据里「来自环境变量」的字段是 `disabled`，之前没有任何 disabled 样式，
+和能改的框长得一样，点进去才发现不能输入。加上：
+
+```css
+select:disabled, input:disabled, textarea:disabled {
+  color: var(--muted); background: ...; cursor: not-allowed;
+}
+```
+
+### 三、检查脚本：新增 `checkInputConsistency()`
+
+规则不是「密码框看起来对」，而是「**同一类控件只有一种外观**」：
+
+> 取全部文本类控件（排除 checkbox / radio / hidden），按 `单行（input+select）`
+> 与 `多行（textarea）` 分成两组；每组内计算 computed style 的
+> `border-width|border-style|radius|padding-top|padding-left|font-size` 指纹，
+> 任何与组内多数不一致的，按字段名报出来。
+
+分组是被第一版逼出来的：第一版把所有控件放一起比，立刻报了 5 个 textarea。
+但多行输入框本来就该是另一种形状（等宽字体、更大的内边距），
+把它们拉平只会让检查变成噪音、最后被人关掉。
+
+同一版还顺手发现一个真差异：`.filter-col textarea` 是 12px，
+设置页那个是 12.5px —— 两处都是 glob 规则列表，字号却不一样。统一成 12.5。
+
+**sabotage 验证**：给密码框强行写回浏览器默认外观
+（`border:2px inset; radius:0; padding:1px 2px; font-size:13.33px`），重跑 → 1 条失败：
+
+```
+单行输入框「应用 App Secret」（input type=password）样式与同类不一致：
+2px inset / radius 0px / padding 1px 2px / 13.3333px（多数：1px|solid|6px|5px|9px|13px，14/15 个）
+```
+
+去掉后 → `0 failures, checked 4`。检查脚本本身没有改坏页面，是它抓到了页面。
+
+### 结果
+
+三个框现在都是 32px 高、555 宽、`1px solid` / radius 6 / padding 5px 9px / 13px。
+全文档 15 个单行控件指纹一致。
