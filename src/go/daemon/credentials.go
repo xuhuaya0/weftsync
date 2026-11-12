@@ -65,6 +65,14 @@ type CredentialField struct {
 	// FromEnv means the value comes from an environment variable, which this page
 	// cannot change; the form should leave the field alone and say so.
 	FromEnv bool `json:"from_env,omitempty"`
+	// Choices, when non-empty, means the backend restricts this value to a fixed
+	// list and the form should render a select instead of a text box. s3's
+	// `provider` is the case that matters: which other fields apply depends on it.
+	Choices []string `json:"choices,omitempty"`
+	// Provider is the provider this option belongs to, empty when it applies to all
+	// of them. It is not shown; it is how the panel knows to hide the endpoint of
+	// every provider except the selected one.
+	Provider string `json:"-"`
 }
 
 // CredentialView is one remote, ready to render.
@@ -80,6 +88,9 @@ type CredentialView struct {
 	// declares no options).
 	Testable bool   `json:"testable"`
 	Detail   string `json:"detail,omitempty"`
+	// Provider is the selected provider for backends that scope their options by
+	// one (s3). Empty for every other backend.
+	Provider string `json:"provider,omitempty"`
 }
 
 // usedRemotes maps remote name -> job names that reference it.
@@ -171,6 +182,77 @@ var fieldLabels = map[string]map[string]string{
 	"combine":  {"upstreams": "上游连接名，逗号分隔"},
 }
 
+// effectiveProvider is the provider a backend will actually use.
+//
+// Order: what the file says, then the option's declared default, then the first
+// entry of its examples. The last fallback is not a guess: rclone's s3 declares
+// `provider` with 39 examples in its own order and AWS first, which is the
+// documented default; the examples list *is* the priority list a user sees.
+//
+// Needed because s3 declares one `endpoint` option per provider. Rendering them
+// all produced twenty-three rows labelled "endpoint" on one card - the reason this
+// function exists at all.
+func effectiveProvider(reg *fs.RegInfo, name string) string {
+	popt := reg.Options.Get("provider")
+	if popt == nil {
+		return ""
+	}
+	if stored, ok := config.FileGetValue(name, "provider"); ok && stored != "" {
+		return stored
+	}
+	if def, ok := popt.Default.(string); ok && def != "" {
+		return def
+	}
+	if len(popt.Examples) > 0 {
+		return popt.Examples[0].Value
+	}
+	return ""
+}
+
+// applicableOptions is the option list the panel should render.
+//
+// Filters in one place so the view and its tests cannot disagree about what "the
+// fields of this backend" means.
+//
+// Provider matching uses rclone's own fs.MatchProvider, because the field is not a
+// plain name: it also carries negation. s3 declares `endpoint` with
+//
+//	Provider: "!AWS,ArvanCloud,IBMCOS,..."
+//
+// meaning "every provider EXCEPT these". An EqualFold comparison never matches a
+// negated declaration, so an earlier version silently hid `endpoint` for Minio -
+// a storage provider that cannot work without one. Using the shared function also
+// keeps the semantics (blank provider matches everything; comma-separated lists)
+// identical to what the rclone configurator does.
+func applicableOptions(reg *fs.RegInfo, providerVal string) []fs.Option {
+	out := make([]fs.Option, 0, len(reg.Options))
+	seen := make(map[string]bool, len(reg.Options))
+	for _, opt := range reg.Options {
+		// Advanced options are the tuning knobs (rate limits, base URLs); the
+		// credentials page is about the few values a user has to obtain from the
+		// provider, and a long form buries them.
+		if opt.Advanced && !opt.Required {
+			continue
+		}
+		// Hidden means rclone itself refuses to ask for it in the configurator.
+		if opt.Hide&fs.OptionHideConfigurator != 0 && !opt.Required {
+			continue
+		}
+		if !fs.MatchProvider(opt.Provider, providerVal) {
+			continue
+		}
+		// The same option name may be declared once per provider. After filtering
+		// exactly one applies, but dedupe anyway: two rows with the same name would
+		// write to the same config key and the second would always win.
+		if seen[opt.Name] {
+			continue
+		}
+		seen[opt.Name] = true
+		out = append(out, opt)
+	}
+	return out
+}
+
 func (a *API) credentialView(name, typ string, usedBy []string) CredentialView {
 	v := CredentialView{Name: name, Type: typ, UsedBy: usedBy}
 
@@ -181,23 +263,29 @@ func (a *API) credentialView(name, typ string, usedBy []string) CredentialView {
 	}
 	v.Testable = true
 	labels := fieldLabels[typ]
+	v.Provider = effectiveProvider(reg, name)
 
-	for _, opt := range reg.Options {
-		// Advanced options are the tuning knobs (rate limits, base URLs); the
-		// credentials page is about the few values a user has to obtain from the
-		// provider, and a long form buries them.
-		if opt.Advanced && !opt.Required {
-			continue
-		}
-
+	for _, opt := range applicableOptions(reg, v.Provider) {
 		f := CredentialField{
 			Name:     opt.Name,
 			Label:    opt.Name,
 			Secret:   opt.IsPassword,
 			Required: opt.Required,
+			Provider: opt.Provider,
 		}
 		if lbl := labels[opt.Name]; lbl != "" {
 			f.Label = lbl
+		}
+		if len(opt.Examples) > 0 {
+			for _, ex := range opt.Examples {
+				// Examples are provider-scoped too (s3's storage_class lists a
+				// different set per provider), and rclone filters them the same way
+				// when it builds its own configurator prompts.
+				if ex.Value == "" || !fs.MatchProvider(ex.Provider, v.Provider) {
+					continue
+				}
+				f.Choices = append(f.Choices, ex.Value)
+			}
 		}
 
 		stored, found := config.FileGetValue(name, opt.Name)
@@ -213,6 +301,14 @@ func (a *API) credentialView(name, typ string, usedBy []string) CredentialView {
 				} else {
 					f.Value = env
 				}
+			} else if opt.Name == "provider" && v.Provider != "" {
+				// Nothing is stored, but the backend HAS a provider - rclone falls
+				// back to the option's default. Show that value: an empty select
+				// would say "no provider chosen" while eleven AWS-shaped fields sit
+				// right below it, and the reader has no way to tell which one is
+				// actually in force. Same principle as Length: describe the value
+				// that will be used, not the absence of one.
+				f.Value = v.Provider
 			}
 			v.Fields = append(v.Fields, f)
 			continue

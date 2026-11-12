@@ -156,6 +156,31 @@
   .field { display: flex; gap: 10px; align-items: center; margin-bottom: 9px; flex-wrap: wrap; }
   .field label { min-width: 130px; color: var(--muted); }
   .field .hint { color: var(--muted); font-size: 12px; }
+  /* 云盘凭据的字段用固定四列：标签 · 输入 · 清除框 · 提示。
+     .field 本身是自由换行的（别处还有 6 个调用点依赖它），所以这里只用
+     .cred-field 覆盖，不动共用样式。
+     为什么必须固定列：只有 secret 字段多一个「清除」勾选框，flex-wrap 会让它的提示
+     落到和同一张卡其余行不同的 x 上 —— 实测 SMB 的 pass 那一行就是这样，看起来像
+     排错了。四列之后，有没有勾选框都不影响提示位置；勾选框那一列没内容时留空。 */
+  .field.cred-field {
+    display: grid;
+    grid-template-columns: 150px minmax(0, 1fr) 66px minmax(0, 240px);
+    gap: 8px; align-items: center;
+  }
+  .cred-field > .f-label { color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+  .cred-field > .f-input { min-width: 0; display: flex; }
+  /* Both the text box and the select. Covering only `input` left every row that
+     became a select (s3's provider/storage_class/acl, mailru's, storj's...) a
+     different width from its neighbours - exactly the inconsistency being fixed,
+     and it only shows up on backends that declare choices. */
+  .cred-field > .f-input > input,
+  .cred-field > .f-input > select { width: 100%; min-width: 0; }
+  .cred-field > .f-extra { min-width: 0; display: flex; }
+  .cred-field > .hint { color: var(--muted); font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+  @media (max-width: 760px) {
+    .field.cred-field { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+    .cred-field > .f-extra:empty { display: none; }
+  }
   .pair-card { border: 1px solid var(--line); border-radius: var(--r); padding: 12px; margin-bottom: 10px; }
   .pair-card .head { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
   .note {
@@ -5029,6 +5054,54 @@ function wireCredCards(body) {
   body.querySelectorAll("button[data-cred-del]").forEach(b => {
     b.addEventListener("click", () => deleteCredential(b.dataset.credDel, b));
   });
+
+  // Provider changes save themselves. The set of visible fields depends on the
+  // stored provider (the server derives it), so waiting for 保存 would leave the
+  // form showing AWS's fields while it claims to be IBMCOS.
+  body.querySelectorAll(".pair-card").forEach(card => {
+    const sel = card.querySelector(".cred-provider select");
+    if (!sel) return;
+    const remote = sel.id.slice("cred-".length, sel.id.lastIndexOf("-provider"));
+    sel.addEventListener("change", () => saveProvider(remote, sel));
+  });
+}
+
+async function saveProvider(remote, sel) {
+  const note = document.getElementById("cred-note-" + remote);
+  const card = sel.closest(".pair-card");
+  const others = {};
+  // Everything already typed elsewhere on the card must survive this save: the
+  // endpoint reads the whole "values" map, so send what is on screen rather than
+  // just the provider - otherwise switching provider would silently discard typed
+  // credentials.
+  card.querySelectorAll("input[id^='cred-" + remote + "-'], select[id^='cred-" + remote + "-']")
+    .forEach(el => {
+      if (el === sel) return;
+      const field = el.id.slice(("cred-" + remote + "-").length);
+      if (field.endsWith("-clear")) return;
+      const val = el.value;
+      if (val !== "") others[field] = val;
+    });
+
+  sel.disabled = true;
+  if (note) { note.className = "sub"; note.textContent = "切换类型…"; }
+  try {
+    const r = await fetch("/api/credentials?name=" + encodeURIComponent(remote), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values: Object.assign({}, others, { provider: sel.value }) }),
+    });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((data && data.error) || ("HTTP " + r.status));
+    credFlash[remote] = {
+      cls: "sub ok",
+      text: `类型已切到 ${sel.value}；下面是要填的字段。`,
+    };
+    await loadCredentials();
+  } catch (e) {
+    sel.disabled = false;
+    if (note) { note.className = "sub bad"; note.textContent = "切换失败：" + e.message; }
+  }
 }
 
 // deleteCredential removes a connection from the config file.
@@ -5106,21 +5179,51 @@ function credField(remote, f) {
   }
 
   // A secret never gets a value attribute, not even a masked one.
-  const input = f.secret
-    ? `<input type="password" id="${esc(id)}" value="" autocomplete="new-password"
+  //
+  // A field the backend restricts to a fixed list becomes a select. s3's
+  // `provider` has 39 values and `storage_class` a different handful per provider;
+  // as text boxes they would require typing "IBMCOS" exactly, and any typo would
+  // surface later as an authentication error.
+  let input;
+  if (!f.secret && f.choices && f.choices.length) {
+    const cur = f.value || "";
+    const known = f.choices.includes(cur);
+    input = `<select id="${esc(id)}"${f.from_env ? " disabled" : ""}>` +
+      (known ? "" : `<option value="${esc(cur)}" selected>${esc(cur || "（未选择）")}</option>`) +
+      f.choices.map(c => `<option value="${esc(c)}"${c === cur ? " selected" : ""}>` +
+        `${esc(c)}</option>`).join("") +
+      `</select>`;
+  } else if (f.secret) {
+    input = `<input type="password" id="${esc(id)}" value="" autocomplete="new-password"
              placeholder="${f.set ? "（留空表示不修改）" : ""}"
-             ${f.from_env ? "disabled" : ""}>`
-    : `<input type="text" id="${esc(id)}" value="${esc(f.value || "")}"
              ${f.from_env ? "disabled" : ""}>`;
+  } else {
+    input = `<input type="text" id="${esc(id)}" value="${esc(f.value || "")}"
+             ${f.from_env ? "disabled" : ""}>`;
+  }
 
+  // `provider` decides which OTHER fields exist, and the server derives that from
+  // what is stored - so changing it has to be written before the form can be
+  // re-rendered correctly. One field saving itself is the only honest way to show
+  // "switch to IBMCOS and the form changes"; the alternative is a form that lies
+  // about which fields apply until you press 保存.
+  const isProvider = f.name === "provider";
+  if (isProvider) {
+    hint.push("改这一项立即生效，下面的字段会跟着变");
+  }
+
+  // The 清除 cell is emitted for EVERY field, empty when there is nothing to put
+  // in it. Leaving it out made the hint land one column earlier on those rows, so
+  // the hints of an SMB card sat at two different x positions - the same "columns
+  // that do not agree" defect that was fixed in the result table.
   const clear = f.secret && !f.from_env
-    ? `<label class="sub" style="margin:0"><input type="checkbox" id="${esc(id)}-clear"> 清除</label>`
+    ? `<label class="sub" style="margin:0;white-space:nowrap"><input type="checkbox" id="${esc(id)}-clear"> 清除</label>`
     : "";
 
-  return `<div class="field">
-    <label>${esc(f.label || f.name)}</label>
-    ${input}
-    ${clear}
+  return `<div class="field cred-field${isProvider ? " cred-provider" : ""}">
+    <span class="f-label">${esc(f.label || f.name)}</span>
+    <span class="f-input">${input}</span>
+    <span class="f-extra">${clear}</span>
     <span class="hint">${esc(hint.join(" · "))}</span>
   </div>`;
 }
