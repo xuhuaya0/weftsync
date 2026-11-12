@@ -76,6 +76,64 @@
     return out;
   }
 
+  // The drawer head used to carry a <strong> with the current page's name AND a
+  // row of pills where the same name was highlighted - the same word twice,
+  // 50px apart. The rule that catches it: the head holds navigation, so the
+  // selected tab is the only place the current page's name may appear.
+  function checkDrawerHead() {
+    const out = [];
+    const head = document.querySelector(".drawer-head");
+    if (!head) return ["没有 .drawer-head"];
+    const nav = head.querySelector(".drawer-nav");
+    if (!nav) return ["抽屉头部没有 .drawer-nav"];
+
+    const others = [...head.children].filter(el => el !== nav && el.id !== "drawer-close");
+    for (const el of others) {
+      const t = el.textContent.trim();
+      if (t) out.push(`抽屉头部除了页签和关闭按钮还有「${t}」`);
+    }
+
+    const tabs = [...nav.querySelectorAll("button[data-drawer]")];
+    if (tabs.length < 5) out.push(`抽屉只有 ${tabs.length} 个页签`);
+    for (const b of tabs) {
+      const id = b.dataset.drawer;
+      if (!document.getElementById("tab-" + id)) out.push(`页签「${b.textContent}」没有对应页面 #tab-${id}`);
+      if (!b.getAttribute("aria-selected")) out.push(`页签「${b.textContent}」没有 aria-selected`);
+    }
+
+    const active = tabs.filter(b => b.getAttribute("aria-selected") === "true");
+    if (active.length !== 1) {
+      out.push(`选中的页签有 ${active.length} 个，应该刚好 1 个`);
+    } else {
+      const tabBg = getComputedStyle(active[0]).backgroundColor;
+      const bodyBg = getComputedStyle(document.getElementById("drawer")).backgroundColor;
+      if (tabBg !== bodyBg) {
+        out.push(`选中的页签底色 ${tabBg} 与内容区 ${bodyBg} 不一致，接不成一块`);
+      }
+      // Same label elsewhere in the head is the duplicate-title defect.
+      for (const el of others) {
+        if (el.textContent.trim() === active[0].textContent.trim()) {
+          out.push(`当前页名「${el.textContent.trim()}」在头部出现两次`);
+        }
+      }
+    }
+
+    // The same defect one level down: a single-card page whose card heading is
+    // the tab label word for word. Checked for every page, not just the open one.
+    for (const b of tabs) {
+      const label = b.textContent.trim();
+      const sec = document.getElementById("tab-" + b.dataset.drawer);
+      if (!sec) continue;
+      for (const h of sec.querySelectorAll(":scope > .card strong")) {
+        if (h.textContent.trim() === label) {
+          out.push(`页「${label}」的卡标题与页签名完全相同`);
+          break;
+        }
+      }
+    }
+    return out;
+  }
+
   window.__checkSettingsCards = async function () {
     const drawer = document.getElementById("drawer");
     if (!drawer.classList.contains("open")) openDrawer("settings");
@@ -91,6 +149,7 @@
     let failures = [];
     for (const c of cards) failures = failures.concat(checkCard(c));
     if (cards.length < 3) failures.push(`设置页只渲染出 ${cards.length} 张卡`);
+    failures = failures.concat(checkDrawerHead());
 
     // The About window has to be reachable and non-empty: it is where the
     // read-only rows went.

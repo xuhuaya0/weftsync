@@ -965,24 +965,31 @@
     display: flex; flex-direction: column;
   }
   .drawer.open { transform: translateX(0); }
+  /* 头部只有一行：页签 + 关闭。页签的样式和设置对话框（.dlg-tabs）同一套逻辑 ——
+     当前页的底色用 --bg，和下面的内容区接成一体；未选中的是透明的普通文字。
+     原来是 7 个圆角药丸按钮，选中只改边框颜色 —— 一排 7 个描边按钮读起来像
+     7 个平级操作，而不是「你在哪一页」。 */
   .drawer-head {
-    display: flex; gap: 10px; align-items: center;
-    padding: 14px 18px; border-bottom: 1px solid var(--line);
+    display: flex; gap: 8px; align-items: flex-end;
+    padding: 8px 12px 0; border-bottom: 1px solid var(--line);
     background: var(--card);
   }
-  .drawer-head strong { font-size: 15px; }
-  .drawer-head .icon-btn { margin-left: auto; }
+  .drawer-head .icon-btn { margin: 0 0 8px auto; align-self: flex-end; }
   .drawer-nav {
-    display: flex; gap: 4px; flex-wrap: wrap;
-    padding: 10px 18px; border-bottom: 1px solid var(--line);
-    background: var(--card);
+    display: flex; gap: 2px; flex-wrap: wrap; flex: 1 1 auto; min-width: 0;
   }
   .drawer-nav button {
-    padding: 4px 12px; font-size: 12.5px; background: none;
-    border: 1px solid var(--line); border-radius: 999px; cursor: pointer; color: var(--muted);
+    padding: 7px 14px; font-size: 12.5px;
+    background: none; border: 1px solid transparent; border-bottom: none;
+    border-radius: var(--r-sm) var(--r-sm) 0 0;
+    margin-bottom: -1px; color: var(--muted);
+  }
+  .drawer-nav button:hover {
+    color: var(--ink); background: color-mix(in srgb, var(--bg) 65%, transparent);
   }
   .drawer-nav button[aria-selected="true"] {
-    border-color: var(--blue); color: var(--blue); font-weight: 600;
+    background: var(--bg); color: var(--ink); font-weight: 600;
+    border-color: var(--line);
   }
   #drawer-body { overflow: auto; padding: 12px 14px; flex: 1; }
   #drawer-body .tab:not(.hidden) { display: block; }
@@ -1428,8 +1435,12 @@
 <!-- 抽屉：日志、拆分、冲突、历史、作业列表、全局设置、凭据。 -->
 <div id="drawer-mask" class="drawer-mask hidden"></div>
 <aside id="drawer" class="drawer">
+  <!-- 标题行与页签行原来分成两行：上面写着「全局设置与凭据」（60px），
+       下面一排药丸按钮里又把「全局设置与凭据」高亮一次 —— 同一个词相隔
+       50 像素出现两遍。现在只留一行：页签就是标题，✕ 在右端。
+       61 + 50 = 111px 的行首高度也回到 44px。 -->
   <div class="drawer-head">
-    <strong id="drawer-title">更多</strong>
+    <div class="drawer-nav" role="tablist"></div>
     <button id="drawer-close" class="icon-btn" title="关闭">✕</button>
   </div>
   <div id="drawer-body">
@@ -1437,7 +1448,9 @@
 <section id="tab-jobs" class="tab">
   <div class="card">
     <div class="row" style="margin-bottom:12px">
-      <strong class="grow">所有配置</strong>
+      <!-- 这里原来写着「作业列表」，而上面那个页签也叫「作业列表」—— 同一个词
+           相隔 40 像素。留给控件一个弹簧，按钮仍在右端。 -->
+      <span class="grow"></span>
       <label class="sub" style="margin:0">
         <input type="checkbox" id="skip-preview"> 跳过预览
       </label>
@@ -2972,8 +2985,11 @@ document.getElementById("refresh").addEventListener("click", refresh);
 // the maintenance screens are a click away rather than competing with it.
 
 const DRAWER_ITEMS = [
-  { id: "jobs", label: "所有配置" },
-  { id: "config", label: "完整配置" },
+  // 「所有配置 / 完整配置」是排在一起的两项同宽四字词，只差前两个字，
+  // 而两者内容完全不同（一个是有状态与运行按钮的列表，一个是单个配置的表单）。
+  // 改成「作业列表 / 配置表单」：词尾不同，看名字就知道是列表还是表单。
+  { id: "jobs", label: "作业列表" },
+  { id: "config", label: "配置表单" },
   { id: "conflicts", label: "冲突" },
   { id: "history", label: "历史" },
   { id: "log", label: "日志" },
@@ -2984,12 +3000,13 @@ const DRAWER_ITEMS = [
 let drawerTab = "jobs";
 
 function buildDrawerNav() {
-  const head = document.querySelector(".drawer-head");
-  const nav = document.createElement("div");
-  nav.className = "drawer-nav";
+  // 页签写进已是 .drawer-head 的那个空容器（HTML 里已经放着它），不再自己
+  // 造一个插到 header 后面 —— 那样就是两行了。
+  const nav = document.querySelector(".drawer-head .drawer-nav");
+  if (!nav) return;
   nav.innerHTML = DRAWER_ITEMS
-    .map(it => `<button data-drawer="${it.id}">${esc(it.label)}</button>`).join("");
-  head.parentNode.insertBefore(nav, head.nextSibling);
+    .map(it => `<button data-drawer="${it.id}" role="tab" aria-selected="false">${esc(it.label)}</button>`)
+    .join("");
   nav.querySelectorAll("button[data-drawer]").forEach(b => {
     b.addEventListener("click", () => openDrawer(b.dataset.drawer));
   });
@@ -3006,9 +3023,6 @@ function openDrawer(tab) {
   document.querySelectorAll("#drawer-body .tab").forEach(s => s.classList.add("hidden"));
   const sec = document.getElementById("tab-" + drawerTab);
   if (sec) sec.classList.remove("hidden");
-
-  const item = DRAWER_ITEMS.find(i => i.id === drawerTab);
-  document.getElementById("drawer-title").textContent = item ? item.label : "更多";
 
   if (drawerTab === "config") { syncJobPicker(); loadConfig(); }
   if (drawerTab === "split") { loadSplit(); }
@@ -3033,8 +3047,8 @@ const MENUS = {
     { label: "同步", key: "F9", fn: () => document.getElementById("s-sync-btn").click() },
   ],
   tools: [
-    { label: "所有配置", fn: () => openDrawer("jobs") },
-    { label: "完整配置表单", fn: () => openDrawer("config") },
+    { label: "作业列表", fn: () => openDrawer("jobs") },
+    { label: "配置表单", fn: () => openDrawer("config") },
     { label: "冲突", fn: () => openDrawer("conflicts") },
     { label: "历史", fn: () => openDrawer("history") },
     { label: "日志", fn: () => openDrawer("log") },
@@ -3434,7 +3448,7 @@ const VARIANT_OPTS = [
   {
     v: "two-way", nm: "双向",
     ds: "先拉取云端的改动，再把本地的新增与改动传上去。默认不传播删除；" +
-        "要传播得在「完整配置」里打开对应开关。",
+        "要传播得在「配置表单」里打开对应开关。",
   },
   {
     v: "mirror", nm: "镜像",
@@ -4754,7 +4768,7 @@ async function loadSettings() {
   // 两个字再说一遍（D74 的错）。少一列 130px 的标签栏，输入框从 523px 变成 663px，
   // 一条规则一行的东西本来就该宽。
   filterBox.innerHTML = `<textarea id="set-exclude" rows="4" style="width:100%;display:block" placeholder="*.tmp&#10;.git/**&#10;/cache/**">${esc(patterns.join("\n"))}</textarea>
-    <div class="hint" style="margin-top:6px">每行一条，对所有配置生效（含以后新建的）。<code>/foo</code> 锚定同步根，<code>**</code> 任意层级。<br>只有排除，没有包含 —— 作业用「包含」点名要的文件，这里拦不住。</div>
+    <div class="hint" style="margin-top:6px">每行一条，对所有配置生效（含以后新建的）。<code>/foo</code> 锚定同步根，<code>**</code> 任意层级。<br>例外：某份配置自己写了「包含」清单时，清单里的文件不受这份规则影响。</div>
     <div class="row" style="margin-top:10px">
       <button id="set-save">保存</button>
       <span id="set-flash" class="hint" style="margin:0"></span>
