@@ -25,6 +25,13 @@
 
   function px(v) { return Math.round(parseFloat(v)); }
 
+  // Minimum insets, as decided in D80. The first fix here was 8px -> 12px, which
+  // was correct arithmetically and invisible on screen (4px); the user's reply was
+  // 「所以你修了啥我没看见」. These floors make a return to "technically spaced, looks
+  // cramped" a failure instead of a judgement call.
+  const MIN_SIDE = 12;
+  const MIN_VERT = 10;
+
   window.__checkFrame = function () {
     const failures = [];
     const app = document.querySelector(".app");
@@ -85,8 +92,8 @@
       const first = Math.round(Math.min(...boxes.map(b => b.x)) - appR.x);
       for (const b of boxes) {
         const x = Math.round(b.x - appR.x);
-        if (x < 10) {
-          failures.push(`顶栏内容离窗框只有 ${x}px，窗框圆角 13px —— 看起来被挤进角里`);
+        if (x < MIN_SIDE) {
+          failures.push(`顶栏内容离窗框只有 ${x}px（下限 ${MIN_SIDE}），窗框圆角 13px —— 看着像被挤进角里`);
           break;
         }
       }
@@ -100,9 +107,6 @@
         // Wrapped bar: every row starts at the left inset and the rest of each row
         // is legitimately empty, so there is no right inset to compare.
         sideGap = { left: first, right: null, wrapped: true };
-        if (first < 10) {
-          failures.push(`顶栏换行后内容离窗框只有 ${first}px`);
-        }
       }
     }
 
@@ -118,8 +122,8 @@
       if (Math.abs(above - below) > 1) {
         failures.push(`顶栏上留白 ${above}px、下留白 ${below}px 不对称`);
       }
-      if (above < 8) {
-        failures.push(`顶栏上留白只有 ${above}px，按钮几乎贴着窗框`);
+      if (above < MIN_VERT) {
+        failures.push(`顶栏上留白只有 ${above}px（下限 ${MIN_VERT}），按钮几乎贴着窗框`);
       }
     }
 
