@@ -63,11 +63,8 @@ func (a *API) handleInfo(w http.ResponseWriter, r *http.Request) {
 		ConfigFile: config.GetConfigPath(),
 		SplitDir:   a.SplitDir,
 	}
-	if a.StartedAt.IsZero() {
-		a.StartedAt = time.Now()
-	}
-	view.StartedAt = a.StartedAt
-	view.UptimeSeconds = int64(time.Since(a.StartedAt).Seconds())
+	view.StartedAt = a.startedAt()
+	view.UptimeSeconds = int64(time.Since(view.StartedAt).Seconds())
 
 	for _, st := range a.D.Status() {
 		view.JobFiles = append(view.JobFiles, st.File)

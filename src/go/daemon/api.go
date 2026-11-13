@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"weftsync/autostart"
@@ -37,8 +38,25 @@ type API struct {
 	// a small permanent file the operator may want on a different disk - and because
 	// a test must be able to keep them out of the real user profile.
 	SplitDir string
-	// StartedAt is when this process began serving, shown on the settings page.
+	// StartedAt is when this process began serving, shown on the settings page and
+	// used by the page to notice that it is running against an older build.
 	StartedAt time.Time
+	// startedOnce guards the lazy default for StartedAt: /api/status and /api/info
+	// are polled concurrently, so two requests could otherwise both write it.
+	startedOnce sync.Once
+}
+
+// startedAt returns when this process began serving, defaulting to now on the
+// first call. A daemon started without an explicit time still needs a stable
+// value, or every request would report a different one and the page would think
+// the server restarted on every poll.
+func (a *API) startedAt() time.Time {
+	a.startedOnce.Do(func() {
+		if a.StartedAt.IsZero() {
+			a.StartedAt = time.Now()
+		}
+	})
+	return a.StartedAt
 }
 
 // Routes returns the handler for the API.
@@ -83,6 +101,16 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"jobs": a.D.Status(),
 		"now":  a.D.now().Format(time.RFC3339),
+		// started identifies this process instance and nothing else. The page
+		// remembers the value it was loaded with; a different one means the daemon
+		// was restarted, and since the HTML is embedded in the binary, the document
+		// in the browser is now stale.
+		//
+		// This exists because the clock in the bar is refreshed by JavaScript every
+		// few seconds, so a stale page still looks alive. Measured twice: after two
+		// rounds of CSS fixes the answers were "所以你修了啥我没看见" and
+		// "为什么没丝毫变化" - both times the document predated the rebuild.
+		"started": a.startedAt().Format(time.RFC3339Nano),
 	})
 }
 

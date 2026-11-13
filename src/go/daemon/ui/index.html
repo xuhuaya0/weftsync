@@ -799,9 +799,19 @@
   }
   .statusbar .grow { flex: 1; }
   /* An empty status bar is a rule drawn under nothing. It appears when there is
-     something to say and is gone otherwise. */
-  .statusbar:has(#s-status:empty) { display: none; }
+     something to say and is gone otherwise - "something to say" now includes the
+     build notice, so both have to be empty before the bar disappears. */
+  .statusbar:has(#s-status:empty):has(#build-note.hidden) { display: none; }
   .statusbar .grow { flex: 1; }
+  /* 「服务已重启，页面是旧版」的提示。只在有未保存改动时才出现（否则直接重载），
+     所以它不能隐在菜单里 —— 它要能被一眼看到并被点。 */
+  .build-note {
+    font-size: 11.5px; padding: 2px 9px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+    background: color-mix(in srgb, var(--warn) 12%, var(--card));
+    color: var(--ink); white-space: nowrap;
+  }
+  .build-note:hover { border-color: var(--warn); color: var(--warn); }
   .stat { font-size: 12px; color: var(--muted); margin: 0; }
   .stat.busy { color: var(--blue); font-weight: 600; }
   .stat.done { color: var(--ok); font-weight: 600; }
@@ -1307,6 +1317,9 @@
     <div class="statusbar">
       <span id="s-status" class="stat"></span>
       <span class="grow"></span>
+      <!-- daemon 重启了但页面还没换（有未保存改动，不敢自动重载）。点一下重载。 -->
+      <button id="build-note" class="build-note hidden"
+              title="从服务端重新读取页面">服务已重启，页面是旧版 · 点此重载</button>
     </div>  </div>
 </div>
 
@@ -1777,6 +1790,49 @@ async function getJSON(url) {
 // The error the server sends is the message the user needs (it names the file
 // that already exists, or the field that is wrong), so it is surfaced as-is
 // rather than replaced by the status code.
+
+// handleBuildChange notices that the daemon in front of this page was replaced.
+// The HTML/CSS is embedded in the binary, so a restart usually means this document
+// is out of date. It does not *look* out of date: the clock in the bar is rewritten
+// by JavaScript on every poll, so a stale page still ticks and still answers, and
+// the only way to notice is to compare memory against the server.
+//
+// This has cost two rounds of "no change at all" in practice - the CSS was correct
+// and measured, the browser was showing a document from before the rebuild.
+//
+// Two outcomes, because reloading can destroy work:
+//   - nothing unsaved: reload immediately. The user asked for the new build, and
+//     silently staying on the old one is what caused the confusion.
+//   - unsaved edits in the session config: never reload. Show a clickable notice
+//     instead. Losing an edited folder list to a background reload would be far
+//     worse than looking at old pixels.
+let pageStarted = "";
+let reloadNoticeShown = false;
+
+function handleBuildChange(started) {
+  if (!started) return;
+  if (!pageStarted) { pageStarted = started; return; }
+  if (pageStarted === started) return;
+
+  const bar = document.getElementById("build-note");
+  if (dirty) {
+    if (bar && !reloadNoticeShown) {
+      reloadNoticeShown = true;
+      bar.classList.remove("hidden");
+    }
+    return;
+  }
+  location.reload();
+}
+
+function loadPageStartedFromServer() {
+  // First poll sets pageStarted; nothing to do here but make the notice clickable.
+  const bar = document.getElementById("build-note");
+  if (bar) {
+    bar.addEventListener("click", () => location.reload());
+  }
+}
+
 async function postJSON(url, body) {
   const r = await fetch(url, {
     method: "POST",
@@ -1805,6 +1861,7 @@ async function refresh() {
     pollTimer = setTimeout(refresh, 5000);
     return;
   }
+  handleBuildChange(snapshot.started);
   document.getElementById("now").textContent = "服务器时间 " + fmtTime(snapshot.now);
 
   // Only touch the DOM when the data actually changed: a full re-render every
@@ -5874,6 +5931,7 @@ document.getElementById("cfg-save").addEventListener("click", async () => {
 
 // The session view needs the config, not just the status, so it loads after the
 // first status poll has filled the picker.
+loadPageStartedFromServer();
 refresh().then(loadSession);
 </script>
 </body>
