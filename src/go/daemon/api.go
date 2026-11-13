@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -127,8 +128,42 @@ func (a *API) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mode := ModeRun
-	if isTrue(r.URL.Query().Get("plan")) {
+	// plan= is the documented flag; a value we do not understand is refused rather
+	// than read as "false". `plan=maybe` silently meaning "write to the cloud" is
+	// the same trap as an unknown mode below.
+	if raw := strings.TrimSpace(r.URL.Query().Get("plan")); raw != "" {
+		switch {
+		case isTrue(raw):
+			mode = ModePlan
+		case isFalse(raw):
+			mode = ModeRun
+		default:
+			writeError(w, http.StatusBadRequest,
+				`the plan parameter must be a boolean (got `+strconv.Quote(raw)+
+					`); nothing was started`)
+			return
+		}
+	}
+	// mode= is accepted as an alias, and rejected when it says something we do not
+	// understand.
+	//
+	// Ignoring an unknown value here is not a cosmetic problem: measured on
+	// 2026-11-13, a request carrying mode=plan was silently treated as mode=run and
+	// started an irreversible sync (1487 files, of which the first 14 were uploaded
+	// before it was stopped). A parameter that asks for "measure only" must never
+	// fall back to "write", so anything unrecognised is a 400.
+	switch raw := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode"))); raw {
+	case "":
+		// not given: plan= decides
+	case "plan", "preview", "dry-run", "dryrun":
 		mode = ModePlan
+	case "run", "sync":
+		mode = ModeRun
+	default:
+		writeError(w, http.StatusBadRequest,
+			`the mode parameter must be "run" or "plan" (got `+strconv.Quote(raw)+
+				`); nothing was started`)
+		return
 	}
 
 	name := r.URL.Query().Get("job")
@@ -217,6 +252,18 @@ func (a *API) handleStop(w http.ResponseWriter, r *http.Request) {
 func isTrue(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// isFalse accepts the forms that spell out "no".
+//
+// Needed so a boolean parameter can tell "the user said no" from "the user wrote
+// something we did not understand" - the second must be an error, never a default.
+func isFalse(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "0", "false", "no", "off":
 		return true
 	}
 	return false

@@ -5363,3 +5363,97 @@ Go 侧（`remedy` / `daemon` / `feishu` 共 8 条）：
    `/api/status`，浏览器检查用页面自己的渲染函数吃一份同形状的数据。中间那一段
    「真实错误 → remedy」靠 D87 的单元测试覆盖。要端到端复现，只能等下一次飞书
    真的返回 1061001。
+
+## D89 · 删掉残留；顺带查到真正的根因（这个作业每次都重传全部文件）（2026-11-13）
+
+用户：**「你直接删除吧」** —— 指云端那 2 条同名残留。
+
+### 一、删了什么、凭什么敢删
+
+不用 `backend dedupe`：它要求 `state_file`（这个作业对 `test:` 没有），拒绝是对的 ——
+没有快照就分不清哪一份是自己传的。但这里不需要猜，可以直接读内容：
+
+1. 列出该名字下的全部条目，要求**恰好 2 条**且都是 `type=file`；
+2. 把两条**都下载下来**算 sha256；
+3. 与本机原件算 sha256；
+4. 三者一致才删，且只删 `created_time` 较早的那条；
+5. 删完重新列目录，断言只剩 1 条且是保留的那个 token。
+
+结果（第一次）：
+
+| 文件 | 本机 | 旧 token | 新 token | sha256 |
+|---|---|---|---|---|
+| `jl4xxx_result_chart_Serdes_Eye_Jitter.xlsx` | 78424 B | `SNJFbPv…` 旧 | `W3uFbZH…` 新 | 三者同为 `0d1a2acc…` |
+| `ADC_CapCal_Temp_Cycling/R5_FF104_20250408_113725.xlsx` | 89193 B | `VOhAbgp…` 旧 | `NeXsb9SJ…` 新 | 三者同为 `4dc6da9b…` |
+
+删完 `backend duplicates 'test:'` → `found 0 name(s) with duplicates`。
+再用 `weftsync copyto` 把幸存的两份下载回来：78424 / 0d1a2acc…、89193 / 4dc6da9b…
+—— 与本机原件逐字节相同。
+
+### 二、我自己捅的娄子（必须写下来）
+
+为了看「下次还会不会重传」，我发了
+`POST /api/run?job=demo&mode=plan`，以为 `mode=plan` 是预览。
+
+**`handleRun` 只看 `plan=`，`mode` 被静默忽略 → 真跑。** 等我发现时它已经上传了
+14 个文件（20 MB），我立刻 `POST /api/stop` 停下（36 秒）。这一趟又留下 2 条新重复项
+（`Tx_Two_Tone.xlsx`、`Tx_Two_Tone_2p5g_Template.xlsx`），已用同一套「三方哈希一致才删」
+清掉，并确认 `0 name(s) with duplicates`。
+
+两个教训，都不是"下次小心"能解决的：
+
+1. **一个写着「预览」的请求把数据写了。** 这不是笔误问题，是接口问题：不认识的参数
+   值必须报错，绝不能退回默认值。已改为 `mode=` 接受 `run/sync` 与
+   `plan/preview/dry-run/dryrun`（大小写与首尾空格不敏感），其余 **400 并说明
+   「nothing was started」**；`plan=` 同样从"只认 true"改成严格布尔，`plan=maybe`
+   不再被当成 false。
+2. **停下来的运行会留下半成品。** 这是 Feishu 上传即新增的必然结果，不是 bug；
+   但它意味着「停下」这个动作本身需要一句提醒。未做，记在这里。
+
+### 三、真正的根因（这才是重点）
+
+`pair-2` 同步 `C:\...\R5P0` → `test:`，**没有配 `state_file`**。后果链条：
+
+1. 后端没有快照 → `Object.Size()` 返回 **-1**（Feishu 列表不带 size，E3），
+   `ModTime()` 返回**上传时刻**；
+2. rclone 因此无法判断"同一个文件" → 每次运行都把**全部 1487 个文件**当成变更；
+3. Feishu 上传是**新增条目**，所以每次上传都要删掉旧 token；
+4. 1487 次删除里只要几次碰上 `1061001`，就留下几条**在列表里看不见**的重复项。
+
+实测（删除残留之后重新比较）：
+
+```
+demo:   {"update":0}
+pair-2: {"update":1487, "bytes":116731164}     ← 116 MB，每次运行都要传
+```
+
+所以「删掉那两条」只是清现场。**不配 `state_file`，下一轮还会有。** 代码里那句注释
+其实早就写了：`// stateless mode: works, but re-uploads everything each run`。
+
+### 四、检查
+
+`daemon/run_mode_test.go`：
+
+- 9 种查询串（空 / `plan=true` / `plan=0` / `mode=run|plan|preview|dry-run|PLAN|" plan "`）
+  逐个断言「预览请求**没有**启动真跑」以及「真跑请求没有变成预览」；
+- 5 种非法值（`mode=plna`、`mode=preview2`、`mode=1`、`plan=maybe`、`plan=ture`）
+  断言 **400** + 一次都没有启动 + 消息含 `nothing was started`。
+
+**破坏两次，都报出**：
+
+| 塞回去 | 报出 |
+|---|---|
+| 重新忽略 `mode` | `a preview request started 1 real run(s)`（5 个子用例）|
+| 未知 mode 退回 `run` | `status = 200, want 400`（3 个子用例）|
+
+恢复后全绿；`gofmt` / `vet` / `go test ./...` / Linux 交叉编译 / 密钥扫描 / 界面语法全过。
+
+### 五、还没做的一件
+
+给 `pair-2` 配 `state_file`。**没有擅自改**：它改变的是这个任务的同步语义，而且第一次
+带状态运行会把 1487 个文件重新上传一遍（116 MB）以记录指纹，之后才会安静下来。
+两条路，等用户选：
+
+- **(a)** 加 `state_file`，跑一次，代价是一次 116 MB 上传；
+- **(b)** 用「远端现有 token + 本机 mtime/size」直接生成状态，零上传，且可以用一次
+  预览验证（计划应变成 0）—— 需要写一个一次性工具。
