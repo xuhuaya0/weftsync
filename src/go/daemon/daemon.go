@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"weftsync/job"
+	"weftsync/remedy"
 )
 
 // RunState is what a job is doing right now.
@@ -57,6 +58,13 @@ type JobStatus struct {
 	LastRun   *time.Time `json:"last_run,omitempty"`
 	LastOK    *bool      `json:"last_ok,omitempty"`
 	LastError string     `json:"last_error,omitempty"`
+	// LastRemedy explains the failure in terms the console can act on: which kind
+	// of failure it was, the facts behind it, and the commands that fix it.
+	//
+	// Without it the console can only print the backend's English sentence, which
+	// for a half-finished replacement reads like "the upload failed" when the
+	// upload in fact succeeded. See package remedy.
+	LastRemedy *remedy.Remedy `json:"last_remedy,omitempty"`
 	// Skipped counts runs that were not started because the previous one was
 	// still going.
 	Skipped int `json:"skipped"`
@@ -86,6 +94,8 @@ type PlanStatus struct {
 	// arrive as zero counts, and the UI would tell the user there is nothing to
 	// change when in fact the destination could not even be opened.
 	Error string `json:"error,omitempty"`
+	// Remedy is the actionable form of Error, when we recognise it.
+	Remedy *remedy.Remedy `json:"remedy,omitempty"`
 	// GuardHit means a real run would be refused by the delete guard, so the
 	// preview is also the explanation for why nothing is happening.
 	GuardHit bool `json:"guard_hit"`
@@ -127,8 +137,12 @@ type entry struct {
 	lastOK    bool
 	hasRun    bool
 	lastError string
-	skipped   int
-	lastRes   []job.PairResult
+	// lastRemedy is the actionable form of lastError; nil when the failure was
+	// not one we can explain. Kept separate from lastError because the console
+	// shows one as prose and the other as steps.
+	lastRemedy *remedy.Remedy
+	skipped    int
+	lastRes    []job.PairResult
 	// lastPlan is the most recent preview; nil until one has run.
 	lastPlan *PlanStatus
 	// lastStopped records that the last run was cut short on request, which is
@@ -539,6 +553,9 @@ func (d *Daemon) execute(ctx context.Context, e *entry, mode RunMode, only []str
 			At: start, Results: results, GuardHit: guardHit, Error: errText,
 			Conflicts: conflicts, Transferred: transferred, Deleted: deleted,
 		}
+		if r, ok := remedy.Of(err); ok {
+			e.lastPlan.Remedy = &r
+		}
 	} else {
 		e.lastRun = start
 		e.hasRun = true
@@ -547,8 +564,16 @@ func (d *Daemon) execute(ctx context.Context, e *entry, mode RunMode, only []str
 		e.lastStopped = stopped
 		if err != nil {
 			e.lastError = err.Error()
+			// A run joins one error per pair, so the error worth explaining is
+			// usually not the outermost one - remedy.Of walks the whole chain.
+			if r, ok := remedy.Of(err); ok {
+				e.lastRemedy = &r
+			} else {
+				e.lastRemedy = nil
+			}
 		} else {
 			e.lastError = ""
+			e.lastRemedy = nil
 		}
 	}
 	end := d.now()
@@ -781,6 +806,10 @@ func (d *Daemon) Status() []JobStatus {
 			st.LastStopped = e.lastStopped
 		}
 		st.LastError = e.lastError
+		if e.lastRemedy != nil {
+			r := *e.lastRemedy
+			st.LastRemedy = &r
+		}
 		if e.lastPlan != nil {
 			p := *e.lastPlan
 			st.Plan = &p

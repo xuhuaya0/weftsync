@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"weftsync/remedy"
 	"weftsync/state"
 )
 
@@ -256,6 +257,55 @@ func TestDuplicateLeftErrorCommandTarget(t *testing.T) {
 		e := &DuplicateLeftError{Remote: c.remote, RemoteName: "test"}
 		if got := e.target(); got != c.want {
 			t.Errorf("target(%q) = %q, want %q", c.remote, got, c.want)
+		}
+	}
+}
+
+// The console cannot act on a sentence, so the error must also arrive as facts:
+// a kind, the tokens, and the commands - in the order inspect-then-apply, never
+// the other way round, because Feishu deletion cannot be undone.
+func TestDuplicateLeftErrorCarriesRemedy(t *testing.T) {
+	e := &DuplicateLeftError{
+		Remote:     "ADC_CapCal/R5.xlsx",
+		RemoteName: "test",
+		NewToken:   "new-token",
+		OldToken:   "old-token",
+		Err:        &APIError{Code: CodeInternal, Msg: "unknown error"},
+	}
+
+	r, ok := remedy.Of(errors.Join(errors.New("pair p: 1 error"), e))
+	if !ok {
+		t.Fatal("remedy not found through the joined error, which is how a run reports")
+	}
+	if r.Kind != "feishu-duplicate-left" {
+		t.Errorf("kind = %q", r.Kind)
+	}
+	for key, want := range map[string]string{
+		"path":      "ADC_CapCal/R5.xlsx",
+		"folder":    "ADC_CapCal",
+		"new_token": "new-token",
+		"old_token": "old-token",
+	} {
+		if got := r.Fields[key]; got != want {
+			t.Errorf("fields[%q] = %q, want %q", key, got, want)
+		}
+	}
+	if len(r.Commands) != 2 {
+		t.Fatalf("commands = %+v, want inspect + apply", r.Commands)
+	}
+	if r.Commands[0].Label != "inspect" || r.Commands[1].Label != "apply" {
+		t.Errorf("labels = %q, %q; inspect must come first",
+			r.Commands[0].Label, r.Commands[1].Label)
+	}
+	if strings.Contains(r.Commands[0].Run, "confirm") {
+		t.Errorf("the first command is destructive: %q", r.Commands[0].Run)
+	}
+	if !strings.Contains(r.Commands[1].Run, "-o confirm=true") {
+		t.Errorf("the second command does not actually delete: %q", r.Commands[1].Run)
+	}
+	for _, c := range r.Commands {
+		if !strings.Contains(c.Run, `"test:ADC_CapCal"`) {
+			t.Errorf("command %q does not name the folder, so it cannot be pasted", c.Run)
 		}
 	}
 }

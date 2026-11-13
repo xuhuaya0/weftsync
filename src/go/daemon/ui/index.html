@@ -244,6 +244,50 @@
   .empty-block strong { display: block; margin-bottom: 7px; font-size: 13px; }
   .empty-block .hint { line-height: 1.7; }
   .empty-block .hint + .hint { margin-top: 4px; }
+
+  /* ---- 失败说明块 ----
+     它比一条状态句子长，所以不能塞进状态行；又必须比「对比结果」更早被看到，
+     所以放在目录对下面。左边那条粗线是唯一用来表示「这是问题」的记号 —— 底色
+     只比自己浅一点，因为满屏红底会把整页读成崩了。
+
+     不设高度上限：先前设了 42vh + 内部滚动，实测在 600px 高的窗口里把第 2 条命令
+     裁在折线下 —— 而第 2 条正是真正要执行的那条。块长了就让页面滚动。 */
+  .remedy {
+    flex: 0 0 auto; min-width: 0;
+    margin-bottom: 8px; padding: 11px 13px 12px;
+    border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--line));
+    border-left: 3px solid var(--bad);
+    border-radius: var(--r);
+    background: color-mix(in srgb, var(--bad) 5%, var(--card));
+    font-size: 12.5px; line-height: 1.65; color: var(--ink);
+  }
+  .remedy .rm-head { display: flex; gap: 8px; align-items: baseline; }
+  .remedy .rm-head strong { font-size: 13px; }
+  .remedy .rm-head .grow { flex: 1; }
+  .remedy .rm-what { margin-top: 6px; color: var(--ink-2); }
+  .remedy .rm-what b { color: var(--ink); }
+  .remedy .rm-what code { background: var(--tint); border: 1px solid var(--line); }
+  .remedy .rm-fix { margin-top: 10px; font-weight: 700; }
+  /* 命令一行一条：编号 + 命令 + 复制。命令用等宽字体并允许横向滚动，
+     不让它换行成两行 —— 换行后的命令复制出去常常少一个参数。 */
+  .remedy .rm-step { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  .remedy .rm-step .n {
+    flex: 0 0 auto; width: 15px; color: var(--muted);
+    font-variant-numeric: tabular-nums; text-align: right;
+  }
+  .remedy .rm-step .cmd { flex: 1 1 auto; min-width: 0; }
+  .remedy .rm-step .why { display: block; color: var(--muted); font-size: 11.5px; }
+  .remedy .rm-step code {
+    display: block; overflow-x: auto; white-space: pre;
+    margin-top: 2px; padding: 5px 8px;
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--r-sm); font-size: 12px;
+  }
+  .remedy .rm-step button { flex: 0 0 auto; align-self: flex-start; margin-top: 2px; }
+  /* 原始报错默认折叠：它是证据，不是说明书。 */
+  .remedy .rm-raw { margin-top: 9px; font-size: 11.5px; color: var(--muted); }
+  .remedy .rm-raw summary { cursor: pointer; }
+  .remedy .rm-raw code { display: block; margin-top: 4px; word-break: break-all; white-space: pre-wrap; }
   .save-note { margin: 10px 0 0; }
   .save-note:empty { display: none; }
 
@@ -1320,6 +1364,12 @@
     <!-- 目录对：一行一套「左 ⇄ 右」，行尾 − 删这一对、+ 在下方加一对 -->
     <div class="pairs" id="pair-rows"></div>
 
+    <!-- 上次没做完时的说明。放在这里而不是状态行，是因为它要回答三件事
+         （发生了什么 / 什么没受影响 / 现在该敲什么），一句话装不下，而这三件
+         事正是用户失败后唯一想要的。状态行仍然只说「同步失败」，因为它是给
+         一眼扫过的人看的。 -->
+    <div id="s-remedy" class="remedy hidden"></div>
+
     <!-- 对比结果 -->
     <div class="card" id="plan-card" style="padding:0;overflow:hidden">
       <div class="row plan-head">
@@ -1906,6 +1956,7 @@ async function refresh() {
     name: j.name, state: j.state, enabled: j.enabled, pairs: j.pairs,
     schedule: j.schedule, next_run: j.next_run, last_run: j.last_run,
     last_ok: j.last_ok, last_error: j.last_error, skipped: j.skipped,
+    last_remedy: j.last_remedy ? j.last_remedy.kind : null,
     can_stop: j.can_stop, mode: j.mode, last_stopped: j.last_stopped,
     plan_at: j.plan ? j.plan.at : null,
   })));
@@ -1915,6 +1966,7 @@ async function refresh() {
     renderConflicts();
   }
   updateProgress();
+  renderRemedy();
   afterPlanRun();
   updateBusy();
   refreshHistory();
@@ -2054,8 +2106,15 @@ function finishStatus(job, mode) {
   const a = r.actual || {};
   const errs = a.errors || 0;
   if (jobErr) {
+    // 有说明块的时候，底栏不再重抄一遍整段英文：同一个错误在屏幕上出现两次,
+    // 其中一次是 300 个字符的机器话，读者只会两头都看。
+    const rt = job.last_remedy
+      ? (REMEDY_TEXT[job.last_remedy.kind] || REMEDY_TEXT[""])
+      : null;
     st.className = "stat err";
-    st.textContent = "同步失败：" + jobErr;
+    // 标题本身已经是一句完整的话（「上次同步没有收尾：…」），再加「同步失败：」
+    // 就变成两个冒号接两个判断。
+    st.textContent = rt ? rt.title + "（见上面的说明）" : "同步失败：" + jobErr;
     return;
   }
   const bits = [`传输 ${a.transferred || 0} 项`];
@@ -2064,6 +2123,173 @@ function finishStatus(job, mode) {
   bits.push(errs ? `${errs} 个错误` : "无错误");
   st.className = errs ? "stat err" : "stat done";
   st.textContent = "同步完成：" + bits.join("，");
+}
+
+// ---------------------------------------------------------------- 失败说明
+//
+// 失败时界面上原来只有一句「同步失败：feishu: replace "…": new version uploaded
+// as token …」。这句话自相矛盾 —— 前缀说失败，正文说上传成功 —— 而且没有一个字
+// 告诉人该做什么。用户的原话是「是啥问题啊，你得告诉我啊，而且我在 UI 界面也不
+// 能得知这个信息和如何解决的操作」。
+//
+// 所以后端除了文本，还带一份结构化说明（remedy.Remedy：kind + 事实 + 命令）。
+// 措辞留在界面这边，和冲突页同一套理由：后端说机器话，界面说人话，各自演进。
+const REMEDY_TEXT = {
+  "feishu-duplicate-left": {
+    title: "上次同步没有收尾：文件是新的，旧版本还留在云端",
+    what: f =>
+      `<b>文件内容是对的</b> —— 新版本已经上传（token <code>${esc(f.new_token || "")}</code>）` +
+      `并记进了同步记录，下次同步会跳过它。失败的是最后一步：删掉旧版本` +
+      `（token <code>${esc(f.old_token || "")}</code>）。` +
+      `<br>飞书的上传是<b>新增条目</b>而不是覆盖，所以 <code>${esc(f.folder || "（根目录）")}</code> ` +
+      `里现在有两条同名记录，而列表只显示其中一条 —— 从界面上看不出来，也不会自己消失。`,
+    steps: {
+      inspect: "先看它打算删哪一条。这一步不删任何东西。",
+      apply: "确认上面列出的就是要删的那条，再执行。飞书的删除不可撤销。",
+    },
+  },
+  // 认不出来的失败也要有去处，否则用户手里只剩一个红字。
+  "": {
+    title: "上次同步失败了",
+    what: () => `这一条还没有对应的处理说明。可以先打开「日志」，看这次运行做到哪一步、` +
+      `停在哪个文件上；错误原文在下面。`,
+    steps: {},
+  },
+};
+
+// latestOutcome is the newest thing that finished for this job - a run or a
+// comparison, whichever is later.
+//
+// Comparing them matters: a preview that failed last Tuesday must not outlive a
+// successful run this morning, and a run's own failure must not be buried under
+// an older preview that happened to fail too.
+function latestOutcome(job) {
+  if (!job) return null;
+  const at = s => (s ? Date.parse(s) || 0 : 0);
+  const run = job.last_run
+    ? { at: job.last_run, ts: at(job.last_run), ok: job.last_ok !== false,
+        error: job.last_error || "", remedy: job.last_remedy || null, kind: "run" }
+    : null;
+  const plan = job.plan && job.plan.at
+    ? { at: job.plan.at, ts: at(job.plan.at), ok: !job.plan.error,
+        error: job.plan.error || "", remedy: job.plan.remedy || null, kind: "plan" }
+    : null;
+  if (!run) return plan;
+  if (!plan) return run;
+  return plan.ts > run.ts ? plan : run;
+}
+
+// remedyDismissed remembers, per job, the exact failure a user chose to hide.
+// Keyed by timestamp rather than a boolean so the next failure shows again.
+function remedyDismissed(name, stamp) {
+  try { return localStorage.getItem("weftsync.remedy." + name) === stamp; }
+  catch { return false; }
+}
+
+function dismissRemedy(name, stamp) {
+  try { localStorage.setItem("weftsync.remedy." + name, stamp); } catch { /* 私有模式：只收起本次 */ }
+}
+
+// remedySubject picks which job the block is about: the one the user is watching,
+// the one whose table is open, or - failing both - the most recent failure, so a
+// page reload does not lose it.
+function remedySubject() {
+  const jobs = (snapshot && snapshot.jobs) || [];
+  const byName = n => jobs.find(j => j.name === n);
+  if (busyJob) {
+    const j = byName(busyJob.name);
+    if (j) return j;
+  }
+  if (planJob) {
+    const j = byName(planJob);
+    if (j) return j;
+  }
+  let best = null;
+  let bestTs = -1;
+  for (const j of jobs) {
+    const o = latestOutcome(j);
+    if (!o || o.ok || !o.error) continue;
+    if (o.ts > bestTs) { bestTs = o.ts; best = j; }
+  }
+  return best;
+}
+
+// renderRemedy fills the failure block, or hides it. It is re-derived on every
+// poll rather than shown once, because it has to survive a page reload: whoever
+// hit this will close the tab and come back.
+//
+// It is written to be idempotent. Re-building the block every poll (once a second
+// while something runs) would collapse the 错误原文 the user just opened and drop
+// any text they were dragging a selection over - the same reason refresh() does
+// not re-render the job table unless its data changed.
+function renderRemedy() {
+  const host = document.getElementById("s-remedy");
+  if (!host) return;
+
+  const job = remedySubject();
+  const o = latestOutcome(job);
+  const stamp = job && o ? job.name + "|" + o.kind + "|" + o.at : "";
+  const live = !!(job && o && !o.ok && o.error) && !remedyDismissed(job.name, stamp);
+  const sig = live
+    ? [stamp, (o.remedy && o.remedy.kind) || "-", o.error.length].join("|")
+    : "";
+  if (host.dataset.sig === sig) return;
+  host.dataset.sig = sig;
+
+  if (!live) {
+    host.className = "remedy hidden";
+    host.innerHTML = "";
+    return;
+  }
+
+  const r = o.remedy || null;
+  const text = REMEDY_TEXT[(r && r.kind) || ""] || REMEDY_TEXT[""];
+  const f = (r && r.fields) || {};
+  const cmds = (r && r.commands) || [];
+
+  const steps = cmds.map((c, i) => {
+    const why = (text.steps && text.steps[c.label]) || "";
+    return `<div class="rm-step">
+      <span class="n">${i + 1}</span>
+      <span class="cmd">${why ? `<span class="why">${esc(why)}</span>` : ""}` +
+      `<code>${esc(c.run)}</code></span>
+      <button class="icon-btn rm-copy" data-cmd="${esc(c.run)}" title="复制这条命令">复制</button>
+    </div>`;
+  }).join("");
+
+  host.className = "remedy";
+  host.innerHTML =
+    `<div class="rm-head">
+       <strong>${esc(text.title)}</strong>
+       <span class="grow"></span>
+       <button class="icon-btn rm-dismiss"
+               title="先收起。同一件事不再提示，下次再出问题会重新出现">✕</button>
+     </div>
+     <div class="rm-what">${text.what(f)}</div>` +
+    (steps ? `<div class="rm-fix">怎么办</div>${steps}` : "") +
+    // 有说明时原文折叠起来（它是证据，不是说明书）；没有说明时它必须展开 ——
+    // 那时它是这个框里唯一的事实，折起来等于把用户最后的线索也收走了。
+    (r
+      ? `<details class="rm-raw"><summary>错误原文</summary><code>${esc(o.error)}</code></details>`
+      : `<div class="rm-raw"><div>错误原文</div><code>${esc(o.error)}</code></div>`);
+
+  host.querySelectorAll(".rm-copy").forEach(b => {
+    b.onclick = async () => {
+      // 没有剪贴板权限（非 https、或用户拒绝）时不必喊失败：命令就在眼前，
+      // 选中即可。所以这里只改按钮文字，不弹错误。
+      try { await navigator.clipboard.writeText(b.dataset.cmd); } catch { /* 见上 */ }
+      const label = b.textContent;
+      b.textContent = "已复制";
+      setTimeout(() => { b.textContent = label; }, 1200);
+    };
+  });
+  const close = host.querySelector(".rm-dismiss");
+  if (close) {
+    close.onclick = () => {
+      dismissRemedy(job.name, stamp);
+      renderRemedy();
+    };
+  }
 }
 
 // syncJobPicker is declared further down with the config tab; this wrapper keeps
@@ -2087,8 +2313,16 @@ function renderJobs() {
         : '<span class="ok">成功</span>';
     }
     if (j.last_ok === false) {
-      result = '<span class="bad">失败</span>'
-             + (j.last_error ? `<div class="mono bad">${esc(j.last_error)}</div>` : "");
+      result = '<span class="bad">失败</span>';
+      // 这一列以前直接堆英文原文，最长的一行是 300 多个字符。现在有分类就说
+      // 分类，完整原文在同步页的说明块里（可以复制、可以回头再看）。
+      const r = j.last_remedy;
+      const title = r ? (REMEDY_TEXT[r.kind] || REMEDY_TEXT[""]) : null;
+      if (title) {
+        result += `<div class="sub bad" title="${esc(j.last_error || "")}">${esc(title.title)}</div>`;
+      } else if (j.last_error) {
+        result += `<div class="mono bad">${esc(j.last_error)}</div>`;
+      }
     }
     const busy = j.state === "running";
     const planning = busy && j.mode === "plan";

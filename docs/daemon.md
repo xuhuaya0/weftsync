@@ -86,6 +86,26 @@ align_to_start = true
 
 `state`：`idle` / `running` / `disabled`。
 
+`last_remedy`（失败时才有）把一次失败拆成界面能直接用的东西：
+
+```json
+"last_remedy": {
+  "kind": "feishu-duplicate-left",
+  "fields": { "path": "a/b.xlsx", "folder": "a", "new_token": "…", "old_token": "…" },
+  "commands": [
+    { "label": "inspect", "run": "weftsync backend dedupe \"feishu:a\"" },
+    { "label": "apply",   "run": "weftsync backend dedupe \"feishu:a\" -o confirm=true" }
+  ]
+}
+```
+
+`kind` 是机器令牌，界面自己决定怎么说；`fields` 是说明需要的事实；`commands`
+是修法，第一条永远是不改动任何东西的那条。不把整句话塞进 `last_error` 是因为
+后端说英文、界面说中文，写进消息里就变成要么后端吐中文、要么界面解析散文。
+没有认识的类别时不出这个字段，界面回退到显示 `last_error` 原文。
+
+它是**内存态**：daemon 重启后消失（历史缓冲也不落盘），下一次失败会重新生成。
+
 `started` 是**进程实例**的身份，同一进程内每次请求都一样。页面在每次轮询时
 拿它和自己载入时拿到的那个比：不一样就说明 daemon 重启过，而 HTML 是编进
 二进制里的，所以页面上那份文档已经旧了 —— 没有未保存改动就直接重载，有就

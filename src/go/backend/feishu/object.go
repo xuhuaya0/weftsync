@@ -9,6 +9,7 @@ import (
 
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/hash"
+	"weftsync/remedy"
 )
 
 // Object is one file in Feishu Drive.
@@ -60,6 +61,37 @@ func (e *DuplicateLeftError) target() string {
 	}
 	return e.RemoteName + ":" + folder
 }
+
+// Remedy lets the console explain this failure instead of pasting English at the
+// user.
+//
+// Kind is a token rather than a sentence on purpose: this package is English and
+// the console is Chinese, so the wording lives there and only the facts travel.
+// The commands do come from here, because the CLI's spelling is this package's
+// business.
+func (e *DuplicateLeftError) Remedy() remedy.Remedy {
+	folder, _ := parentOf(e.Remote)
+	target := e.target()
+	return remedy.Remedy{
+		Kind: "feishu-duplicate-left",
+		Fields: map[string]string{
+			"path":      e.Remote,
+			"remote":    e.RemoteName,
+			"folder":    folder,
+			"new_token": e.NewToken,
+			"old_token": e.OldToken,
+			"cause":     e.Err.Error(),
+		},
+		Commands: []remedy.Command{
+			// Inspect first, and on its own: deletion in Feishu cannot be undone,
+			// so the destructive command must never be the first thing offered.
+			{Label: "inspect", Run: fmt.Sprintf("weftsync backend dedupe %q", target)},
+			{Label: "apply", Run: fmt.Sprintf("weftsync backend dedupe %q -o confirm=true", target)},
+		},
+	}
+}
+
+var _ remedy.Carrier = (*DuplicateLeftError)(nil)
 
 func (e *DuplicateLeftError) Unwrap() error { return e.Err }
 
