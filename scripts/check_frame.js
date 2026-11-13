@@ -48,25 +48,67 @@
     const mbPadL = px(mbStyle.paddingLeft), mbPadT = px(mbStyle.paddingTop);
     const mainPadL = px(mainStyle.paddingLeft);
 
-    // 1. The two paddings are one design decision, not two. The toolbar's left edge
-    //    is brandbar width + menubar padding; the work column's is dock width + gap +
-    //    main padding. Equal paddings are what make them coincide.
+    // 1. The two paddings are one design decision, not two: the frame inset on the
+    //    bar and on the work area must be the same value, or the left edge of the
+    //    bar and the left edge of the content disagree by a few pixels for no
+    //    stated reason.
     if (mbPadL !== mainPadL) {
       failures.push(`顶栏左内边距 ${mbPadL}px 与工作区左内边距 ${mainPadL}px 不同 —— ` +
-                    `这两处必须是同一个值（--inset），否则「比较」压不到目录对的左边界`);
+                    `这两处必须是同一个值（--inset）`);
     }
     if (inset && mbPadL !== px(inset)) {
       failures.push(`顶栏左内边距 ${mbPadL}px 与 --inset（${inset}）不一致`);
     }
 
-    // 2. The alignment invariant itself.
+    // 2. 四段间隙等宽（D82）。
+    //
+    //    Replaces the older "比较 左边缘 == 工作区左边缘" invariant. Those two
+    //    cannot both hold: aligning 比较 with the work column forces the gap after
+    //    the menus to be `dock + column gap - menu width` = 49px, while even gaps
+    //    force it to the frame inset (16px). The user asked for even gaps on
+    //    2026-11-13 (「横向缩减2/3按钮的一点宽度，让4/5和1/6一样宽」), so the alignment
+    //    is now reported as a number and not asserted.
+    //
+    //    Measured before: 1=17, 4=49, 5=10, 6=17 - four gaps, four values.
     const cmp = document.getElementById("s-compare-btn");
     const work = document.querySelector(".work");
+    const nav = mb.querySelector("nav");
+    const nowEl = document.getElementById("now");
+    const connEl = document.getElementById("conn");
+    const stopEl = document.getElementById("s-stop-btn");
     let dLeft = null;
     if (cmp && work) {
       dLeft = Math.round(cmp.getBoundingClientRect().x - work.getBoundingClientRect().x);
-      if (dLeft !== 0) {
-        failures.push(`「比较」左边缘与工作区左边缘差 ${dLeft}px（应为 0）`);
+    }
+    let barGaps = null;
+    if (cmp && nav && connEl && inset) {
+      const want = px(inset);
+      const g = {
+        "左边框→菜单": Math.round(parseFloat(getComputedStyle(mb).paddingLeft) + 1),
+        "菜单→比较": Math.round(cmp.getBoundingClientRect().x - nav.getBoundingClientRect().right),
+        "停止→时钟": nowEl && nowEl.getClientRects().length && stopEl
+          ? Math.round(nowEl.getBoundingClientRect().x - stopEl.getBoundingClientRect().right) : null,
+        "连接→右边框": Math.round(appR.right - connEl.getBoundingClientRect().right),
+      };
+      barGaps = g;
+      for (const [name, v] of Object.entries(g)) {
+        if (v === null) continue;                 // clock hidden, or bar wrapped
+        if (Math.abs(v - want) > 1) {
+          failures.push(`顶栏间隙「${name}」= ${v}px，与 --inset（${want}px）不一致`);
+        }
+      }
+    }
+
+    // 3. Single row at 1000px and wider. The internal toolbar gaps became
+    //    var(--inset) in D82, which pushed the required minimum width up: with the
+    //    old 176px button minimum the bar wrapped at 1006px (measured 65px -> 121px).
+    //    Fixing the minimum to 160px restored one row there; this guards it.
+    const kidsEarly = [...mb.children].filter(el => el.getClientRects().length);
+    if (window.innerWidth >= 1000 && kidsEarly.length) {
+      const bs = kidsEarly.map(el => el.getBoundingClientRect());
+      const oneRow = Math.max(...bs.map(b => b.top)) < Math.min(...bs.map(b => b.bottom));
+      if (!oneRow) {
+        failures.push(`视口 ${window.innerWidth}px 时顶栏换成了多行（实测 ${Math.round(mb.getBoundingClientRect().height)}px 高）`);
       }
     }
 
@@ -149,6 +191,7 @@
       insetVar: inset,
       menubarPad: `${mbPadT} ${mbPadL}`,
       mainPadLeft: mainPadL,
+      barGaps,
       compareVsWork: dLeft,
       sideGap, vGap, panelGap, menubarHeight: Math.round(mb.getBoundingClientRect().height),
     };

@@ -525,21 +525,29 @@
      结果卡的左边界上。这不是凑出来的数：两边用的是同一个 --dock-w，边距用的是
      同一个 --inset。改其中一处而不改另一处，对齐立刻断掉，所以两处都读变量。
 
-     四边留白：原来是 `5px 8px`。第一次只改到 `8px 12px` —— 测出来是对的，
-     但差了 4px，屏幕上根本看不出来。现在 `12px 16px`：横向与卡片内边距同值，
-     纵向 12（按钮 40 + 24 = 64 高的横条），这是看得出来的一级。 */
+     间隙：`gap: var(--inset)` —— 四种间隙（左边框→菜单、菜单→比较、停止→时钟、
+     时钟→右边框）全部 =16，和左右两条外框留白（17，含 1px 边框）一致。
+
+     以前是 gap:0 加上一个大号 brandbar：`.brandbar` 写死 `calc(--dock-w + 8px)`
+     = 248px，而里面的内容（weftsync + 文件/工具/帮助）只占 203px，多出的 45px
+     全堆在「帮助」和「比较」之间 —— 实测 4 = 49px，而 5 只有 10px。
+     也就是说：两侧留白 17，中间两条一条 49 一条 10，四个数字四个值。
+
+     代价（明确记下）：brandbar 收回内容宽后，「比较」不再压在目录对的左边界上
+     （从 x=265 移到 233 左右）。两者在数学上不能同时成立：间隙 = 17 要求
+     比较 = 菜单右边缘 + 17 = 233，而对齐要求 比较 = 左边框 + inset + 侧栏 + 间隙 = 265。
+     用户 2026-11-13 明确要求前者，所以放弃后者。 */
   .menubar {
-    display: flex; gap: 0; align-items: center; flex-wrap: wrap;
+    display: flex; gap: var(--inset); align-items: center; flex-wrap: wrap;
     padding: 12px var(--inset); min-height: 46px; flex: none;
     background: var(--bg); border-bottom: 1px solid var(--line);
   }
+  /* 内容宽，不再写死 248。写死时那 45px 的多余宽度就变成了「帮助」与「比较」
+     之间的死空白，看起来像少了一个控件。 */
   .brandbar {
-    flex: none; width: calc(var(--dock-w) + 8px);
-    display: flex; align-items: center; min-width: 0;
+    flex: none; display: flex; align-items: center; min-width: 0;
   }
-  /* 窄屏时侧栏抽到上面（.main 也在 700 断点堆叠），工作区左边缘变成 inset+1。
-     这时顶栏左段收回成内容宽，主操作组换到第二行整行起排 —— 两边都从同一个
-     inset 开始，「比较」仍然压在目录对上。
+  /* 窄屏时侧栏抽到上面（.main 也在 700 断点堆叠），主操作组换到第二行整行起排。
      注意：`.toolbar { flex-basis: 100% }` 必须写在 `.toolbar` 基础规则之后。
      它原来写在前面，而基础规则里的 `flex: 1 1 0` 是简写、含 flex-basis，
      于是这条媒体查询**从来没生效过**：实测 620px 时 flex-basis 仍是 0，
@@ -561,8 +569,10 @@
   .menubar nav button:hover { background: var(--line); color: var(--ink); border-color: transparent; }
   .menubar nav button[aria-expanded="true"] { background: var(--line); }
   .menubar .grow { flex: 1; }
-  /* 时钟和连接徽章靠在一起没留缝，屏幕上就变成「17:15已连接」。 */
-  #now { font-size: 11px; color: var(--muted); margin: 0 8px 0 10px; white-space: nowrap; }
+  /* 时钟和连接徽章靠在一起没留缝，屏幕上就变成「17:15已连接」。间距交给
+     .menubar 的 gap；这里原先是 `0 8px 0 10px` 的不对称外边距，把
+     「停止 → 时钟」挤成 10px（其它三处是 16/16/17）。 */
+  #now { font-size: 11px; color: var(--muted); margin: 0; white-space: nowrap; }
   #conn { flex: none; }
   /* The server clock is the first thing to go when space runs out: it is the
      least actionable item in the bar, and keeping it wrapped onto two lines made
@@ -596,17 +606,18 @@
   .conn-badge.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
   .conn-badge.bad::before { background: var(--bad); }
 
-  /* 这一组从左边缘开始（brandbar 的右边缘），吃掉到时钟之间的全部宽度，
-     两个主动作按钮按比例伸展，空隙全由它们吸收。
-     实测 1366：比较与同步各 328px，子元素宽度加间隙之和与容器实测宽度
-     严格相等（830 = 830）—— 真的满了，不是差不多满。
+  /* 这一组从菜单右边缘 + 一个 inset 开始，吃掉到时钟之前的全部宽度，
+     两个主动作按钮按比例伸展，剩下的宽度全由它们吸收。
+
+     间隙也是 `var(--inset)`：原来内部是 6px，而两头是 16/17 —— 同一条行里两个
+     尺度。统一之后「比较▾ 过滤器 同步▾ 停止」之间与四周留白同宽，按钮因此比
+     原来窄了一截（这是用户要的「缩减一点宽度」的实际来源）。
 
      flex-basis 必须是 0（`flex: 1 1 0`），不能是 auto。写 auto 时它的基准是
-     内容宽（526px），窗口一窄，整组会被换到顶栏第二行，于是「比较」跑到页面
-     左边缘（实测 760px 宽时 comparison left = 9，而工作区在 257）。基准为 0
-     时它宁可自己内部换行，也守住左边缘。 */
+     内容宽（526px），窗口一窄，整组会被换到顶栏第二行。基准为 0 时它宁可自己
+     内部换行，也守住左边缘。 */
   .toolbar {
-    display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+    display: flex; gap: var(--inset); align-items: center; flex-wrap: wrap;
     flex: 1 1 0; min-width: 0;
   }
   /* 整行都是 40px 高。以前每个控件自己长，两个带副标题的大按钮把整行撑到 51px，
@@ -631,10 +642,15 @@
      同步), and the ▼s belong to the buttons they sit on. */
   .tb-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
   .tb-btn.on { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
-  .tb-split { display: flex; flex: 1 1 auto; align-items: stretch; min-width: 176px; }
+  /* 最小宽度 160 而不是 176：组内间隙改成 var(--inset)=16 之后，1006px 宽时组内
+     最小总宽 = 160*2+24*2+40+68+16*3 = 524，而可用宽度 544 —— 一行放得下，
+     余量 20px。176 时是 592 > 544，实测 1006px 下顶栏从 65px 变成 121px（两行）。
+     这是改成 16px 间隙带出来的回归，所以「1006 宽度下顶栏必须是单行」写进了
+     check_frame.js。 */
+  .tb-split { display: flex; flex: 1 1 auto; align-items: stretch; min-width: 160px; }
   .tb-action {
     display: flex; align-items: center; justify-content: center; gap: 9px;
-    flex: 1 1 auto; min-width: 176px; padding: 0 14px; height: 40px;
+    flex: 1 1 auto; min-width: 160px; padding: 0 14px; height: 40px;
     border-radius: var(--r-sm) 0 0 var(--r-sm);
     border: 1px solid var(--line); background: var(--card); color: var(--ink);
   }
