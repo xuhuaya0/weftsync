@@ -1109,6 +1109,10 @@
     flex: 1; font-family: ui-monospace, monospace; font-size: 12px;
     background: var(--bg);
   }
+  /* 可编辑的路径框：鼠标点进去时全选，免得要先按住方向键拖到末尾才能改。
+     背景比对话框略深已经是提示，但真正的提示是 placeholder —— 一个看起来像
+     地址栏的控件，用户会去点它。 */
+  .browse-path input::selection { background: var(--blue-soft); }
   .browse-roots { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 12px 0; }
   .browse-roots:empty { display: none; }
   /* Two groups of starting points under one heading each: this machine, and the
@@ -1332,7 +1336,11 @@
   <div class="dlg-body">
     <div class="browse-path" style="padding:0 0 8px;border-bottom:none">
       <button id="open-up" title="上一层">↑</button>
-      <input type="text" id="open-dir" readonly>
+      <!-- 和文件夹选择器同一套：服务端接受任意目录，所以这个框也直接可输入。
+           只把选择器改可编辑、这里仍 readonly，会变成「一边能输一边不能」。 -->
+      <input type="text" id="open-dir" spellcheck="false" autocomplete="off"
+             placeholder="可直接输入目录，回车跳转">
+      <button id="open-go" title="跳到输入的目录（也可直接按回车）">转到</button>
     </div>
     <div id="open-list" class="browse-list" style="max-height:44vh;border:1px solid var(--line);border-radius:var(--r-sm)"></div>
     <div class="filter-hint" style="margin-top:8px">
@@ -1354,7 +1362,9 @@
     <div class="dlg-sect">保存到哪个文件</div>
     <div class="browse-path" style="padding:0 0 8px;border-bottom:none">
       <button id="saveas-up" title="上一层">↑</button>
-      <input type="text" id="saveas-dir" readonly>
+      <input type="text" id="saveas-dir" spellcheck="false" autocomplete="off"
+             placeholder="可直接输入目录，回车跳转">
+      <button id="saveas-go" title="跳到输入的目录（也可直接按回车）">转到</button>
     </div>
     <div id="saveas-list" class="browse-list" style="max-height:34vh;border:1px solid var(--line);border-radius:var(--r-sm)"></div>
     <div class="dlg-sect" style="margin-top:12px">文件名</div>
@@ -1499,7 +1509,13 @@
   </div>
   <div class="browse-path">
     <button id="browse-up" title="上一层">↑</button>
-    <input type="text" id="browse-current" readonly>
+    <!-- 这个框原来是 readonly：只能一层层点下去。用户的原话是「我在浏览路径的时候
+         没办法输入地址，只能点，这很不方便」—— 而服务端本来就接受任意路径
+         （相对路径会转成绝对路径、文件路径会列它的目录、带 test: 前缀的走云端），
+         限制完全在这一行 HTML 上。 -->
+    <input type="text" id="browse-current" spellcheck="false" autocomplete="off"
+           placeholder="可直接输入路径或 test:目录，回车跳转">
+    <button id="browse-go" title="跳到输入的路径（也可直接按回车）">转到</button>
   </div>
   <div id="browse-roots" class="browse-roots"></div>
   <div id="browse-list" class="browse-list"></div>
@@ -4075,6 +4091,29 @@ document.getElementById("open-up").addEventListener("click", () => {
   const up = cur.replace(/[\\/][^\\/]+$/, "");
   if (up && up !== cur) { openDir = up; loadConfigFiles("open"); }
 });
+
+// The directory box in these two dialogs takes a typed path too, for the same
+// reason the folder picker does: walking down six levels of folders to reach a
+// directory you already know the name of is not navigation, it is typing with
+// extra steps.
+function wireTypedDir(inputId, kind) {
+  const go = () => {
+    openDir = document.getElementById(inputId).value.trim();
+    loadConfigFiles(kind);
+  };
+  document.getElementById(inputId).addEventListener("keydown", e => {
+    // Only Enter is intercepted. Escape is left to the dialog's own handler
+    // (dlgCancel), because in a dialog Escape already means "close without
+    // applying" - intercepting it here would make the key do two things at once.
+    if (e.key === "Enter") { e.preventDefault(); go(); }
+  });
+  document.getElementById(inputId).addEventListener("focus", e => e.target.select());
+  document.getElementById(inputId === "open-dir" ? "open-go" : "saveas-go")
+    .addEventListener("click", go);
+}
+wireTypedDir("open-dir", "open");
+wireTypedDir("saveas-dir", "saveas");
+
 document.getElementById("saveas-up").addEventListener("click", () => {
   const cur = document.getElementById("saveas-dir").value;
   const up = cur.replace(/[\\/][^\\/]+$/, "");
@@ -4463,20 +4502,33 @@ function returnToBrowseAfterSave(name) {
 async function loadBrowse(path) {
   const list = document.getElementById("browse-list");
   const err = document.getElementById("browse-err");
+  const input = document.getElementById("browse-current");
   list.innerHTML = '<div class="none">载入中…</div>';
   err.textContent = "";
   try {
     const v = await getJSON("/api/browse?path=" + encodeURIComponent(path || ""));
-    browsePath = v.path || "";
+    const shown = v.path || "";
     browseKind = v.kind || "local";
-    document.getElementById("browse-current").value = browsePath;
+    // browsePath is "the last folder that actually opened", and only that. It is
+    // what 选这个文件夹 saves and what ↑ steps up from, so it may never hold a path
+    // the server could not list - otherwise a typo becomes the picked folder.
+    // The box still shows the attempt, because that is the text to fix.
+    if (!v.error) browsePath = shown;
+    input.value = shown;
     document.getElementById("browse-up").disabled = !v.parent;
     document.getElementById("browse-kind").textContent =
       browseKind === "remote" ? "云端" : "本机";
 
     browseRootsHTML(v, loadBrowse);
 
-    if (v.error) err.textContent = v.error;
+    if (v.error) {
+      err.textContent = v.error;
+      // A failed listing and "this folder has no subfolders" are different
+      // answers. Showing both made a typo'd path look like an empty but valid
+      // directory.
+      list.innerHTML = `<div class="none">${esc(shown)} 打不开，见下面的原因。</div>`;
+      return;
+    }
     list.innerHTML = (v.dirs || []).length
       ? v.dirs.map(d => `<button data-dir="${esc(d.path)}">📁 ${esc(d.name)}</button>`).join("")
       : `<div class="none">（${browseKind === "remote" ? "云端这一层没有子文件夹" : "没有子目录"}）</div>`;
@@ -4489,6 +4541,34 @@ async function loadBrowse(path) {
   }
 }
 
+// goToTypedPath navigates to whatever is in the path box.
+//
+// Empty input is not an error: it means "back to the starting points", which is
+// what the server does with an empty path. Trailing whitespace is trimmed because
+// pasting a path from Explorer or a chat message brings it along, and a path with
+// a trailing space is a different, non-existent path.
+function goToTypedPath() {
+  const el = document.getElementById("browse-current");
+  loadBrowse(el.value.trim());
+}
+
+document.getElementById("browse-go").addEventListener("click", goToTypedPath);
+document.getElementById("browse-current").addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    goToTypedPath();
+  } else if (e.key === "Escape") {
+    // Escape means "forget my edit", not "close the dialog": the picker is the one
+    // place where losing the dialog also loses the position you navigated to.
+    e.preventDefault();
+    e.target.value = browsePath;
+    e.target.blur();
+  }
+});
+// Click into the box selects the whole path, so replacing it is one action.
+document.getElementById("browse-current").addEventListener("focus", e => e.target.select());
+
+
 document.getElementById("browse-up").addEventListener("click", async () => {
   const v = await getJSON("/api/browse?path=" + encodeURIComponent(browsePath));
   if (v.parent) loadBrowse(v.parent);
@@ -4496,8 +4576,21 @@ document.getElementById("browse-up").addEventListener("click", async () => {
 document.getElementById("browse-close").addEventListener("click", closeBrowse);
 document.getElementById("browse-cancel").addEventListener("click", closeBrowse);
 document.getElementById("browse-mask").addEventListener("click", closeBrowse);
-document.getElementById("browse-pick").addEventListener("click", () => {
+document.getElementById("browse-pick").addEventListener("click", async () => {
   if (!browseTarget || !sessionCfg) return closeBrowse();
+
+  // Once the path box is editable, "pick" has to honour what is in it.
+  //
+  // Otherwise the obvious sequence - type a path, then click 选这个文件夹 without
+  // pressing Enter - would silently pick the folder that was browsed *before*
+  // typing. Measured shape of that bug: the picture in the box says one folder,
+  // the saved pair points at another, and nothing on screen reports a conflict.
+  const typed = document.getElementById("browse-current").value.trim();
+  if (typed && typed !== browsePath) {
+    await loadBrowse(typed);                      // normalises and validates
+    if (document.getElementById("browse-err").textContent) return;  // stay open, show why
+  }
+
   const p = sessionCfg.pairs[browseTarget.idx];
   const local = browseTarget.side === "local";
 
