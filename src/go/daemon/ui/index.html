@@ -1226,7 +1226,7 @@
 
   <div class="toolbar">
     <div class="tb-split">
-      <button class="tb-action" id="s-compare-btn" title="比较：只扫描，不改任何东西">
+      <button class="tb-action" id="s-compare-btn" title="比较：只读取两侧，不写入任何一侧">
         <span class="ai">
           <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
             <rect x="2" y="3" width="7" height="14" rx="1.2" stroke="currentColor" stroke-width="1.4" fill="none"/>
@@ -1327,7 +1327,7 @@
         <span id="plan-job" class="mono badge"></span>
         <span class="grow"></span>
         <button id="plan-run" title="不经过工具栏，直接执行这张表">按此执行</button>
-        <button id="plan-close" title="只清空显示，不改任何东西">清除结果</button>
+        <button id="plan-close" title="清空表格，不影响文件">清除结果</button>
     </div>
     <div id="plan-body"></div>
     </div>
@@ -1419,7 +1419,7 @@
       <div class="dlg-sect">比较方式</div>
       <div id="dlg-compare-opts"></div>
       <div class="dlg-hint">
-        比较只读两边，不改任何东西。选错只是多扫一遍或少发现一些改动。
+        比较只读取两侧，不写入任何一侧。选错只是多扫一遍或少发现一些改动。
       </div>
     </div>
     <div class="dlg-pane hidden" data-pane="sync">
@@ -1627,7 +1627,7 @@
       <strong>暂无冲突</strong>
       <div class="hint">没有需要你在两边之间做选择的文件。</div>
       <div class="hint">这是最近一次比较的结果，守护进程重启后会清空 ——
-        到「作业列表」点一次「预览」可以重新检测，预览不改任何东西。</div>
+        到「作业列表」点一次「预览」可以重新检测，预览不写入任何一侧。</div>
     </div>
   </div>
 </section>
@@ -1961,6 +1961,15 @@ function afterPlanRun() {
 // (b) says what the result was once it stops.
 let busyJob = null;   // { name, mode: "plan"|"run", startedAt }
 
+// planBusyFor is the job whose result card currently holds the live view.
+//
+// It exists so the card can be restored when that job stops: a preview replaced by
+// a spinner has to come back as the plan, and a run replaced by a spinner has to
+// come back as the plan it was executing (or the empty state if there is none).
+// Measured shape of the bug without it: 按此执行 emptied the card to 还没有比较结果,
+// started a run, and nothing on screen ever mentioned the run again.
+let planBusyFor = "";
+
 function planTotals(plan) {
   const rows = [];
   for (const r of (plan && plan.results) || []) {
@@ -2003,8 +2012,20 @@ function updateBusy() {
   }
 
   const mode = busyJob.mode;
+  const name = busyJob.name;
   busyJob = null;
   finishStatus(job, mode);
+  restorePlanCard(name);
+}
+
+// restorePlanCard puts the result area back after a run whose card held the live
+// view. It only acts when that job owns the card, so a background run of another
+// job cannot overwrite what the user is reading.
+function restorePlanCard(name) {
+  if (!name || planBusyFor !== name) return;
+  const job = ((snapshot && snapshot.jobs) || []).find(j => j.name === name);
+  if (job && job.plan) openPlanPanel(name);
+  else clearPlan();
 }
 
 // finishStatus says what just happened, in the same place the progress was.
@@ -2140,7 +2161,15 @@ function updateProgress() {
   // The card belongs to the job that is actually running; another job's counters
   // in this card would be worse than none.
   const shown = busy && (!busyJob || busy.name === busyJob.name) ? busy : null;
-  live.innerHTML = shown ? liveProgressHTML(shown) : "";
+  if (!shown) {
+    // A run that has just been accepted has no progress object yet (the daemon
+    // publishes one on the next tick). Clearing the area here erased the headline
+    // showPlanBusy had just written, leaving an empty box for the first poll -
+    // measured as an empty card 300ms after 按此执行.
+    if (!busyJob) live.innerHTML = "";
+    return;
+  }
+  live.innerHTML = liveProgressHTML(shown);
 }
 
 // PHASE_TEXT turns the engine's phase tokens into what the user is waiting for.
@@ -2190,12 +2219,17 @@ function liveProgressHTML(job) {
   if (parts.length) lines.push(`<div class="hint" style="margin-top:6px">${parts.join(" · ")}</div>`);
 
   let elapsed = "";
-  if (busyJob && busyJob.mode === "plan" && busyJob.name === job.name) {
+  if (busyJob && busyJob.name === job.name) {
     // Rounded: fmtDuration appends 秒 to whatever it is given, so passing
     // 15.583 produced "已用 15.583 秒".
-    elapsed = " 已用 " + fmtDuration(Math.round((Date.now() - busyJob.startedAt) / 1000));
+    elapsed = " · 已用 " + fmtDuration(Math.round((Date.now() - busyJob.startedAt) / 1000));
   }
-  lines.push(`<div class="hint" style="margin-top:6px">这一步不改动任何东西${elapsed}</div>`);
+  // States the guarantee, not a homily. "这一步不改动任何东西" read as a chat aside;
+  // what the user needs to know is the read/write boundary of this mode.
+  const scope = job.mode === "plan"
+    ? "预览模式：只读取两侧，不写入任何一侧"
+    : "写入模式：按比较结果改动文件";
+  lines.push(`<div class="hint" style="margin-top:6px">${scope}${elapsed}</div>`);
   return lines.join("");
 }
 
@@ -2544,12 +2578,13 @@ function planCardPlaceholder() {
     还没有比较结果。
     <br>
     <span style="font-style:normal;font-size:12px;opacity:.75">
-      点右上角「比较」：它只扫描，不改任何东西。看清楚了再点「同步」。
+      点右上角「比较」：只读取两侧，不写入任何一侧。确认后再点「同步」。
     </span>
   </div>`;
 }
 
 function openPlanPanel(name) {
+  planBusyFor = "";   // the card is about to hold real content again
   const job = ((snapshot && snapshot.jobs) || []).find(j => j.name === name);
   if (!job || !job.plan) {
     document.getElementById("plan-body").innerHTML = planCardPlaceholder();
@@ -2564,6 +2599,10 @@ function openPlanPanel(name) {
   cmpWire();
   const runBtn = document.getElementById("plan-run");
   runBtn.dataset.job = name;
+  // The button text is state, and this panel owns it: 按此执行 → 启动中… → back again.
+  // Leaving it on 启动中… after a restored plan was measured, and a button that
+  // still says "starting" next to a finished run reads as "it is stuck".
+  runBtn.textContent = "按此执行";
   // "Run it" makes no sense for a preview that could not be built.
   runBtn.disabled = !!job.plan.error;
   document.getElementById("plan-close").disabled = false;
@@ -2597,10 +2636,12 @@ function closePlanPanel() {
 }
 
 function clearPlan() {
+  planBusyFor = "";
   document.getElementById("plan-job").textContent = "";
   document.getElementById("plan-body").innerHTML = planCardPlaceholder();
   document.getElementById("plan-run").dataset.job = "";
   document.getElementById("plan-run").disabled = true;
+  document.getElementById("plan-run").textContent = "按此执行";
   // Nothing to clear once the result area is already empty.
   document.getElementById("plan-close").disabled = true;
   planJob = "";
@@ -3238,11 +3279,16 @@ document.getElementById("plan-run").addEventListener("click", async (e) => {
   try {
     await post("/api/run?job=" + encodeURIComponent(name) +
       (only ? "&only=" + encodeURIComponent(JSON.stringify(only.picked)) : ""));
-    closePlanPanel();
+    // The card keeps showing what is being executed, and switches to the live
+    // progress of the run. It used to call closePlanPanel(), which wiped the table,
+    // printed 「已清除比较结果（没有改动任何文件）」 while a run was in fact starting,
+    // and left nothing on screen connected to the work.
+    busyJob = { name: name, mode: "run", startedAt: Date.now() };
+    showPlanBusy(name, "run");
   } catch (err) {
     alert("启动失败：" + err.message);
     e.target.disabled = false;
-    e.target.textContent = "直接按此执行";
+    e.target.textContent = "按此执行";
     return;
   }
   lastSignature = "";
@@ -3750,7 +3796,7 @@ const VARIANT_OPTS = [
   },
   {
     v: "update", nm: "更新",
-    ds: "只把新增和改动送到云端，从不删除任何东西。最安全，但云端会越堆越多。",
+    ds: "只上传新增与改动，从不删除文件。最安全，但云端会持续累积。",
   },
 ];
 
@@ -4336,7 +4382,9 @@ async function runSession(btn, plan, busyText) {
     // The clock starts only once the daemon has accepted the request: an error
     // above must not leave a spinner running with nothing behind it.
     busyJob = { name: sel.job, mode: plan ? "plan" : "run", startedAt: Date.now() };
-    if (plan) showPlanBusy();
+    // Both modes take over the result card. For a run this replaces a plan that is
+    // already stale, and restorePlanCard() puts it back when the run ends.
+    showPlanBusy(sel.job, plan ? "plan" : "run");
     status.className = "stat busy";
     status.innerHTML = `<span class="spin"></span>` +
       (plan ? "正在扫描并比较…" : "正在同步…");
@@ -4363,15 +4411,20 @@ async function runSession(btn, plan, busyText) {
 // block used to be static: a 265-second comparison showed a fixed sentence and a
 // ticking elapsed time, and the user reasonably asked whether nothing is supposed
 // to be shown. The daemon was publishing the phase and the counters all along.
-function showPlanBusy() {
+function showPlanBusy(name, mode) {
   document.getElementById("plan-job").textContent = "";
   // #plan-live carries its own headline, so there is no second 正在比较… above it:
   // two headlines stacked read as two different states.
+  const head = mode === "plan" ? "正在比较…" : "正在同步…";
   document.getElementById("plan-body").innerHTML =
     `<div class="plan-busy"><div id="plan-live">
-       <div class="ph">正在比较…</div>
+       <div class="ph">${head}</div>
      </div></div>`;
   document.getElementById("plan-run").disabled = true;
+  // Remember whose card this is, so the panel can be put back when the run ends.
+  // Without it the card would stay on the spinner after the run finished, which
+  // is the same "nothing happens" the button was already guilty of.
+  planBusyFor = name || "";
   updateProgress();
 }
 
