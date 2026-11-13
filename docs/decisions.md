@@ -5544,3 +5544,72 @@ job 层做得到（`Pair.RemotePath()` 把 options 拼进连接串，它两边�
 
 把「没配就自动给一个快照路径」实现出来。这是**改默认行为**，而且第一次带状态运行仍会
 全量上传一遍来记录指纹，所以要先问。见 D89 的 (a)/(b) 两条路。
+
+## D91 · 把 state_file 接线做出来：没配就自动给，因为「不配」不能等于「每轮全传」（2026-11-13）
+
+用户：**「这种东西怎么能是默认不需要的呢？那这个工具不是不完整吗？」**
+
+### 一、他说对了，而且比他想的更不完整
+
+查证结果：
+
+| 事实 | 证据 |
+|---|---|
+| `state.DefaultPath(pairID)` 早就写好了 | `src/go/state/state.go:165` |
+| `state.PairID(localRoot, remoteRoot)` 早就写好了 | 同上 :153，还有专门的单测 `TestPairIDUniqueness` |
+| **两者都没有任何生产代码调用** | `grep` 全仓：只有 `state_test.go` 与后端测试里的常量 |
+| UI 新建的每一对 pair 都是 `state_file: ""` | `index.html` 的 `newPair()` 与 `cfg-add` 处理器 |
+| 后端帮助文本却写着「留空会从两侧根目录推导」 | D90，已改为事实 |
+
+也就是说：**推导这件事被设计过、被实现过、被单元测试过，就是没接线。** 那句假文案不是笔误，是作者以为自己已经接上了。这类「装好了没插电」的缺陷，比完全没写更难发现 —— 因为它经得起事后回看。
+
+### 二、为什么必须在作业层做
+
+feishu 后端是 rclone 的一个 fs，它只看得见自己那个 remote，**永远看不到本机目录**；而 `PairID` 需要两侧根目录。只有 `job.Pair` 两边都知道，所以接线点在 `job/config.go`。
+
+### 三、实现
+
+`Pair.StateFilePath()` 与 `Pair.RemotePath()` 都经过同一个 `mergedOptions()`：
+
+1. 作业文件里写了 `remote.options.state_file` → 用它，`derived=false`；
+2. 否则查目标后端**是否声明了** `state_file` 选项：
+   - 类型来自 rclone 配置（远端名 `test` → `type=feishu`），或后端表（内联写法 `:local:`）；
+   - 未声明 → 什么都不加（给 `local` 塞一个它不认识的选项会让 rclone 打不开这个 remote）；
+3. 声明了 → `state.DefaultPath(state.PairID(localRoot, name+":"+path))`，`derived=true`；
+4. 推导失败（拿不到用户配置目录）→ **报错而不是静默跑**。静默跑的代价是每轮全量重传，那正是这次要修的毛病。
+
+两种写法（`backend + root`、内联 `<remote>:<path>`）都走 `buildPath()`，所以同一个 pair 无论怎么写都落到**同一个快照文件**；没有新增选项时**原样返回**用户写的字符串，不去重新序列化他的引号。
+
+界面：`PairView` 新增 `state_file_effective` / `state_file_derived` / `state_file_error`。表单提示从「留空 = 不做增量，每轮重传」改成：
+- 本地盘那类：**这个目标不需要快照（本地磁盘这类靠大小与时间直接比较）。**
+- 飞书那类：**留空即可，会自动用：`C:\Users\…\state\decb4783….state.json`**
+
+`state_file` 与 `state_file_effective` 分开，是为了**保存表单时不会把推导值写成显式值**。
+
+### 四、验证（不是单测，是真跑）
+
+1. 单元测试 5 条：无配置也会得到路径且真的进了连接串、两种写法一致、不同 pair 不同文件、显式值优先且不重复、非快照后端一点不动。
+2. **端到端**：临时作业 3 个小文件 → 真实租户
+   - 第 1 次运行：`transferred=3`，快照文件生成；
+   - 第 2 次运行：**`transferred=0`** ← 这就是「接上了」的证据；
+   - 跑完 `backend duplicates` 仍为 0；测试目录已 `purge`，临时快照已删。
+3. 真实作业 `demo` 的配置视图：`pair-2`（`test:`）`derived=True` 且给出路径；`demo`（`:local:`）正确地没有快照。
+
+**破坏 2 次，都报出**：
+
+| 塞回去 | 报出 |
+|---|---|
+| 给所有后端都推导（含 local/smb） | `":local:C:/data/work" grew a state_file …；that backend has no such option`（4 条） |
+| 推导出来但忘了装进连接串（"装了不插电"） | `RemotePath = "feishu:a/b" has no state_file; every run would re-upload everything` |
+
+### 五、顺带修掉的两个既有测试错误
+
+改完立刻有 4 个老测试变红 —— 它们都断言「feishu 连接串里没有选项」。这不是回归，是它们把旧行为当成了正确行为。已改为解析后断言 name/path 不变 **且必须有 state_file**，而不是放宽。
+
+其中一个连带暴露出测试二进制的问题：`job` 包里原先没有链接 feishu 后端，所以 `fs.Find("feishu")` 失败、推导在测试里**完全不生效**。新测试文件显式 `import _ "weftsync/backend/feishu"` 才让它真正被覆盖。这一点写进了那个 import 的注释里。
+
+### 六、现在还剩下的
+
+1. **已经有快照路径的作业不受影响**；第一次带推导的作业仍会全量上传一遍来记录指纹，然后才变增量 —— 这是 `state` 语义决定的，不是这次的取舍。
+2. **`demo` 的 `pair-2` 我还没替你跑第一次真跑**（116 MB）。要不要跑，你说。
+3. 三处文档待同步：`docs/job-file.md` 4.1 说「没有 state_file 时无法检测冲突」，现在「没有」不再是常态；`docs/roadmap.md` 与 `docs/backend-commands.md` 同段落。

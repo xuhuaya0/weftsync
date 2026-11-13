@@ -50,13 +50,18 @@ func TestRemotePathRoundTripsThroughRcloneParser(t *testing.T) {
 	cases := []struct {
 		name string
 		pair Pair
+		want string // the remote name rclone must see
 		root string
 		opt  string
 	}{
 		{
+			// A backend that declares no state_file must be left exactly as written.
+			// feishu would gain a derived one, so the "no options" case uses local -
+			// otherwise this case would be testing the derivation instead.
 			name: "no options",
-			pair: Pair{Name: "p", Remote: Endpoint{Backend: "feishu", Root: "team/docs"}},
-			root: "team/docs",
+			pair: Pair{Name: "p", Remote: Endpoint{Backend: "local", Root: "C:/data/docs"}},
+			want: "local",
+			root: "C:/data/docs",
 		},
 		{
 			name: "windows state_file",
@@ -64,6 +69,7 @@ func TestRemotePathRoundTripsThroughRcloneParser(t *testing.T) {
 				Backend: "feishu", Root: "team/docs",
 				Options: map[string]string{"state_file": `C:\Users\me\AppData\Roaming\weftsync\state\a1b2.state.json`},
 			}},
+			want: "feishu",
 			root: "team/docs",
 			opt:  `C:\Users\me\AppData\Roaming\weftsync\state\a1b2.state.json`,
 		},
@@ -73,6 +79,7 @@ func TestRemotePathRoundTripsThroughRcloneParser(t *testing.T) {
 				Backend: "feishu", Root: "",
 				Options: map[string]string{"state_file": `C:\odd,name"s.state.json`},
 			}},
+			want: "feishu",
 			root: "",
 			opt:  `C:\odd,name"s.state.json`,
 		},
@@ -82,6 +89,7 @@ func TestRemotePathRoundTripsThroughRcloneParser(t *testing.T) {
 				Backend: "feishu", Root: "a/b c/d",
 				Options: map[string]string{"state_file": "/var/lib/w/x.state.json"},
 			}},
+			want: "feishu",
 			root: "a/b c/d",
 			opt:  "/var/lib/w/x.state.json",
 		},
@@ -98,8 +106,8 @@ func TestRemotePathRoundTripsThroughRcloneParser(t *testing.T) {
 			if err != nil {
 				t.Fatalf("rclone cannot parse %q that we generated: %v", got, err)
 			}
-			if parsed.Name != "feishu" {
-				t.Errorf("name = %q, want feishu (got path %q)", parsed.Name, got)
+			if parsed.Name != c.want {
+				t.Errorf("name = %q, want %q (got path %q)", parsed.Name, c.want, got)
 			}
 			if parsed.Path != c.root {
 				t.Errorf("root = %q, want %q (path %q)", parsed.Path, c.root, got)

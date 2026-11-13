@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rclone/rclone/fs/fspath"
 )
 
 func writeFile(t *testing.T, path, content string) {
@@ -86,8 +88,18 @@ root = "team/docs"
 	if err != nil {
 		t.Fatalf("RemotePath: %v", err)
 	}
-	if remote != "feishu:team/docs" {
-		t.Errorf("RemotePath = %q, want feishu:team/docs", remote)
+	// The remote side also carries a derived snapshot path: leaving it out would
+	// mean every run re-uploads every file. Checked through the parser rather than
+	// as a literal, because the derived path contains the user's profile directory.
+	parsed, err := fspath.Parse(remote)
+	if err != nil {
+		t.Fatalf("rclone cannot parse %q: %v", remote, err)
+	}
+	if parsed.Name != "feishu" || parsed.Path != "team/docs" {
+		t.Errorf("RemotePath = %q, want feishu:team/docs plus options", remote)
+	}
+	if parsed.Config["state_file"] == "" {
+		t.Errorf("RemotePath = %q has no state_file; every run would re-upload everything", remote)
 	}
 }
 
@@ -346,6 +358,10 @@ func TestConfigRemotePath(t *testing.T) {
 		wantErr bool
 	}{
 		{
+			// A feishu destination always carries options now, because a missing
+			// snapshot means "re-upload everything on every run". The whole string
+			// is compared after parsing, so the derived path's absolute location
+			// does not leak into the assertion.
 			name: "backend plus root",
 			pair: Pair{Name: "p", Remote: Endpoint{Backend: "feishu", Root: "a/b"}},
 			want: "feishu:a/b",
@@ -378,8 +394,16 @@ func TestConfigRemotePath(t *testing.T) {
 			if err != nil {
 				t.Fatalf("RemotePath: %v", err)
 			}
-			if got != c.want {
-				t.Errorf("RemotePath = %q, want %q", got, c.want)
+			parsed, perr := fspath.Parse(got)
+			if perr != nil {
+				t.Fatalf("rclone cannot parse %q: %v", got, perr)
+			}
+			if wantParsed, _ := fspath.Parse(c.want); parsed.Name != wantParsed.Name ||
+				parsed.Path != wantParsed.Path {
+				t.Errorf("RemotePath = %q, want name/path from %q", got, c.want)
+			}
+			if parsed.Config["state_file"] == "" {
+				t.Errorf("RemotePath = %q has no state_file; every run would re-upload everything", got)
 			}
 		})
 	}

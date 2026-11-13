@@ -119,7 +119,20 @@ type PairView struct {
 	LocalRoot     string `json:"local_root"`
 	RemoteBackend string `json:"remote_backend"`
 	RemoteRoot    string `json:"remote_root"`
-	StateFile     string `json:"state_file"`
+	// StateFile is what the job file says. Empty means "derive one" for a backend
+	// that keeps a snapshot, which is the normal case; StateFileEffective then says
+	// where it went. Kept separate so saving the form does not silently turn a
+	// derived path into an explicit one.
+	StateFile string `json:"state_file"`
+	// StateFileEffective is the snapshot path that will actually be used.
+	StateFileEffective string `json:"state_file_effective"`
+	// StateFileDerived is true when the path was computed rather than written.
+	StateFileDerived bool `json:"state_file_derived"`
+	// StateFileError explains why no snapshot is available, when that is the case.
+	// Without it the form would show an empty box and the user would assume all is
+	// well - which is precisely how the re-upload-everything behaviour stayed
+	// invisible.
+	StateFileError string `json:"state_file_error,omitempty"`
 
 	Sync SyncView `json:"sync"`
 }
@@ -228,16 +241,23 @@ func ViewConfig(e *entry, raw []byte) ConfigView {
 		p := &cfg.Pair[i]
 		resolved, _ := p.EffectiveSync(cfg)
 		effective, _ := p.EffectiveVariant(cfg)
-		v.Pairs = append(v.Pairs, PairView{
-			Name:             p.Name,
-			Variant:          p.Variant,
-			EffectiveVariant: effective,
-			LocalRoot:        p.Local.Root,
-			RemoteBackend:    p.Remote.Backend,
-			RemoteRoot:       p.Remote.Root,
-			StateFile:        p.Remote.Options["state_file"],
-			Sync:             syncView(p.Sync, resolved),
-		})
+		snapPath, snapDerived, snapErr := p.StateFilePath()
+		pv := PairView{
+			Name:               p.Name,
+			Variant:            p.Variant,
+			EffectiveVariant:   effective,
+			LocalRoot:          p.Local.Root,
+			RemoteBackend:      p.Remote.Backend,
+			RemoteRoot:         p.Remote.Root,
+			StateFile:          p.Remote.Options["state_file"],
+			StateFileEffective: snapPath,
+			StateFileDerived:   snapDerived,
+			Sync:               syncView(p.Sync, resolved),
+		}
+		if snapErr != nil {
+			pv.StateFileError = snapErr.Error()
+		}
+		v.Pairs = append(v.Pairs, pv)
 	}
 	return v
 }

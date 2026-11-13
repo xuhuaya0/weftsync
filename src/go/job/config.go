@@ -17,6 +17,10 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/rclone/rclone/fs"
+	"github.com/rclone/rclone/fs/config"
+	"github.com/rclone/rclone/fs/fspath"
+
+	"weftsync/state"
 )
 
 // Sync variants, named after FreeFileSync's (docs/decisions.md D14).
@@ -592,6 +596,9 @@ func quoteOptionValue(v string) string {
 // option from the same-named config section, so credentials keep coming from
 // rclone.conf (probe: overriding root_token changed only that key while
 // authentication still succeeded).
+//
+// Options include a derived state_file when the pair names none; see
+// StateFilePath for why that cannot be left out.
 func (p *Pair) RemotePath() (string, error) {
 	root := strings.TrimSpace(p.Remote.Root)
 	backend := strings.TrimSpace(p.Remote.Backend)
@@ -602,16 +609,165 @@ func (p *Pair) RemotePath() (string, error) {
 				"pair %q: remote.root %q is not an rclone path and remote.backend is empty; "+
 					"set backend, or write root as \"<remote>:<path>\"", p.Name, root)
 		}
-		return root, nil
+		// An inline "<remote>:<path>" carries its own options in the string, so it
+		// has to be taken apart and rebuilt to add the derived snapshot. Writing
+		// "<remote>,k=v:path" is an ordinary rclone spelling; the job file simply
+		// moves that job here. Anything we cannot parse is passed through unchanged
+		// rather than guessed at.
+		parsed, err := fspath.Parse(root)
+		if err != nil || parsed.Name == "" {
+			return root, nil
+		}
+		return p.buildPath(parsed.Name, parsed.Path, parsed.Config, root)
 	}
 	if strings.Contains(backend, ":") {
 		return "", fmt.Errorf("pair %q: remote.backend %q must be a remote name, not a path",
 			p.Name, backend)
 	}
-	if len(p.Remote.Options) == 0 {
-		return backend + ":" + root, nil
+	return p.buildPath(backend, root, p.Remote.Options, "")
+}
+
+// buildPath assembles the connection string with explicit and derived options.
+//
+// Splitting this out of RemotePath exists because there are two spellings of the
+// same pair - "backend + root" and one inline "<remote>:<path>" string - and both
+// must end up with a snapshot.
+//
+// inlineOriginal is the pair's own connection string when it was written inline,
+// and "" for the backend+root form. When nothing is derived the inline text is
+// returned unchanged: re-serialising it would rewrite the user's own quoting for no
+// benefit, and what the job file says should stay recognisable in the path.
+func (p *Pair) buildPath(name, path string, explicit map[string]string, inlineOriginal string) (string, error) {
+	opts, err := p.mergedOptions(name, path, explicit)
+	if err != nil {
+		return "", err
 	}
-	return buildRemotePath(p.Name, backend, root, p.Remote.Options)
+	if len(opts) == len(explicit) && inlineOriginal != "" {
+		return inlineOriginal, nil // nothing derived: leave the spelling alone
+	}
+	return buildRemotePath(p.Name, name, path, opts)
+}
+
+// mergedOptions returns the explicit options plus, when the pair names no
+// state_file, a derived one.
+func (p *Pair) mergedOptions(name, path string, explicit map[string]string) (map[string]string, error) {
+	out := make(map[string]string, len(explicit)+1)
+	for k, v := range explicit {
+		out[k] = v
+	}
+	if strings.TrimSpace(out["state_file"]) != "" {
+		return out, nil
+	}
+	// Only backends that declare the option can use one. A local disk or an SMB
+	// share compares by size and time directly, and passing an option it does not
+	// know would make rclone refuse to open it at all.
+	if !supportsStateFile(name) {
+		return out, nil
+	}
+	id := state.PairID(p.Local.Root, name+":"+path)
+	snapPath, err := state.DefaultPath(id)
+	if err != nil {
+		// Fail rather than run stateless: without a snapshot every file is
+		// re-uploaded on every run, and on Feishu each of those uploads leaves a
+		// previous version to delete. Doing that silently is worse than stopping.
+		return nil, fmt.Errorf(
+			"pair %q: no state_file is set and none can be derived (%v). "+
+				"Set remote.options.state_file, or use a backend that keeps no snapshot",
+			p.Name, err)
+	}
+	out["state_file"] = snapPath
+	return out, nil
+}
+
+// StateFilePath reports the snapshot path this pair will use.
+//
+// Explicit remote.options.state_file wins. Otherwise, for a backend that keeps a
+// snapshot, the path is derived from the two roots and Derived is true so the page
+// can say where it went.
+//
+// Why an absent option cannot mean "no snapshot": Feishu's listing carries no size
+// and reports the upload time as the modification time, so with no snapshot
+// nothing is comparable and every file looks changed on every run. Measured on a
+// 1487-file pair: 1487 updates and 116 MB on a pass where nothing had changed, and
+// because an upload always creates a NEW token, every one of those runs also had
+// to delete the previous version - which is how same-named duplicates appear when
+// a delete fails.
+func (p *Pair) StateFilePath() (path string, derived bool, err error) {
+	root := strings.TrimSpace(p.Remote.Root)
+	backend := strings.TrimSpace(p.Remote.Backend)
+	if backend == "" {
+		parsed, perr := fspath.Parse(root)
+		if perr != nil || parsed.Name == "" {
+			return "", false, nil
+		}
+		name, path := parsed.Name, parsed.Path
+		explicit := parsed.Config
+		if v := strings.TrimSpace(explicit["state_file"]); v != "" {
+			return v, false, nil
+		}
+		opts, err := p.mergedOptions(name, path, explicit)
+		if err != nil {
+			return "", false, err
+		}
+		return opts["state_file"], opts["state_file"] != "", nil
+	}
+	if v := strings.TrimSpace(p.Remote.Options["state_file"]); v != "" {
+		return v, false, nil
+	}
+	opts, err := p.mergedOptions(backend, root, p.Remote.Options)
+	if err != nil {
+		return "", false, err
+	}
+	return opts["state_file"], opts["state_file"] != "", nil
+}
+
+// supportsStateFile reports whether a backend declares a state_file option.
+//
+// The type comes from rclone's config file for a remote name ("test" -> feishu),
+// or from the backend table for an inline scheme name ("local"). Read from the
+// static option table rather than a list kept here: a hardcoded list would go stale
+// the moment another backend gains the option, and passing an option a backend does
+// not declare makes it refuse to open the remote.
+//
+// An unknown name answers false. That is safe rather than silent: fs.NewFs cannot
+// open a remote whose type it cannot resolve either, so such a pair fails with its
+// own error before a snapshot would have mattered.
+func supportsStateFile(name string) bool {
+	typ := remoteType(name)
+	if typ == "" {
+		return false
+	}
+	ri, err := fs.Find(typ)
+	if err != nil || ri == nil {
+		return false
+	}
+	for _, opt := range ri.Options {
+		if opt.Name == "state_file" {
+			return true
+		}
+	}
+	return false
+}
+
+// remoteType resolves what kind of backend a name refers to.
+//
+// Two lookups, because the name reaches us in two forms and they are not
+// interchangeable: a remote name ("test") has its type in the rclone config, while
+// an inline scheme name ("local") is itself a backend type. fs.Find alone answers
+// nothing for "test" - it matches backend types, not remote names.
+func remoteType(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return ""
+	}
+	if typ, found := config.FileGetValue(name, "type"); found {
+		if typ = strings.TrimSpace(typ); typ != "" {
+			return typ
+		}
+	}
+	if ri, err := fs.Find(name); err == nil && ri != nil {
+		return ri.Name
+	}
+	return ""
 }
 
 // RemoteDisplay is RemotePath without the backend options.

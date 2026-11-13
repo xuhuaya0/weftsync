@@ -6248,10 +6248,26 @@ function pairCard(p, i) {
     ${field("远端 backend", `<input type="text" class="p-backend" value="${esc(p.remote_backend)}">`, "如 feishu")}
     ${field("远端目录", `<input type="text" class="p-remote" value="${esc(p.remote_root)}">`)}
     ${field("state_file", `<input type="text" class="p-state" value="${esc(p.state_file)}">`,
-      "留空 = 不做增量，每轮重传")}
+      stateFileHint(p))}
     ${field("变体覆盖", `<input type="text" class="p-variant" value="${esc(p.variant)}">`, "留空 = 用作业默认")}
     ${syncFields("p" + i + "-sync", p.sync, p.effective_variant)}
   </div>`;
+}
+
+// stateFileHint says where the snapshot actually goes.
+//
+// It used to read "留空 = 不做增量，每轮重传", which was honest about the cost but
+// left the user looking at an empty box with no idea what to type. The path is
+// derived now, so the useful sentence is the one naming it.
+function stateFileHint(p) {
+  if (p.state_file_error) return p.state_file_error;
+  if (!p.state_file && !p.state_file_effective) {
+    return "这个目标不需要快照（本地磁盘这类靠大小与时间直接比较）。";
+  }
+  if (p.state_file_derived) {
+    return "留空即可，会自动用：" + p.state_file_effective;
+  }
+  return "显式指定，覆盖自动位置。清空则回到自动。";
 }
 
 function bindConfig() {
