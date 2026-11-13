@@ -22,8 +22,62 @@ import (
 // exported way to delete a group, so a fresh group per run would grow the map and
 // leak one average-speed goroutine per run for the life of the process.
 
+// Phase names what a run is doing right now.
+//
+// rclone's counters only move during transfers. Everything else a run spends time
+// on - opening the remote, walking a folder of thousands of entries, comparing
+// file contents byte by byte - happens with the byte counter standing still, so a
+// long scan and a hung process look identical from the outside. Measured: a user
+// watched "正在扫描并比较 已用 265 秒" with no further information and asked
+// whether nothing at all is supposed to be displayed.
+//
+// This is not a progress percentage. It is the answer to "what is it doing",
+// which is the question a frozen counter raises.
+type Phase struct {
+	// Kind is one of the Phase* constants below.
+	Kind string `json:"kind"`
+	// Pair is the folder pair being worked on.
+	Pair string `json:"pair,omitempty"`
+	// Done and Total count within the phase when it has a countable unit (files
+	// compared, pairs finished). Total is 0 when unknown.
+	Done  int `json:"done,omitempty"`
+	Total int `json:"total,omitempty"`
+}
+
+// Phase kinds. Short machine tokens rather than sentences: the console translates
+// them, the CLI prints them as-is, and a test can assert on them.
+const (
+	// PhaseOpen is opening the destination - on a cloud remote this is the first
+	// network call of the run, and the first place it can stall.
+	PhaseOpen = "open"
+	// PhaseGuard is the pre-flight directory-size check.
+	PhaseGuard = "guard"
+	// PhaseConflict reads the cloud folder to compare it against the snapshot.
+	PhaseConflict = "conflict"
+	// PhaseScan is the comparison itself: listing both sides.
+	PhaseScan = "scan"
+	// PhaseContent is the byte-by-byte read-back used by compare = "content".
+	// Nothing is transferred in this phase, so the counters do not move.
+	PhaseContent = "content"
+	// PhaseWrite is the actual transfer.
+	PhaseWrite = "write"
+	// PhaseFlush is writing the backend's snapshot to disk at the end.
+	PhaseFlush = "flush"
+	// PhaseVerify is the per-path existence check that turns "would create" into
+	// "would update". It runs after the pass, makes one network call per planned
+	// upload, and transfers nothing - measured: 4232 of them kept a preview busy
+	// long after the byte counter had reached 100%.
+	PhaseVerify = "verify"
+)
+
 // Progress is a snapshot of an in-flight run, shape-stable for JSON.
 type Progress struct {
+	// Phase is what the run is doing right now, if the caller asked to be told.
+	//
+	// This is the only part of Progress that moves during work that transfers
+	// nothing (listing, comparison, content read-back); without it a long scan
+	// looks exactly like a hung process.
+	Phase *Phase `json:"phase,omitempty"`
 	// Bytes is how much has been transferred in the current pass.
 	Bytes int64 `json:"bytes"`
 	// TotalBytes is the size of everything this pass intends to transfer. Zero

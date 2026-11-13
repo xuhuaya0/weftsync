@@ -111,6 +111,11 @@ type entry struct {
 	// tracker owns this job's accounting group so its progress cannot mix with
 	// another job's.
 	tracker *job.Tracker
+	// phase is what the run is doing right now (opening, scanning, comparing
+	// contents, writing). Guarded by d.mu, unlike tracker, because it is written by
+	// the run goroutine through a callback and read by the API.
+	phase    job.Phase
+	hasPhase bool
 
 	name    string
 	enabled bool
@@ -468,9 +473,22 @@ func (d *Daemon) execute(ctx context.Context, e *entry, mode RunMode, only []str
 	e.cancelRun = cancel
 	e.mode = mode
 	e.lastStopped = false
+	e.phase = job.Phase{}
+	e.hasPhase = false
 	d.mu.Unlock()
 
 	tracker.Reset()
+
+	// The phase callback writes under d.mu: it arrives from the run goroutine while
+	// /api/status reads on an HTTP handler. It is called a handful of times per
+	// pair, not per file, except for the content comparison, which reports once per
+	// compared file - still cheap next to the file read it accompanies.
+	onPhase := func(p job.Phase) {
+		d.mu.Lock()
+		e.phase = p
+		e.hasPhase = true
+		d.mu.Unlock()
+	}
 
 	results, err := d.runJob(runCtx, cfg, d.log, job.Options{
 		DryRun:     mode == ModePlan,
@@ -481,6 +499,7 @@ func (d *Daemon) execute(ctx context.Context, e *entry, mode RunMode, only []str
 		// only is the console's row selection. A scheduled run never sets it.
 		OnlyPaths: only,
 		Exclude:   d.SettingsOf().excludePatterns(),
+		OnPhase:   onPhase,
 	})
 
 	// A cancelled context is what our own stop request looks like. Reporting it as
@@ -772,6 +791,10 @@ func (d *Daemon) Status() []JobStatus {
 		// of a stats read.
 		if e.running && e.tracker != nil {
 			p := e.tracker.Snapshot()
+			if e.hasPhase {
+				phase := e.phase
+				p.Phase = &phase
+			}
 			st.Progress = &p
 			st.Mode = e.mode
 			st.CanStop = e.cancelRun != nil

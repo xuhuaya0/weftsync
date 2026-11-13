@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rclone/rclone/fs"
@@ -194,6 +195,32 @@ type Options struct {
 	// dropped, because "the job file is the authority" is easier to reason about
 	// than a precedence table.
 	Exclude []string
+
+	// OnPhase is told what the run is doing, as it does it.
+	//
+	// Not a percentage: most of the time a run spends is not proportional to
+	// bytes. Listing a Feishu folder of thousands of entries and comparing file
+	// contents both move the byte counter by zero, so without this the only
+	// visible evidence of work is elapsed time - which is also what a hang looks
+	// like.
+	//
+	// Called from the run goroutine while the consumer reads from another, so
+	// implementations must tolerate concurrent reads of whatever they write.
+	OnPhase func(Phase)
+}
+
+// phase reports a phase change, tolerating a run with no listener.
+func (o Options) phase(kind, pair string) {
+	if o.OnPhase != nil {
+		o.OnPhase(Phase{Kind: kind, Pair: pair})
+	}
+}
+
+// phaseN reports a counted phase (files compared, pairs done).
+func (o Options) phaseN(kind, pair string, done, total int) {
+	if o.OnPhase != nil {
+		o.OnPhase(Phase{Kind: kind, Pair: pair, Done: done, Total: total})
+	}
 }
 
 // Run executes every enabled pair in the job, in order.
@@ -232,6 +259,10 @@ func Run(ctx context.Context, cfg *Config, w io.Writer, opt Options) ([]PairResu
 // useful version of it.
 func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options) (res PairResult, err error) {
 	res = PairResult{Pair: p.Name}
+
+	// Every phase below is reported because each one can look like a hang: the
+	// byte counter moves in none of them until the final transfer starts.
+	opt.phase(PhaseOpen, p.Name)
 
 	variant, err := p.EffectiveVariant(cfg)
 	if err != nil {
@@ -281,6 +312,9 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 
 	refuseAt, backendLimit, backend := nodeLimit(fdst, spec, p)
 	if refuseAt > 0 {
+		// Walking a local tree of tens of thousands of entries takes real time and
+		// transfers nothing, so it announces itself like every other silent phase.
+		opt.phase(PhaseGuard, p.Name)
 		// A preview does not fail on this: its job is to report what a real run
 		// would do, and the answer is "be refused". The directories are listed
 		// either way so the plan panel and the error agree.
@@ -323,6 +357,10 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	if opt.CollectPlan && opt.DryRun {
 		if c, perr := plan.Begin(fdst, fsrc); perr == nil {
 			defer func() {
+				// Both steps below walk the whole planned set: one existence check per
+				// would-be upload. On a cloud backend that is hundreds or thousands of
+				// network calls after the byte counter has already reached 100%, which
+				// is exactly the stretch that looks like a hung process.
 				rows := plan.ApplySnapshot(c.End(), snapshotLookup(fdst))
 				// Anything still marked "create" that the destination actually has
 				// is an update. The snapshot answers this for a backend that keeps
@@ -330,7 +368,9 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 				// this second question every changed file was labelled "new" while
 				// sitting on both sides - visibly wrong, and it also blanked the
 				// destination pane for files that were right there.
-				rows = markExistingAsUpdates(ctx, fdst, rows)
+				rows = markExistingAsUpdates(ctx, fdst, rows, func(done, total int) {
+					opt.phaseN(PhaseVerify, p.Name, done, total)
+				})
 				res.Plan = rows
 				res.PlanSummary = plan.Summarise(rows)
 			}()
@@ -347,6 +387,9 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 		// Two-way takes the conflicts apart instead of aborting on all of them:
 		// a file the cloud replaced while the local copy sat still is exactly the
 		// case this variant exists for. Everything else is reported and held.
+		// The scan lists the cloud folder and compares it against the snapshot: a
+		// network walk with no byte counter behind it.
+		opt.phase(PhaseConflict, p.Name)
 		scan, scanErr := detectConflictsFn(ctx, fdst, "")
 		if scanErr != nil {
 			return res, fmt.Errorf("pair %q: %w", p.Name, scanErr)
@@ -441,6 +484,7 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 			}
 		}
 	} else {
+		opt.phase(PhaseConflict, p.Name)
 		handled, err := handleConflicts(ctx, p, spec, fdst, fsrc, w)
 		res.Conflicts = handled.reported
 		if err != nil {
@@ -479,7 +523,7 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	// reachable through an actual comparison, so it runs before the real pass and
 	// its findings are honoured by excluding those paths.
 	if spec.Compare == CompareContent {
-		identical, err := verifyIdenticalPaths(ctx, fdst, fsrc, opts, w)
+		identical, err := verifyIdenticalPaths(ctx, fdst, fsrc, opts, w, opt.OnPhase, p.Name)
 		if err != nil {
 			return res, fmt.Errorf("pair %q: %w", p.Name, err)
 		}
@@ -499,6 +543,15 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	// would quietly turn "two-way" into "delete on both sides".
 	if variant == VariantUpdate || variant == VariantTwoWay {
 		// update never deletes, so there is nothing to guard against.
+		//
+		// A preview runs this same pass with DryRun set, and it writes nothing, so
+		// calling it PhaseWrite would state something false in the exact place the
+		// user is checking whether anything is being changed.
+		if opt.DryRun {
+			opt.phase(PhaseScan, p.Name)
+		} else {
+			opt.phase(PhaseWrite, p.Name)
+		}
 		actual, err := runPass(ctx, fdst, fsrc, opts, opt.DryRun, false)
 		res.Actual = actual
 		if opt.DryRun {
@@ -514,6 +567,7 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	// aborts the pass, so a dry pass that trips it has still deleted nothing.
 	dryOpts := opts
 	dryOpts.maxDeleteSize = spec.MaxDeleteSize
+	opt.phase(PhaseScan, p.Name)
 	dry, err := runPass(ctx, fdst, fsrc, dryOpts, true, true)
 	res.DryRun = dry
 	if err != nil {
@@ -563,6 +617,7 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 		return res, nil
 	}
 
+	opt.phase(PhaseWrite, p.Name)
 	actual, err := runPass(ctx, fdst, fsrc, opts, false, true)
 	res.Actual = actual
 	if err != nil {
@@ -760,7 +815,19 @@ type conflictOutcome struct {
 // than merely relabelling is deliberate: a comparison that reports "in sync"
 // while the run then re-uploads the file is exactly the drift this project
 // refuses to ship.
-func verifyIdenticalPaths(ctx context.Context, fdst, fsrc fs.Fs, opts passOptions, w io.Writer) ([]string, error) {
+func verifyIdenticalPaths(ctx context.Context, fdst, fsrc fs.Fs, opts passOptions, w io.Writer,
+	onPhase func(Phase), pair string,
+) ([]string, error) {
+	// This phase reads both copies of every candidate file and transfers nothing,
+	// which is the longest stretch of a "content" comparison and the one that
+	// looks most like a hang. The counter inside the loop is what makes it
+	// visibly alive.
+	report := func(done, total int) {
+		if onPhase != nil {
+			onPhase(Phase{Kind: PhaseContent, Pair: pair, Done: done, Total: total})
+		}
+	}
+	report(0, 0)
 	collector, err := plan.Begin(fdst, fsrc)
 	if err != nil {
 		// Another preview owns the log hook. Its rows are not ours, so this run
@@ -792,6 +859,7 @@ func verifyIdenticalPaths(ctx context.Context, fdst, fsrc fs.Fs, opts passOption
 			continue
 		}
 		total++
+		report(total, 0)
 		differ, err := operations.CheckIdenticalDownload(ctx, dstObj, srcObj)
 		if err != nil {
 			fmt.Fprintf(w, "  content compare: %q could not be read back: %v\n", row.Path, err)
@@ -817,17 +885,62 @@ func verifyIdenticalPaths(ctx context.Context, fdst, fsrc fs.Fs, opts passOption
 //
 // A failure to check is not a failure of the preview: the row keeps its label and
 // the run reports whatever is really wrong with it.
-func markExistingAsUpdates(ctx context.Context, fdst fs.Fs, rows []plan.Row) []plan.Row {
+func markExistingAsUpdates(ctx context.Context, fdst fs.Fs, rows []plan.Row,
+	report func(done, total int),
+) []plan.Row {
+	// Count the work first so the caller can show "n of m" instead of an
+	// open-ended spinner: the todo list is already in hand, and each loop below is
+	// one network call.
+	idx := make([]int, 0, len(rows))
 	for i := range rows {
-		if rows[i].Action != plan.Create || rows[i].HasRight {
-			continue
+		if rows[i].Action == plan.Create && !rows[i].HasRight {
+			idx = append(idx, i)
 		}
-		if _, err := fdst.NewObject(ctx, rows[i].Path); err != nil {
-			continue
-		}
-		rows[i].Action = plan.Update
-		rows[i].HasRight = true
 	}
+	if len(idx) == 0 {
+		return rows
+	}
+
+	// One existence check per would-be upload, run in parallel.
+	//
+	// Serially this was measured at ~3 paths/second against Feishu, so a preview of
+	// 4232 files spent over twenty minutes here - after the byte counter had already
+	// reached 100%, which is why it looked like a hang. The calls are independent
+	// reads; the only reason it was serial is that the loop started as one line.
+	//
+	// Small pool, not unbounded: the backend already rate-limits, and a burst of
+	// thousands of concurrent calls would just move the waiting into its retry
+	// handling. 8 keeps it honest without being rude.
+	const workers = 8
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		done int
+	)
+	ch := make(chan int)
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range ch {
+				if _, err := fdst.NewObject(ctx, rows[i].Path); err == nil {
+					rows[i].Action = plan.Update
+					rows[i].HasRight = true
+				}
+				mu.Lock()
+				done++
+				if report != nil {
+					report(done, len(idx))
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, i := range idx {
+		ch <- i
+	}
+	close(ch)
+	wg.Wait()
 	return rows
 }
 

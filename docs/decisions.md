@@ -4999,3 +4999,102 @@ Go 侧用 `sync.Once` 兜住惰性默认值（`startedAt()`），因为 `/api/st
 脚本会真的改一个目录对的 `local_root`（否则无法验证第 5、6 条）。所以
 `finally` 里必须把 `local_root` 和 `dirty` 放回去 —— 一个把 `C:\Windows`
 留在编辑器里的检查，比没有检查更糟：下一次「保存」会把它写进真实的作业文件。
+## D85 · 扫描期间什么都不显示，但数据一直都在（2026-11-13）
+
+用户：「扫描过程中就什么都不显示对么」。
+
+**不对。** 而且有两层问题：一层是我没渲染，另一层是有一段耗时根本没有名字。
+
+### 一、先查清事实
+
+截图里状态条写着「正在扫描并比较 已用 265 秒」，结果卡片只有一句固定文案。
+但 `/api/status` 一直在给数据：
+
+```
+progress={"bytes":239677815,"total_bytes":239677815,"transfers":4232,
+          "deletes":0,"errors":0,"speed":175267165}
+```
+
+也就是说 4.6 GB/… 不，228.6 MiB、4232 个文件、速度都算好了，**只是写进了抽屉里
+作业表那一行**（`#prog-<job>`），而用户看的是主界面的结果卡片。
+
+### 二、更深的一层：有一段耗时没有名字
+
+查到进度**冻结**（8 秒内 bytes/transfers 一动不动，state 仍是 running）之后，
+去读 `RunPair` 才发现预览的收尾有两个不产生流量的循环：
+
+1. `plan.ApplySnapshot(c.End(), snapshotLookup(fdst))`
+2. `markExistingAsUpdates(ctx, fdst, rows)` —— **对每个计划要上传的文件发一次
+   `fdst.NewObject`**，用来把「新建」纠正成「更新」。
+
+第 2 步对飞书就是 4232 次串行网络调用。实测 **约 2.9 个/秒**，也就是
+**24 分钟**。用户看到的 265 秒只是它的开头。
+
+`Progress` 里根本没有「正在做什么」这个概念 —— rclone 的计数器只在传输时动，
+所以列目录、比对、逐文件核对全都表现为「计数器不动」。
+
+### 三、修法：给 run 加「阶段」
+
+`job.Options.OnPhase func(Phase)`，`Phase{Kind, Pair, Done, Total}`：
+
+| Kind | 何时 | 有计数 |
+|---|---|---|
+| `open` | 打开目标（云端第一次网络调用） | 否 |
+| `guard` | 预检目录规模 | 否 |
+| `conflict` | 核对云端改动 | 否 |
+| `scan` | 扫描两边（预览里的那一趟也是这个） | 否 |
+| `content` | `compare=content` 的逐字节回读 | **是** |
+| `verify` | 逐文件核对云端是否已有 | **是** |
+| `write` | 真正写入 | 否（由 rclone 计数器负责） |
+
+`Phase` 放在 `job.Progress` 里（`daemon` 在快照上填），所以只改一处 API 形状。
+`daemon` 用 `sync.Once`… 不，用 `d.mu` 保护写入：回调来自 run goroutine，
+读取来自 HTTP handler。
+
+UI 侧 `showPlanBusy()` 里放一个 `#plan-live`，`updateProgress()` 每次轮询写进去：
+
+```
+正在核对云端已有文件：pair-2（第 2/2 对） 618/4232
+100% · 228.6 MiB / 228.6 MiB · 4232 个文件
+这一步不改动任何东西 已用 2 分钟
+```
+
+## 四、两处措辞/结构的自我修正（都在验证时发现）
+
+- **预览里报 `write` 是假话。** update 变体在预览和真跑时走同一个分支，我一开始
+  无条件报 `PhaseWrite`，于是预览界面上写着「正在写入」。改成 `opt.DryRun` 时
+  报 `scan`。这条现在有测试（`TestPlanReportsItsPhases` 断言预览**不得**出现
+  `write`）。
+- **两个标题重复。** `showPlanBusy` 原来有一句固定的「正在比较…」，加上阶段行
+  就是两行标题。改成只留阶段行，它自己带兜底文案。
+- **时长格式。** `fmtDuration(15.583)` → 「已用 15.583 秒」。改成先四舍五入。
+
+## 五、并发化（有限收益，如实记录）
+
+`markExistingAsUpdates` 改成 8 个 worker 的小池子，因为调用彼此独立、只读。
+实测：**2.9 个/秒 → 5.2 个/秒**，只有 1.8 倍，不是 8 倍 —— 飞书后端自己有节流，
+把并发又串回去了。
+
+**所以这个问题没有解决**，只是变快了不到两倍：4232 个文件仍需约 14 分钟。
+真正的修法需要设计决策（例如目标端没有快照时就跳过逐文件核对，并在表格里
+如实标成「待确认」；或复用 rclone 已经列出的目标树），不是这次能顺手定的。
+D85 记在这里，避免下次又被当成「界面卡住」。
+
+## 六、测试（三条，都做过 sabotage）
+
+`src/go/job/phase_test.go`
+
+| 测试 | 断言 |
+|---|---|
+| `TestPlanReportsItsPhases` | 预览必须报 `open`/`scan`、**不得**报 `write`、每个阶段都带 pair 名、计划仍然生成 |
+| `TestRunReportsWritePhase` | 真跑必须报 `write`，且文件确实到达 |
+| `TestVerifyPhaseCountsItsWork` | `verify` 必须带 `total`，且最后一条 `done == total`（否则进度条永远走不到头） |
+
+sabotage：
+
+| 破坏 | 报出 |
+|---|---|
+| 预览无条件报 `write` | 「phase \"scan\" was never reported」+「a preview reported PhaseWrite, but a preview writes nothing」 |
+| `report(0, 0)`（不给总数） | 「verify phase never reported a total: {Kind:verify … Total:0}」 |
+
+恢复后全绿，`gofmt`/`vet`/`go test ./...`/Linux 交叉编译全过。

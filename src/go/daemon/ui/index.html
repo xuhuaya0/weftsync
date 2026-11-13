@@ -824,6 +824,21 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* 比较进行中的实时区。左对齐而不是全居中：里面的数字每秒都在变，居中的
+     文字每次变化都会横向跳动。 */
+  .plan-busy { padding: 22px 2px 10px; }
+  .plan-busy > .empty { font-style: normal; color: var(--ink-2); }
+  .plan-busy .ph {
+    font-size: 12.5px; color: var(--ink); font-weight: 600;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .plan-busy .ph::before {
+    content: ""; width: 9px; height: 9px; border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--blue) 30%, transparent);
+    border-top-color: var(--blue);
+    animation: spin .7s linear infinite; flex: none;
+  }
+
   .plan-head {
     padding: 7px 12px; border-bottom: 1px solid var(--line);
     background: var(--tint);
@@ -2104,13 +2119,84 @@ function renderJobs() {
 //
 // Writing into an existing span rather than re-rendering is what keeps the stop
 // button under the cursor while the numbers tick once a second.
+//
+// It also feeds the result card while a comparison is in flight. The card used to
+// show a fixed sentence for the whole scan, so a 265-second comparison displayed
+// nothing but already-known elapsed time - the user's question was 「扫描过程中就
+// 什么都不显示对么」, and the answer was yes, which is not acceptable when the
+// daemon is publishing the numbers the whole time.
 function updateProgress() {
+  let busy = null;
   for (const j of (snapshot && snapshot.jobs) || []) {
     const el = document.getElementById("prog-" + j.name);
+    if (j.state === "running" && j.progress) busy = j;
     if (!el) continue;
     if (j.state !== "running" || !j.progress) { el.innerHTML = ""; continue; }
     el.innerHTML = progressHTML(j.progress);
   }
+
+  const live = document.getElementById("plan-live");
+  if (!live) return;
+  // The card belongs to the job that is actually running; another job's counters
+  // in this card would be worse than none.
+  const shown = busy && (!busyJob || busy.name === busyJob.name) ? busy : null;
+  live.innerHTML = shown ? liveProgressHTML(shown) : "";
+}
+
+// PHASE_TEXT turns the engine's phase tokens into what the user is waiting for.
+//
+// The tokens are deliberately English in the backend (the CLI prints them, tests
+// assert them); translating here is the same split the conflict kinds use.
+const PHASE_TEXT = {
+  open: "正在打开目标",
+  guard: "正在检查目录规模",
+  conflict: "正在核对云端改动",
+  scan: "正在扫描两边",
+  content: "正在逐字节比对",
+  write: "正在写入",
+  flush: "正在写回同步记录",
+  verify: "正在核对云端已有文件",
+};
+
+function liveProgressHTML(job) {
+  const p = job.progress || {};
+  const ph = p.phase || {};
+  const lines = [];
+
+  let head = PHASE_TEXT[ph.kind] || (job.mode === "plan" ? "正在比较" : "正在同步");
+  // The pair name matters on a multi-pair job: "scanning" tells you nothing about
+  // which of two folders is taking the time.
+  const names = job.pair_names || [];
+  const idx = names.indexOf(ph.pair);
+  if (ph.pair && names.length > 1) {
+    head += `：${esc(ph.pair)}（第 ${idx + 1}/${names.length} 对）`;
+  } else if (ph.pair) {
+    head += `：${esc(ph.pair)}`;
+  }
+  lines.push(`<div class="ph">${head}${ph.total ? ` ${ph.done}/${ph.total}` : ph.done ? ` ${ph.done}` : ""}</div>`);
+
+  // The counters. During scanning and content comparison these legitimately stand
+  // still, which is exactly why the phase line above comes first.
+  const parts = [];
+  if (p.total_bytes > 0) {
+    parts.push(`${Math.min(100, Math.round(100 * p.bytes / p.total_bytes))}% · ` +
+               `${fmtBytes(p.bytes)} / ${fmtBytes(p.total_bytes)}`);
+  } else if (p.bytes > 0) {
+    parts.push(fmtBytes(p.bytes));
+  }
+  if (p.transfers > 0) parts.push(`${p.transfers} 个文件`);
+  if (p.deletes > 0) parts.push(`删除 ${p.deletes}`);
+  if (p.errors > 0) parts.push(`<span class="bad">${p.errors} 个错误</span>`);
+  if (parts.length) lines.push(`<div class="hint" style="margin-top:6px">${parts.join(" · ")}</div>`);
+
+  let elapsed = "";
+  if (busyJob && busyJob.mode === "plan" && busyJob.name === job.name) {
+    // Rounded: fmtDuration appends 秒 to whatever it is given, so passing
+    // 15.583 produced "已用 15.583 秒".
+    elapsed = " 已用 " + fmtDuration(Math.round((Date.now() - busyJob.startedAt) / 1000));
+  }
+  lines.push(`<div class="hint" style="margin-top:6px">这一步不改动任何东西${elapsed}</div>`);
+  return lines.join("");
 }
 
 function progressHTML(p) {
@@ -4272,16 +4358,21 @@ async function runSession(btn, plan, busyText) {
 // The previous numbers belong to the previous compare. Leaving them on screen
 // while a new scan runs is how "nothing happened" gets reported: the table looks
 // identical before and after, so the only evidence of work is the status line.
+//
+// #plan-live is filled by updateProgress() on every poll. It exists because this
+// block used to be static: a 265-second comparison showed a fixed sentence and a
+// ticking elapsed time, and the user reasonably asked whether nothing is supposed
+// to be shown. The daemon was publishing the phase and the counters all along.
 function showPlanBusy() {
   document.getElementById("plan-job").textContent = "";
+  // #plan-live carries its own headline, so there is no second 正在比较… above it:
+  // two headlines stacked read as two different states.
   document.getElementById("plan-body").innerHTML =
-    `<div class="empty" style="padding:22px 2px 10px;text-align:center">
-       正在比较…<br>
-       <span style="font-style:normal;font-size:12px;opacity:.75">
-         正在扫描两边并生成逐文件计划。这一步不改动任何东西。
-       </span>
-     </div>`;
+    `<div class="plan-busy"><div id="plan-live">
+       <div class="ph">正在比较…</div>
+     </div></div>`;
   document.getElementById("plan-run").disabled = true;
+  updateProgress();
 }
 
 document.getElementById("s-compare-btn").addEventListener("click", e => {
