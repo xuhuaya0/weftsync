@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -260,6 +261,11 @@ func (c *client) uploadAll(ctx context.Context, parentToken, name string, conten
 //
 // Irreversible: Feishu exposes no trash endpoint to the tenant token
 // (verified during M0, see PLAN.md §3.3).
+//
+// "Already gone" is success: the caller wants this token to stop existing, and it
+// does. Treating that as an error would fail a replacement whose cleanup had in
+// fact already happened - for example when an earlier attempt succeeded but its
+// response was lost.
 func (c *client) deleteFile(ctx context.Context, token string) error {
 	const where = "files.delete"
 
@@ -267,12 +273,32 @@ func (c *client) deleteFile(ctx context.Context, token string) error {
 	q.Set("type", "file")
 
 	_, err := c.do(ctx, request{
-		where:  where,
-		method: http.MethodDelete,
-		path:   "/open-apis/drive/v1/files/" + url.PathEscape(token),
-		query:  q,
+		where:    where,
+		method:   http.MethodDelete,
+		path:     "/open-apis/drive/v1/files/" + url.PathEscape(token),
+		query:    q,
+		attempts: deleteAttempts,
 	})
+	if err != nil && isGoneError(err) {
+		return nil
+	}
 	return err
+}
+
+// isGoneError reports whether err says the token is not there any more.
+//
+// The classification already exists for the token table; this is the narrower
+// question the delete path asks.
+func isGoneError(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.Code {
+	case CodeFileDeleted, CodeNotFound, CodeParentNotFound:
+		return true
+	}
+	return false
 }
 
 // uploadPrepare starts a block upload and returns the server's split strategy.

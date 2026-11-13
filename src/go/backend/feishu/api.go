@@ -19,9 +19,22 @@ import (
 
 // Retry policy (contracts/error-codes.md §2).
 const (
-	maxAttempts     = 3
-	initialBackoff  = 1 * time.Second
-	maxBackoff      = 10 * time.Second
+	maxAttempts    = 3
+	initialBackoff = 1 * time.Second
+	maxBackoff     = 10 * time.Second
+	// deleteAttempts is the budget for files.delete.
+	//
+	// Larger than the default on purpose. A delete is one cheap call, and its
+	// failure is the most expensive kind of failure this backend has: the new
+	// version is already uploaded, so a leftover old token becomes a same-named
+	// duplicate that List deliberately collapses - it is invisible from then on and
+	// nothing cleans it up automatically.
+	//
+	// Measured: replacing two files after a 1487-file upload burst, both deletes
+	// failed through the default 3 attempts (~3s of backoff) with code 1061001
+	// (server internal error), while the same delete succeeded a few minutes later.
+	// Five attempts stretch the window to ~15s without making a real failure slow.
+	deleteAttempts  = 5
 	defaultTimeout  = 60 * time.Second
 	maxResponseSize = 8 << 20 // 8MB, generous for JSON listings
 )
@@ -142,6 +155,9 @@ type request struct {
 	// limiter, when set, is enforced in addition to the client-wide one. Used by
 	// endpoints with a tighter budget than the rest (move: 20/minute).
 	limiter *rate.Limiter
+	// attempts overrides maxAttempts for this call. Zero means the default.
+	// files.delete uses a larger budget: see deleteAttempts.
+	attempts int
 }
 
 // result carries either a decoded data payload, or raw bytes for downloads.
@@ -150,6 +166,14 @@ type result struct {
 	Body   []byte
 	Header http.Header
 	Status int
+}
+
+// attemptLimit resolves a request's retry budget.
+func attemptLimit(n int) int {
+	if n > 0 {
+		return n
+	}
+	return maxAttempts
 }
 
 // do executes the request with retries.
@@ -173,7 +197,7 @@ func (c *client) do(ctx context.Context, r request) (*result, error) {
 		return nil, fmt.Errorf("%s: %w", r.where, ErrSystemicFailure)
 	}
 
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	for attempt := 1; attempt <= attemptLimit(r.attempts); attempt++ {
 		res, err := c.once(ctx, r)
 		if err == nil {
 			c.consecutive.Store(0)
@@ -193,7 +217,7 @@ func (c *client) do(ctx context.Context, r request) (*result, error) {
 			continue
 
 		case classRetryable:
-			if attempt == maxAttempts {
+			if attempt == attemptLimit(r.attempts) {
 				c.noteExhausted(err)
 				if c.systemic.Load() {
 					return nil, fmt.Errorf("%s: %w", r.where, ErrSystemicFailure)

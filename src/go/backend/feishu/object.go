@@ -20,6 +20,49 @@ type Object struct {
 
 var _ fs.Object = (*Object)(nil)
 
+// DuplicateLeftError means the file was replaced successfully but the old version
+// could not be deleted.
+//
+// It is its own type because this is not a failed transfer: the new content is in
+// the cloud and the snapshot records it, so the next run will skip the file. What
+// remains is a second entry with the same name, which List collapses and therefore
+// hides - nothing would ever notice it again. Hence the message names the leftover
+// token and the one command that removes it.
+//
+// Measured trigger: two replacements right after a 1487-file upload burst; both
+// files.delete calls returned code 1061001 (server internal error) through the
+// whole retry budget, while the same delete on a probe file succeeded minutes
+// later.
+type DuplicateLeftError struct {
+	Remote     string
+	RemoteName string // the remote name, so the message can print a runnable command
+	NewToken   string
+	OldToken   string
+	Err        error
+}
+
+func (e *DuplicateLeftError) Error() string {
+	return fmt.Sprintf(
+		"feishu: replace %q: the new version IS uploaded (token %s) and recorded in "+
+			"the sync state, so the file's content is correct; only deleting the "+
+			"previous version (token %s) failed: %v. The folder now holds two entries "+
+			"with that name and listings show only one of them. "+
+			"Clean up with: weftsync backend dedupe %q "+
+			"(run it once without -o to see what it would remove)",
+		e.Remote, e.NewToken, e.OldToken, e.Err, e.target())
+}
+
+// target is the `<remote>:<folder>` argument the cleanup command takes.
+func (e *DuplicateLeftError) target() string {
+	folder, _ := parentOf(e.Remote)
+	if e.Remote == "" {
+		return e.Remote
+	}
+	return e.RemoteName + ":" + folder
+}
+
+func (e *DuplicateLeftError) Unwrap() error { return e.Err }
+
 // ---------------------------------------------------------------- ObjectInfo
 
 func (o *Object) Fs() fs.Info    { return o.fs }
@@ -228,10 +271,19 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		if !o.fs.tokenStillPresent(ctx, parentPath, oldToken) {
 			fs.Infof(o, "previous version (token %s) is gone; nothing to delete", oldToken)
 		} else if err := o.fs.client.deleteFile(ctx, oldToken); err != nil {
-			return fmt.Errorf(
-				"feishu: replace %q: new version uploaded as token %s, "+
-					"but deleting the previous version %s failed: %w",
-				remote, newToken, oldToken, err)
+			// The file itself is correct: the new version is uploaded and the
+			// snapshot has just been told so. What failed is the cleanup, and the
+			// consequence is a same-named duplicate that List collapses - invisible
+			// from then on. Saying only "replace failed" invites the reader to
+			// assume the upload did not happen, so the message states the outcome
+			// and the one command that removes the leftover.
+			return &DuplicateLeftError{
+				Remote:     remote,
+				RemoteName: o.fs.name,
+				NewToken:   newToken,
+				OldToken:   oldToken,
+				Err:        err,
+			}
 		} else {
 			fs.Infof(o, "replaced: uploaded token %s, removed previous token %s", newToken, oldToken)
 			o.fs.resolver.invalidate(o.entry.ParentToken)

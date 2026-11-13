@@ -5182,3 +5182,78 @@ closePlanPanel();        // ← 问题在这里
 | 让 `updateProgress` 清空 `#plan-live` | 「点击后结果区立刻变成空白」 |
 
 恢复后 0 条。
+
+## D87 · 替换成功、删除失败：重试预算、幂等删除、说实话的报错（2026-11-13）
+
+用户贴了一次真实失败：
+
+```
+同步失败：feishu: replace "ADC_CapCal_Temp_Cycling/R5_FF104_20250408_113725.xlsx":
+new version uploaded as token NeXsb9SJ6oyofyxO1azc89hNnNd, but deleting the
+previous version VOhAbgpvwo0xEDxf76TcwvrGnj9 failed:
+files.delete: giving up after 3 attempts: feishu files.delete: code=1061001 msg=unknown error.
+```
+
+### 一、先量，再猜（三个假设被推翻）
+
+| 假设 | 怎么验的 | 结果 |
+|---|---|---|
+| xlsx 被当成「电子表格」导入，type 不是 file，所以删不掉 | 直接打 Feishu `drive/v1/files` 列两个 token | **推翻**：两条都是 `type=file` |
+| 一次性偶发 | `backend duplicates 'test:'` 数整个租户 | **推翻**：恰好 2 组重复，2 次替换 2 次删除失败，全在同一轮 |
+| 删除接口坏了 / 权限没了 | 自己 `copyto` 一个 5 字节探针文件到云端再 `deletefile` | **推翻**：几秒后 `Deleted`，接口正常 |
+
+时间线（日志时间戳换算）：旧 token 13:56:18 / 13:56:27，本轮 14:16:11 开始，
+新 token 14:16:37 / 14:18:05，**14:27:41 失败**，共 11m29s。也就是说删除发生在
+上传完成之后数分钟，不是索引竞态。
+
+结论：1487 个文件的上传爆发之后，服务端对 `files.delete` 返回 `1061001`
+（内部错误），而重试预算只有 3 次（约 3s）。
+
+### 二、这条失败的代价比报错文字大
+
+`Update()` 的上传**已经成功**，state 也已改写为新 token。失败掉的只有「删旧版本」。
+可是 Feishu 的上传不是覆盖而是新增条目，于是文件夹里出现两条同名记录；而
+`List` **故意**把同名折叠成一条 —— 从那一刻起那条残留**在任何列表里都看不见**，
+也没有任何东西会去清它。报错只说 `replace failed`，读者自然会以为上传没成功。
+
+### 三、三处改动
+
+| 改动 | 位置 | 理由 |
+|---|---|---|
+| `deleteAttempts = 5`，`request.attempts` 允许单次调用覆盖预算 | `api.go` | 删除是一次便宜调用，失败却是最贵的一种失败；其它接口仍用 `maxAttempts` |
+| `isGoneError()`：`1061007 / 1061003 / 1061044` 视为成功 | `api_endpoints.go` | 调用方要的就是「这个 token 不再存在」；把「已经不在了」当失败，会让一次响应丢失变成永久失败 |
+| 新增 `*DuplicateLeftError` | `object.go` | 让错误说清「内容是对的，只有清理没做成」，给出 `remote:dir` 与 `backend dedupe` 命令，`Unwrap()` 保留原 `APIError` 可判型 |
+
+错误串保持英文，和这个包其它错误一致；中文前缀由 UI 加（`同步失败：`）。
+
+### 四、检查（`backend/feishu/delete_budget_test.go`）
+
+四条，都断言行为而不是「函数被调用过」：
+
+1. `deleteAttempts > maxAttempts`，且删除失败时 `files.delete` 的**实际次数**等于
+   `deleteAttempts`，同时**不会重新上传**；
+2. 三个「已消失」码各自让 `Update` 返回 nil，且只尝试一次（不重试）；
+3. 持续 `1061001` 产出 `*DuplicateLeftError`，消息含新 token、旧 token、文件名、
+   可执行的 `remote:dir`、`backend dedupe`，并且**不含** `upload failed` 之类误导；
+4. `target()` 对根目录 / 一级 / 多级路径分别给出 `test:`、`test:ADC_CapCal`、`test:a/b`。
+
+**sabotage 三次，全部报出**：
+
+| 塞回去 | 报出 |
+|---|---|
+| `deleteAttempts = maxAttempts` | `deleteAttempts = 3, must exceed maxAttempts = 3` |
+| `isGoneError` 不生效 | 三个码分别 `made Update fail` |
+| 换回 `fmt.Errorf("…upload failed…")` | `error type = *fmt.wrapError, want *DuplicateLeftError` |
+
+恢复后整包 `ok`。
+
+### 五、诚实的两点
+
+1. **这是缓解，不是保证。** 5 次约 15s 的窗口比 3s 宽，但服务端若不高兴一分钟，仍会
+   失败。真正的结构性修法是：这一类失败**不该把整轮判成失败**（内容是对的），应该
+   作为警告记进报告让本轮跑完。那需要一条 warning 通道贯穿
+   rclone → `PairResult` → daemon → UI，比本次改动大，留作下一步。
+2. **租户里那 2 条残留还在**，而且 `backend dedupe` 目前清不掉：`demo` 作业没有
+   `state_file`，命令会 `refusing to delete: no state_file`。已实测确认它一条都没删。
+   需要用户决定：给该远端 / 作业加 `state_file` 后重跑，还是手工删掉各自较旧的
+   那个 token。**没有替用户删任何文件。**
