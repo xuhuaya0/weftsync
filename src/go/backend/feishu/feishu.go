@@ -94,7 +94,13 @@ func backendOptions() []fs.Option {
 		{
 			Name: "state_file",
 			Help: "Path to the incremental-sync state file.\n\n" +
-				"Leave empty to derive it from the local and remote roots, which is the normal case.",
+				"There is no default and no automatic location. Feishu's listing carries " +
+				"no size and reports the upload time as the modification time, so without " +
+				"a snapshot there is nothing to compare: every run re-uploads every file.\n\n" +
+				"This option cannot work out where the snapshot belongs, because it never " +
+				"sees the local side - a backend only knows its own remote. A path must be " +
+				"supplied, which weftsync does per pair from the job file's " +
+				"remote.options (docs/job-file.md 4.1).",
 			Advanced: true,
 		},
 		{

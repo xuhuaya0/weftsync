@@ -5457,3 +5457,90 @@ pair-2: {"update":1487, "bytes":116731164}     ← 116 MB，每次运行都要�
 - **(a)** 加 `state_file`，跑一次，代价是一次 116 MB 上传；
 - **(b)** 用「远端现有 token + 本机 mtime/size」直接生成状态，零上传，且可以用一次
   预览验证（计划应变成 0）—— 需要写一个一次性工具。
+
+## D90 · 为什么这个作业没有 state_file —— 以及一句说了假话的帮助文本（2026-11-13）
+
+用户：**「啥意思，为什么没 state_file」**
+
+### 一、state_file 是什么
+
+一个本地 JSON，记着「每个路径上次上传时，本机文件的 mtime + 大小 + 云端 token」。
+它是增量同步的唯一依据，因为飞书这边根本给不出可比的信息：
+
+| 想知道的 | 飞书给的 | 没有快照时的后果 |
+|---|---|---|
+| 文件多大 | **不给**（E3） | `Size()` 返回 -1，「不可比」 |
+| 什么时候改的 | 给的是**上传时刻** | `ModTime()` 与实际 mtime 每轮都不同 |
+
+所以在 `Object.ModTime()` 的注释里早就写着结论：
+
+> Returning the remote's own modified_time (the upload moment) would make every
+> file look different on every run.
+
+于是没有快照 = 每个文件每轮都判为「有变更」= 全量重传。实测 1487 个文件 / 116 MB。
+
+### 二、为什么这个作业没有
+
+因为它是**可选项，默认就是空**，而 `.scratch/demo/job.toml` 是我为测试手写的最小
+作业，没有写这一项：
+
+```toml
+[[pair]]
+name = "pair-2"
+[pair.local]
+root = "...\R5P0"
+[pair.remote]
+root = "test:"          # ← 没有 remote.options.state_file
+```
+
+界面里其实有这个输入框，提示语是诚实的（`留空 = 不做增量，每轮重传`）。手写的
+作业文件没有这层提示，所以这个坑只在真实同步时才暴露。
+
+### 三、真正该记下的缺陷：帮助文本承诺了不存在的功能
+
+`backend/feishu` 里 `state_file` 这个 rclone option 的帮助原文是：
+
+> Leave empty to derive it from the local and remote roots, **which is the normal case**.
+
+**没有这个推导。** `loadState()` 只有两行：
+
+```go
+f.stPath = f.opt.StateFile
+if f.stPath == "" {
+    return // stateless mode: works, but re-uploads everything each run
+}
+```
+
+而且这个推导在后端层**做不到**：feishu backend 是 rclone 的一个 fs，它只看得见自己
+那个 remote，**永远看不到 local root**。「从两边根目录推导」需要同时知道两侧，那只有
+job 层做得到（`Pair.RemotePath()` 把 options 拼进连接串，它两边都知道）。
+
+也就是说：这句帮助文本描述的是**另一层的职责**，而且是那层没有实现的职责。谁读了它
+都会以为留空是安全的、是被推荐的（原文 the normal case）。
+
+改法：把它换成事实 —— 没有默认值、留空就是每轮全传、以及为什么这个 option 自己推导
+不出来。
+
+### 四、检查
+
+`backend/feishu/stateless_test.go`：
+
+1. `TestStatelessObjectCannotProveUnchanged` —— 无快照时 `Size() == -1`、
+   `ModTime()` 等于上传时刻而不是本机 mtime；同一对象挂上快照后两个值立刻变正确。
+2. `TestStateFileHelpDoesNotPromiseDerivation` —— 帮助文本里不许再出现
+   `derive it` / `derived from` / `the normal case`，且必须出现 `no default` 与
+   `re-uploads every file`。
+
+**破坏两次，都报出**：
+
+| 塞回去 | 报出 |
+|---|---|
+| 帮助改回「leave empty to derive it … the normal case」 | `help still claims derivation ("derive it")` + `("the normal case")` |
+| stateless 的 ModTime 改成返回 0（假装可比） | `ModTime() = 1970-01-01 …, want the upload moment …` |
+
+恢复后全绿。
+
+### 五、没做的
+
+把「没配就自动给一个快照路径」实现出来。这是**改默认行为**，而且第一次带状态运行仍会
+全量上传一遍来记录指纹，所以要先问。见 D89 的 (a)/(b) 两条路。
