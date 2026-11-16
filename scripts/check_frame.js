@@ -1,15 +1,30 @@
 // Frame-layout checker: is there consistent space around the window chrome, and
-// does the toolbar still line up with the work column?
+// does the top bar line up with the two columns below it?
 //
 // Where this came from - the user, looking at the top bar:
 //   「为了美观，这部分的上下左右是不是都应该留一些空间」
+// and later, from an annotated screenshot (2026-11-16):
+//   「左边我画的两个框应该居中对齐（动上面的字），中间我画的两条线要左对齐
+//     （动上面的按钮），右侧我画的两条线要右对齐（动上面的文字）。
+//     上面一排要协调着动，配合着动」
 //
-// Measured before the fix: left/right 8px, top/bottom 5px, against a 13px frame
+// Measured before the first fix: left/right 8px, top/bottom 5px, against a 13px frame
 // radius and 16px card padding. Two more defects fell out of the same measurement:
 //   - .main padding was also 8, and the alignment between 比较 and the work column
 //     depends on those two numbers being equal. Changing one alone breaks it.
 //   - .dock was defined twice; the second block carried gap: 8px, which split the
 //     "one continuous sidebar" into two panels with a gap between them.
+//
+// What it asserts now:
+//   1. menubar left padding == .main left padding == --inset;
+//   2. the top bar's three boundaries coincide with the two columns below it
+//      (brand box == dock box, toolbar left == work left, 已连接 right == work right,
+//      including when .main has grown a scrollbar);
+//   3. one row at 1000px and wider;
+//   4. left/right insets symmetric, measured against the work column's right edge;
+//   5. vertical padding above == below, and not cramped;
+//   6. the dock is one continuous surface (1px separators, no gap);
+//   7. no horizontal overflow.
 //
 // How to run it:
 //   1. Start the daemon, open http://127.0.0.1:5730/ in the browser tools.
@@ -18,8 +33,9 @@
 //
 // It returns { failures: [...], measured: {...} }.
 //
-// To prove the check can fail, set .menubar padding back to "5px 8px" and re-run:
-// side insets and the 比较/work left edge must both be reported.
+// To prove the check can fail, put the brand bar back to content width
+// (`.brandbar { width: auto }`) and re-run: the brand/dock and toolbar/work
+// assertions must both be reported.
 (function () {
   "use strict";
 
@@ -60,29 +76,53 @@
       failures.push(`顶栏左内边距 ${mbPadL}px 与 --inset（${inset}）不一致`);
     }
 
-    // 2. 四段间隙等宽（D82）。
+    // 2. 顶栏是下面两列的表头：三条边界必须落在列边界上（D93）。
     //
-    //    Replaces the older "比较 左边缘 == 工作区左边缘" invariant. Those two
-    //    cannot both hold: aligning 比较 with the work column forces the gap after
-    //    the menus to be `dock + column gap - menu width` = 49px, while even gaps
-    //    force it to the frame inset (16px). The user asked for even gaps on
-    //    2026-11-13 (「横向缩减2/3按钮的一点宽度，让4/5和1/6一样宽」), so the alignment
-    //    is now reported as a number and not asserted.
+    //    2026-11-16 用户在原图上圈了三处并写明「左边两个框居中、中间两条线左对齐、
+    //    右边两条线右对齐、上面一排要协调着动」：
+    //      - 品牌那段的框 == 侧栏的框（两边都重合，中心线因此一致）
+    //      - 工具栏左缘 == 工作区左缘
+    //      - 已连接右缘 == 工作区右缘（含横向滚动条出现时）
     //
-    //    Measured before: 1=17, 4=49, 5=10, 6=17 - four gaps, four values.
+    //    这取代了 D82 的「四段间隙等宽」。两者不能同时成立：间隙 = inset 要求
+    //    比较 = 菜单右缘 + 17 = 233，而列对齐要求 265。用户 11-13 要前者、11-16
+    //    要后者，于是后者作数，间隙改成「外两条 = inset、内两条 = 列间距(8)」。
+    //    间隙仍然测出来放在 measured 里，但它不再是断言 —— 由列推导出来的数字
+    //    本来就是两个来源。
     const cmp = document.getElementById("s-compare-btn");
+    const toolbar = document.querySelector(".toolbar");
     const work = document.querySelector(".work");
     const nav = mb.querySelector("nav");
     const nowEl = document.getElementById("now");
     const connEl = document.getElementById("conn");
     const stopEl = document.getElementById("s-stop-btn");
-    let dLeft = null;
-    if (cmp && work) {
-      dLeft = Math.round(cmp.getBoundingClientRect().x - work.getBoundingClientRect().x);
+    const brandEl = mb.querySelector(".brandbar");
+
+    // 只在真正并排的布局里断言：窄屏时 .main 堆叠，下面没有列可对齐。
+    const sideBySide = window.innerWidth > 700 && work;
+    if (sideBySide && brandEl && toolbar && connEl) {
+      const R = x => Math.round(x);
+      const b = brandEl.getBoundingClientRect();
+      const d = dock.getBoundingClientRect();
+      const t = toolbar.getBoundingClientRect();
+      const wk = work.getBoundingClientRect();
+      const c = connEl.getBoundingClientRect();
+
+      if (R(b.left) !== R(d.left) || R(b.right) !== R(d.right)) {
+        failures.push(`顶栏品牌段 [${R(b.left)},${R(b.right)}] 与侧栏 [${R(d.left)},${R(d.right)}] 不重合 —— ` +
+                      `两段必须是同一个矩形，否则两个框看起来一宽一窄`);
+      }
+      if (R(t.left) !== R(wk.left)) {
+        failures.push(`工具栏左缘 ${R(t.left)}px 与工作区左缘 ${R(wk.left)}px 差 ${R(t.left - wk.left)}px`);
+      }
+      if (R(c.right) !== R(wk.right)) {
+        failures.push(`「已连接」右缘 ${R(c.right)}px 与工作区右缘 ${R(wk.right)}px 差 ` +
+                      `${R(c.right - wk.right)}px（含滚动条情形；--main-gutter 没跟上？）`);
+      }
     }
+
     let barGaps = null;
     if (cmp && nav && connEl && inset) {
-      const want = px(inset);
       const g = {
         "左边框→菜单": Math.round(parseFloat(getComputedStyle(mb).paddingLeft) + 1),
         "菜单→比较": Math.round(cmp.getBoundingClientRect().x - nav.getBoundingClientRect().right),
@@ -91,12 +131,10 @@
         "连接→右边框": Math.round(appR.right - connEl.getBoundingClientRect().right),
       };
       barGaps = g;
-      for (const [name, v] of Object.entries(g)) {
-        if (v === null) continue;                 // clock hidden, or bar wrapped
-        if (Math.abs(v - want) > 1) {
-          failures.push(`顶栏间隙「${name}」= ${v}px，与 --inset（${want}px）不一致`);
-        }
-      }
+    }
+    let dLeft = null;
+    if (cmp && work) {
+      dLeft = Math.round(cmp.getBoundingClientRect().x - work.getBoundingClientRect().x);
     }
 
     // 3. Single row at 1000px and wider. The internal toolbar gaps became
@@ -140,10 +178,18 @@
         }
       }
       if (oneRow) {
-        const last = Math.round(appR.right - Math.max(...boxes.map(b => b.right)));
-        sideGap = { left: first, right: last };
+        // 两边都量到窗框，且右边扣掉工作区滚动条的宽度。
+        //
+        // 不扣会误报：`.main` 出现滚动条时顶栏靠 --main-gutter 让出同样的宽度，
+        // 那是正确行为（顶栏右缘因此落在工作区右缘上），不是不对称。
+        // 也不能拿工作区右缘当基准 —— 左边量的是窗框，两个基准不同就没有意义
+        // （实测那样会报「左 17、右 0」）。
+        const mainEl = document.querySelector(".main");
+        const gutter = mainEl ? Math.max(0, mainEl.offsetWidth - mainEl.clientWidth) : 0;
+        const last = Math.round(appR.right - Math.max(...boxes.map(b => b.right)) - gutter);
+        sideGap = { left: first, right: last, gutter: gutter };
         if (Math.abs(first - last) > 1) {
-          failures.push(`顶栏左右留白不对称：左 ${first}px、右 ${last}px`);
+          failures.push(`顶栏左右留白不对称：左 ${first}px、右 ${last}px（右已扣除滚动条 ${gutter}px）`);
         }
       } else {
         // Wrapped bar: every row starts at the left inset and the rest of each row

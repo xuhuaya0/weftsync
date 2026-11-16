@@ -555,42 +555,53 @@
   }
 
   /* ---- 顶栏：品牌 + 菜单 + 主操作 + 状态，一行 ----
-     以前是两行：菜单栏 32px + 工具栏 55px。而菜单栏右侧一直是空的，工具栏
-     右侧也是空的 —— 两次都没把宽度用满，合起来还白占 40px 高。同一行的右边
-     空着不用，却在下一行重新开一条从左起排的横条，这是最容易看出「没设计过」
-     的那类安排。
+     顶栏不是「一条横带」，它是下面两列的**表头**，所以它的三条边界必须由同两个
+     数字推出来：
 
-     现在一行：左边品牌与菜单，右边比较 / 过滤器 / 同步 / 停止，最右是时钟与连接。
-     窗口窄时右半截自动换到第二行（flex-wrap），而不是把按钮压挤。
+        [ 品牌 + 菜单 ]            [ 比较▾ 过滤器 同步▾ 停止 ]      时钟  已连接
+        |<----- 侧栏 240 ----->|<-g8->|<------- 工作区 ----------->|
+        ^                      ^      ^                            ^
+        inset                  侧栏右缘=工作区左缘                 工作区右缘
 
-     关键一条：.brandbar 的宽度 = 侧栏宽 + 列间距。顶栏内边距和 .main 的相同
-     （都用 --inset），于是工作区的左边缘（外框边 1 + inset + 侧栏 240 +
-     间隙 8）就等于 brandbar 的右边缘 —— 「比较」按钮就严格压在目录对、
-     结果卡的左边界上。这不是凑出来的数：两边用的是同一个 --dock-w，边距用的是
-     同一个 --inset。改其中一处而不改另一处，对齐立刻断掉，所以两处都读变量。
+     做法：menubar 用 grid，第一列写死 var(--dock-w)（和 .dock 同一个变量），
+     列间距 8px（和 .main 的 gap 同一个数字）。于是：
+       - 工具栏左缘 = 1 + inset + dock-w + 8 = 工作区左缘（.work 的 x）
+       - 最后一列贴右边，右内边距 = inset + 工作区滚动条宽
+       - 品牌那一列的右缘 = 侧栏右缘，品牌的字靠左、菜单靠右（两端对齐；两个
+         框因此完全重合，中心线自然一致）
 
-     间隙：`gap: var(--inset)` —— 四种间隙（左边框→菜单、菜单→比较、停止→时钟、
-     时钟→右边框）全部 =16，和左右两条外框留白（17，含 1px 边框）一致。
+     右边那项为什么要加滚动条宽：`.main` 是滚动容器，一旦内容变高就长出竖向滚动条，
+     `.work` 的右缘随之左移 —— 而顶栏不滚动，于是「已连接」会比结果卡右出 10px。
+     实测 1280×380 时 conn 右缘 1263、work 右缘 1253。--main-gutter 由脚本同步，
+     见 syncTopBarGutter()。
 
-     以前是 gap:0 加上一个大号 brandbar：`.brandbar` 写死 `calc(--dock-w + 8px)`
-     = 248px，而里面的内容（weftsync + 文件/工具/帮助）只占 203px，多出的 45px
-     全堆在「帮助」和「比较」之间 —— 实测 4 = 49px，而 5 只有 10px。
-     也就是说：两侧留白 17，中间两条一条 49 一条 10，四个数字四个值。
-
-     代价（明确记下）：brandbar 收回内容宽后，「比较」不再压在目录对的左边界上
-     （从 x=265 移到 233 左右）。两者在数学上不能同时成立：间隙 = 17 要求
-     比较 = 菜单右边缘 + 17 = 233，而对齐要求 比较 = 左边框 + inset + 侧栏 + 间隙 = 265。
-     用户 2026-11-13 明确要求前者，所以放弃后者。 */
+     代价（明确记下，D92 之前的那条取舍被推翻了）：品牌收回内容宽之后「比较」压在
+     目录对左边界上，两件事在数学上不能同时成立（间隙 = inset 要求比较 = 菜单右缘 +
+     17 = 233，对齐要求 265）。用户 2026-11-13 选了前者（四个间隙一样宽），
+     2026-11-16 又要求对齐 —— 于是改成后者：**间隙不再四个等宽**，而是
+     「外两条 = inset(17)，内两条 = 列间距(8)」，每个数字都有出处。 */
   .menubar {
-    display: flex; gap: var(--inset); align-items: center; flex-wrap: wrap;
-    padding: 12px var(--inset); min-height: 46px; flex: none;
+    display: grid;
+    grid-template-columns: var(--dock-w) minmax(0, 1fr) auto auto;
+    column-gap: 8px; row-gap: 8px; align-items: center;
+    padding: 12px calc(var(--inset) + var(--main-gutter, 0px)) 12px var(--inset);
+    min-height: 46px; flex: none;
     background: var(--bg); border-bottom: 1px solid var(--line);
   }
-  /* 内容宽，不再写死 248。写死时那 45px 的多余宽度就变成了「帮助」与「比较」
-     之间的死空白，看起来像少了一个控件。 */
+  /* 品牌那一格整宽 = 侧栏宽，内容两端对齐：标题贴侧栏左缘，菜单贴侧栏右缘。
+     这样顶栏左段和下面侧栏是同一个矩形，也不会把 weftsync 从边框边上推开。 */
   .brandbar {
-    flex: none; display: flex; align-items: center; min-width: 0;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; min-width: 0; width: 100%;
+    grid-column: 1;
   }
+  /* 四格都显式定列，不靠自动排布。
+     自动排布时，`#now` 在 ≤820px 是 display:none，于是 `#conn` 顶上第 3 列，
+     第 4 列空着但那 8px 列间距照样算 —— 实测 760px 时「已连接」右缘 735、
+     结果卡右缘 743，差的就是这 8px。 */
+  .menubar .toolbar { grid-column: 2; }
+  #now { grid-column: 3; }
+  #conn { grid-column: 4; }
   /* 窄屏时侧栏抽到上面（.main 也在 700 断点堆叠），主操作组换到第二行整行起排。
      注意：`.toolbar { flex-basis: 100% }` 必须写在 `.toolbar` 基础规则之后。
      它原来写在前面，而基础规则里的 `flex: 1 1 0` 是简写、含 flex-basis，
@@ -598,6 +609,12 @@
      工具栏挤在品牌右侧的 355px 里自己换行，「比较」跑到 x=212，
      而工作区在 x=13。 */
   @media (max-width: 700px) {
+    /* 窄屏时侧栏变成整行放到上面（.main 也堆叠），下面已经没有「两列」可以对齐，
+       顶栏的列网格失去意义。退回一行内换行：品牌一行，工具栏整行起排。 */
+    .menubar {
+      display: flex; flex-wrap: wrap; gap: 12px;
+      padding: 12px var(--inset);
+    }
     .brandbar { width: auto; }
   }
   .menutitle {
@@ -1926,6 +1943,28 @@ async function postJSON(url, body) {
   return data;
 }
 
+// syncTopBarGutter keeps the top bar's right edge on the work column's.
+//
+// `.main` is the scroll container, so a vertical scrollbar takes width away from
+// `.work` but not from the menubar above it. Without this the right-hand cluster
+// overhangs the result card by exactly the scrollbar width - measured 10px at
+// 1280x380, and invisible at a window tall enough for the content to fit, which is
+// why it looked aligned in the screenshot that started this.
+//
+// The value is read from the DOM instead of assumed: overlay scrollbars report 0,
+// classic ones 10-17 depending on platform, and a constant would be wrong on one
+// of them.
+function syncTopBarGutter() {
+  const main = document.querySelector(".main");
+  if (!main) return;
+  const gutter = Math.max(0, main.offsetWidth - main.clientWidth);
+  const root = document.documentElement;
+  if (root.style.getPropertyValue("--main-gutter") !== gutter + "px") {
+    root.style.setProperty("--main-gutter", gutter + "px");
+  }
+}
+window.addEventListener("resize", syncTopBarGutter);
+
 async function refresh() {
   const conn = document.getElementById("conn");
   try {
@@ -1974,6 +2013,9 @@ async function refresh() {
   syncJobPicker();
   syncSessionPicker();
   updateRunControls();
+  // Last, and after every DOM write above: whether `.main` scrolls is decided by
+  // this render, and the top bar's right edge has to follow it in the same frame.
+  syncTopBarGutter();
   scheduleNextPoll();
 }
 
