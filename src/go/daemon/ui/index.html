@@ -2045,6 +2045,7 @@ async function refresh() {
     last_remedy: j.last_remedy ? j.last_remedy.kind : null,
     can_stop: j.can_stop, mode: j.mode, last_stopped: j.last_stopped,
     plan_at: j.plan ? j.plan.at : null,
+    plan_stale: j.plan ? !!j.plan.stale : false,
   })));
   if (sig !== lastSignature) {
     lastSignature = sig;
@@ -2081,11 +2082,21 @@ function scheduleNextPoll() {
 function afterPlanRun() {
   if (!pendingPlanJob) return;
   const job = ((snapshot && snapshot.jobs) || []).find(j => j.name === pendingPlanJob);
-  if (!job) { pendingPlanJob = null; return; }
+  if (!job) { pendingPlanJob = null; autoPlanFor = ""; return; }
   if (job.state === "running") return;   // still measuring
   const started = pendingPlanJob;
   pendingPlanJob = null;
+  // A preview this page started by itself has to report itself too: the status
+  // line still holds the run's result, and one click produced two facts (the
+  // files changed, then the difference was measured again).
+  const afterRun = autoPlanFor === started;
+  if (afterRun) autoPlanFor = "";
   if (job.plan) openPlanPanel(started);
+  if (!afterRun) return;
+  const st = document.getElementById("s-status");
+  const ran = st ? st.textContent : "";
+  finishStatus(job, "plan");
+  if (st && ran) st.textContent = ran.replace(/。$/, "") + " · " + st.textContent;
 }
 
 // ---------------------------------------------------------------- run status
@@ -2156,7 +2167,52 @@ function updateBusy() {
   const name = busyJob.name;
   busyJob = null;
   finishStatus(job, mode);
+  // 同步改完了两侧，上一张表量的就作废了。
+  //
+  // 原来是直接 restorePlanCard()：把同步之前那张表原封不动放回来。用户的原文是
+  // 「点完同步之后不应该自动显示新的比较结果吗？或者直接显示没有差异，怎么还是
+  // 显示的跟之前一样？」—— 那张表看起来和刚量的一样，实际上已经不是当前状态。
+  // 所以成功的同步跑完之后，自己再量一遍（只读取，不写入任何一侧）。
+  if (mode === "run" && autoCompareAfterRun(name, job)) return;
   restorePlanCard(name);
+}
+
+// autoCompareAfterRun re-measures the pair as soon as a real run has finished, so
+// the card on screen describes the state the user is in rather than the state
+// before the run.
+//
+// Only after a run that ended on its own. A run the user stopped, and a run that
+// failed, carry a different message ("this is what is left"), and scanning again
+// the instant 停止 is pressed would read as if the stop had been ignored. Those
+// cases keep the previous table, which planHTML now labels as history.
+let autoPlanFor = "";   // the job whose preview this page started by itself
+
+function autoCompareAfterRun(name, job) {
+  if (!name || !job || autoPlanFor === name) return false;
+  if (job.last_stopped || job.last_error) return false;
+  autoPlanFor = name;
+  pendingPlanJob = name;   // afterPlanRun() opens the card when it lands
+  // Replace the card now. Leaving the pre-run numbers there is precisely how they
+  // came to look current.
+  //
+  // The status line is left alone: it holds the run's result, and the card already
+  // says 正在比较…. An appended 「正在核对差异…」 looked helpful and was not - it
+  // outlived the scan (measured: the line read 「同步完成… 正在核对差异… · 比较完成
+  // …」 after everything had finished), because nothing owns removing it again.
+  showPlanBusy(name, "plan");
+  const st = document.getElementById("s-status");
+  post("/api/run?job=" + encodeURIComponent(name) + "&plan=1").catch(err => {
+    autoPlanFor = "";
+    pendingPlanJob = null;
+    restorePlanCard(name);
+    if (st) {
+      st.className = "stat err";
+      st.textContent = "同步完成，但重新比较没能启动：" + err.message;
+    }
+  });
+  lastSignature = "";
+  setTimeout(refresh, 300);
+  return true;
 }
 
 // restorePlanCard puts the result area back after a run whose card held the live
@@ -3007,8 +3063,8 @@ function openPlanPanel(name) {
   // Leaving it on 启动中… after a restored plan was measured, and a button that
   // still says "starting" next to a finished run reads as "it is stuck".
   runBtn.textContent = "按此执行";
-  // "Run it" makes no sense for a preview that could not be built.
-  runBtn.disabled = !!job.plan.error;
+  runBtn.disabled = planRunDisabled(job.plan);
+  runBtn.title = planRunTitle(job.plan);
   document.getElementById("plan-close").disabled = false;
   planJob = name;
 
@@ -3056,6 +3112,25 @@ function clearPlan() {
                sel: {}, sort: { key: "", dir: 0 }, on: {} };
 }
 
+// planRunDisabled says whether 按此执行 may act on this plan.
+//
+// Two different reasons, one answer: a preview that could not be built has no
+// plan to execute, and a preview measured before a run describes a state that no
+// longer exists. Acting on either one would promise something the screen cannot
+// back up.
+function planRunDisabled(p) {
+  if (!p) return true;
+  return !!p.error || !!p.stale;
+}
+
+// planRunTitle explains a disabled 按此执行, since the button cannot speak.
+function planRunTitle(p) {
+  if (p && p.stale && !p.error) {
+    return "这张表是上一次同步之前量的，先重新比较一次。";
+  }
+  return "";
+}
+
 function planHTML(p) {
   const parts = [];
   if (p.error) {
@@ -3087,6 +3162,18 @@ function planHTML(p) {
     parts.push(`<div class="note"><strong>这个配置现在真的跑一次会被拒绝。</strong>` +
       `待删除的数量超过 max_delete，保护机制会在任何删除发生之前中止整轮。` +
       `下面的数字是「如果允许，会做什么」。</div>`);
+  } else if (p.stale) {
+    // Not "nothing to change": that sentence is about the present, and this table
+    // is about the past.
+    //
+    // Measured (2026-11-17): the user synced, deleted a file in the cloud, and the
+    // card still showed the pre-sync table - which is why the run's own result card
+    // looked identical to the comparison before it. Their question was
+    // 「点完同步之后不应该自动显示新的比较结果吗？…怎么还是显示的跟之前一样？」
+    parts.push(`<div class="note"><strong>这是上一次同步之前的比较结果。</strong>` +
+      `<div class="hint" style="margin-top:4px">` +
+      `下面的数字和逐文件动作是那时量的，现在两侧已经变了，不足以据此执行。` +
+      `点右上角「比较」重新量一遍。</div></div>`);
   } else if (!p.transferred && !p.deleted && !p.conflicts) {
     parts.push(`<div class="note ok">没有需要变更的内容。</div>`);
   }

@@ -103,6 +103,15 @@ type PlanStatus struct {
 	Conflicts   int   `json:"conflicts"`
 	Transferred int64 `json:"transferred"`
 	Deleted     int64 `json:"deleted"`
+	// Stale means a real run happened after this preview was measured.
+	//
+	// 2026-11-17: the console kept showing the pre-run table after 同步, and a page
+	// reload brought it back looking current. A plan describes "what a run would do
+	// now"; once a run has changed both sides, that sentence is no longer true.
+	//
+	// The data is kept rather than thrown away: it is still the record of what the
+	// run was asked to do. The console labels it and disables 按此执行.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // entry is one scheduled job file.
@@ -562,6 +571,13 @@ func (d *Daemon) execute(ctx context.Context, e *entry, mode RunMode, only []str
 		e.lastOK = err == nil
 		e.lastRes = results
 		e.lastStopped = stopped
+		// A run just changed the two sides, so any preview measured before it no
+		// longer describes "what would happen now". Mark it rather than delete it:
+		// it is still the record of what this run was asked to do, and the console
+		// shows it as history instead of as the current plan.
+		if e.lastPlan != nil {
+			e.lastPlan.Stale = true
+		}
 		if err != nil {
 			e.lastError = err.Error()
 			// A run joins one error per pair, so the error worth explaining is

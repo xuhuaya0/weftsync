@@ -758,6 +758,27 @@ type passOptions struct {
 	maxDeleteSize int64
 }
 
+// splitRestorable separates the conflicts a one-way sync can simply fix from the
+// ones that need a human.
+//
+// Restorable = the recorded cloud copy is gone. For a one-way pair the local file
+// is the source of truth, so the fix is an ordinary upload and nothing can be
+// destroyed: the path is empty on the destination side.
+//
+// The other kinds stay blocking because acting on them silently loses data:
+// overwriting a different file that now carries the name, or adding yet another
+// copy of a name that already has several.
+func splitRestorable(in []Conflict) (restorable, blocking []Conflict) {
+	for _, c := range in {
+		if c.Kind == ConflictKindRemoteDeleted {
+			restorable = append(restorable, c)
+			continue
+		}
+		blocking = append(blocking, c)
+	}
+	return restorable, blocking
+}
+
 // conflictOutcome is what handleConflicts decided.
 func handleConflicts(
 	ctx context.Context,
@@ -783,6 +804,35 @@ func handleConflicts(
 	if len(conflicts.Conflicts) == 0 {
 		return conflictOutcome{ctx: ctx}, nil
 	}
+
+	// 单向同步（update / mirror）里，「云端记录的那份不在了」不是冲突。
+	//
+	// 2026-11-17 用户直接问到点子上：
+	//   「我现在选的同步方式是更新，只从本地向云端更新，有差异就更新，为啥你会
+	//     需要告诉我有冲突呢？」
+	//
+	// 他说得对。单向同步的语义是「以本地为准」：
+	//   - 云端那个文件没了 → 把本地这份传上去。这正是 update / mirror 该做的，
+	//     而且没有任何东西会被覆盖，因为那个路径上是空的。
+	//   - 云端那个名字换成了别的文件 → 传上去就会毁掉别人的文件。这才是冲突。
+	//   - 同一个名字在云端有多条 → 再传一条只会变成三条。这也是冲突。
+	//
+	// 原来的实现把三种信号一视同仁地拦下，于是「自己刚在云盘删掉一个文件」这种
+	// 最普通的情形反而被挡住，还要人去冲突页逐个点「以本地为准」。而这两个动作
+	// 其实是同一件事，只是后者多按了一次键。
+	//
+	// 双向同步不走这里（它用 detectConflictsFn + planPulls）：那边「云端删除」
+	// 是要不要向本地传播的决策，性质完全不同。
+	restorable, blocking := splitRestorable(conflicts.Conflicts)
+	if len(restorable) > 0 {
+		fmt.Fprintf(w, "note: pair %q: %d cloud file(s) the snapshot recorded are gone; "+
+			"they will be uploaded again (a one-way sync never removes cloud files)\n",
+			p.Name, len(restorable))
+	}
+	if len(blocking) == 0 {
+		return conflictOutcome{ctx: ctx}, nil
+	}
+	conflicts.Conflicts = blocking
 
 	paths := reportConflicts(w, p.Name, conflicts.Conflicts)
 	out := conflictOutcome{ctx: ctx, reported: conflicts.Conflicts}
