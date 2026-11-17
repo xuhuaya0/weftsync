@@ -4013,14 +4013,44 @@ function renderPairs() {
       if (!p) return;
       const st = document.getElementById("s-status");
 
-      // 一个作业至少要有一个目录对，而且空目录对也被拒绝（local.root is required）。
-      // 所以「删最后一个」这件事根本不可能成立：以前的做法是删掉后补一个空行，
-      // 屏幕上看起来什么也没发生（行还在，框全空），却把 dirty 置上了。
-      // 直接拒绝并说明原因，比给一个做不到的按钮诚实。
+      // 只剩一个目录对时，减号的意思是「清空这一对的内容」，不是「删掉这一行」。
+      //
+      // 2026-11-17 用户澄清：
+      //   「我不是要删除作业，当改 pair 是最后一个的时候，我是要在 ui 上清掉最后
+      //     一个 pair 中的内容」
+      //
+      // 之前这里直接拒绝（"不能删除最后一个目录对"），把「删不掉的按钮」换成
+      // 「说清为什么删不掉」，方向仍然错了：他要的不是解释，是这个动作。
+      //
+      // 为什么清空后不能立即写盘：服务端拒绝空路径（local.root is required），
+      // 而这个作业唯一的一对就是刚被清空的那一对 —— 提交上去必然失败。所以清空
+      // 之后是「未保存」状态，和「+ 新建一对」完全一样（那一对也是空的，也存不了）。
+      // 屏幕上不会说谎：输入框确实空了、名字旁有 *、底栏写明要点保存。
       if (sessionCfg.pairs.length < 2) {
-        st.className = "stat err";
-        st.textContent = "这已经是最后一个目录对，不能删除 —— 一个作业至少需要一个目录对。" +
-          "要换目录，直接改上面的两个路径。";
+        const ok = confirm(
+          `「${p.name}」是这个作业唯一的目录对，不能整行删除。\n\n` +
+          `清空它的本机目录、云端目录和状态文件？\n` +
+          `（同步设置、变体这些与路径无关的选项会保留）\n\n` +
+          `填好新路径后点「文件 → 保存」，或直接点「比较」/「同步」，都会先保存。`);
+        if (!ok) return;
+
+        // 清掉的是与路径绑定的东西。state_file 一并清掉：快照内容是按
+        // 「本机路径 + 远端路径」记的（见 state.PairID），路径换了旧快照就是废的，
+        // 留着会让新目录沿用旧记录；清空后由后端按新路径自动推导（D91）。
+        p.local_root = "";
+        p.remote_backend = "";
+        p.remote_root = "";
+        p.state_file = "";
+        p.state_file_effective = "";
+        p.state_file_derived = false;
+        p.state_file_error = "";
+
+        // 名字和同步策略保留：它们描述「怎么同步」，不描述「同步哪里」。
+        markDirty();
+        renderPairs();
+        st.className = "stat";
+        st.textContent = `已清空「${p.name}」的路径，填入新路径后点「文件 → 保存」` +
+          `（或直接点比较/同步，会先保存）。`;
         return;
       }
 
@@ -4685,6 +4715,13 @@ document.getElementById("btn-sync-menu").addEventListener("click", ev => {
 // cannot bypass the checks the full form goes through.
 async function saveSession() {
   if (!sessionCfg) throw new Error("没有可保存的配置");
+  // 先把「填了一半的目录对」挡在这里，而不是交给服务端。
+  //
+  // 服务端会拒绝空路径（pair "x": local.root is required），但那是英文、而且只在
+  // 保存的那一刻才出现。清空最后一个目录对之后配置本来就不完整，用户需要现在就
+  // 知道差什么、填哪里 —— 而不是等点「同步」时看到一句 local.root is required。
+  const incomplete = incompletePair();
+  if (incomplete) throw new Error(incomplete);
   const name = sessionCfg.name;
   const r = await fetch("/api/config?job=" + encodeURIComponent(name), {
     method: "POST",
@@ -4694,7 +4731,41 @@ async function saveSession() {
   const body = await r.json().catch(() => null);
   if (!r.ok) throw new Error((body && body.error) || ("HTTP " + r.status));
   dirty = false;
+  // 星号由这里清：saveSession 是唯一把 dirty 置回 false 的地方，把「谁改了状态谁
+  // 更新界面」放在一起，才不会出现「已经存了但名字旁的 * 还亮着」。
+  // 实测就是这样发现的：从清空状态填回路径再保存，磁盘已经对了，星号还在。
+  // 正常点「文件 → 保存」时 saveNow() 也会调 updateTitle()，两条路各自负责一半，
+  // 一旦多出第三条路（比如这次测试直接调 saveSession）就会漏。
+  updateTitle();
+  // 同一道理，底栏那句「有未保存的改动」也得撤掉 —— 否则刚存完的屏幕上写着还没存。
+  // 只清这一句：调用者（保存/比较/同步）随后会写自己的结果，不能替它们决定说什么。
+  const st = document.getElementById("s-status");
+  if (st && /未保存的改动/.test(st.textContent || "")) {
+    st.className = "stat";
+    st.textContent = "";
+  }
   return body;
+}
+
+// incompletePair says which folder pair cannot be saved yet, or "" when all of them
+// can.
+//
+// A pair with an empty local root has no source; with an empty remote root (and no
+// backend name) it has nowhere to go. The server refuses both, so refusing here as
+// well only changes the wording and the timing - and it is the wording that matters,
+// because "清空最后一个目录对" deliberately leaves the config incomplete until the
+// user types the new paths.
+function incompletePair() {
+  const pairs = (sessionCfg && sessionCfg.pairs) || [];
+  for (const p of pairs) {
+    if (!String(p.local_root || "").trim()) {
+      return `目录对「${p.name}」还没有填本机目录，填好之后再保存。`;
+    }
+    if (!String(p.remote_root || "").trim() && !String(p.remote_backend || "").trim()) {
+      return `目录对「${p.name}」还没有填云端目录，填好之后再保存。`;
+    }
+  }
+  return "";
 }
 
 // runSession is the shared body of 比较 and 同步: save, then ask the daemon.
@@ -6402,18 +6473,42 @@ function bindConfig() {
   document.querySelectorAll("#cfg-body button[data-remove]").forEach(b => {
     b.addEventListener("click", () => {
       if (!cfgView || !cfgView.pairs) return;
-      // 同一个约束：零个目录对会被 job.Save 拒绝（no [[pair]] defined），
-      // 所以最后一个不给删。这里只提示，不改数据 —— 表单是要点「保存」才生效的。
+      const i = Number(b.dataset.remove);
+      const pair = cfgView.pairs[i];
+      if (!pair) return;
+
+      // 与主页面同一个规则：唯一的目录对不能整行删掉，改成清空它的内容。
+      // 两个页面编辑的是同一个文件，规则必须一致，否则同一个按钮在两个地方
+      // 含义不同。
       if (cfgView.pairs.length < 2) {
+        pair.local_root = "";
+        pair.remote_backend = "";
+        pair.remote_root = "";
+        // 快照按「本机路径 + 远端路径」记账（state.PairID），路径换了旧快照就是
+        // 废的；清空后由后端按新路径自动推导。
+        pair.state_file = "";
+        pair.state_file_effective = "";
+        pair.state_file_derived = false;
+        pair.state_file_error = "";
+        renderConfig();
+        // 重画之后再写提示：#cfg-save-note 虽然在 #cfg-body 之外、这次不会被清掉，
+        // 但先改数据后说话的顺序不该依赖那个位置关系。
         const note = document.getElementById("cfg-save-note");
         if (note) {
-          note.className = "note err save-note";
-          note.textContent = "这已经是最后一个目录对，不能删除 —— 一个作业至少需要一个目录对。";
+          note.className = "note info save-note";
+          note.textContent = `已清空「${pair.name}」的路径（同步设置保留）。` +
+            `填好新路径后点上面的「保存」。`;
         }
         return;
       }
-      cfgView.pairs.splice(Number(b.dataset.remove), 1);
+
+      cfgView.pairs.splice(i, 1);
       renderConfig();
+      const note = document.getElementById("cfg-save-note");
+      if (note) {
+        note.className = "note info save-note";
+        note.textContent = `已移除「${pair.name}」，点上面的「保存」才会写入文件。`;
+      }
     });
   });
 }
