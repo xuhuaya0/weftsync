@@ -558,22 +558,26 @@
      顶栏不是「一条横带」，它是下面两列的**表头**，所以它的三条边界必须由同两个
      数字推出来：
 
-        [ 品牌 + 菜单 ]            [ 比较▾ 过滤器 同步▾ 停止 ]      时钟  已连接
-        |<----- 侧栏 240 ----->|<-g8->|<------- 工作区 ----------->|
-        ^                      ^      ^                            ^
-        inset                  侧栏右缘=工作区左缘                 工作区右缘
+        [ weftsync 文件 工具 帮助 ]   [ 比较▾ 过滤器 同步▾ 停止 ]   时钟  已连接
+        |<----- 侧栏 240 ----->|<g8>|<------- 工作区 ----------->|  <-g16->
+        ^                      ^     ^                            ^      ^
+        inset                  侧栏右缘=工作区左缘                  |     工作区右缘
+                                                            三者整体内收 16
 
      做法：menubar 用 grid，第一列写死 var(--dock-w)（和 .dock 同一个变量），
      列间距 8px（和 .main 的 gap 同一个数字）。于是：
        - 工具栏左缘 = 1 + inset + dock-w + 8 = 工作区左缘（.work 的 x）
-       - 最后一列贴右边，右内边距 = inset + 工作区滚动条宽
-       - 品牌那一列的右缘 = 侧栏右缘，品牌的字靠左、菜单靠右（两端对齐；两个
-         框因此完全重合，中心线自然一致）
+       - 第 2/3/4 列一起，右内边距 = inset + 滚动条宽 + 16
+       - 品牌那一列宽 = 侧栏宽，里头的四个文字等间距、整组居中（见 .brandbar）
 
-     右边那项为什么要加滚动条宽：`.main` 是滚动容器，一旦内容变高就长出竖向滚动条，
-     `.work` 的右缘随之左移 —— 而顶栏不滚动，于是「已连接」会比结果卡右出 10px。
-     实测 1280×380 时 conn 右缘 1263、work 右缘 1253。--main-gutter 由脚本同步，
+     右边加滚动条宽：`.main` 是滚动容器，一旦内容变高就长出竖向滚动条，`.work`
+     的右缘随之左移 —— 而顶栏不滚动，于是「已连接」会比结果卡右出 10px。实测
+     1280×380 时 conn 右缘 1263、work 右缘 1253。--main-gutter 由脚本同步，
      见 syncTopBarGutter()。
+
+     右边再加 16：2026-11-17 用户要求右侧那组「再左移一些」。此前它们贴满到工作区
+     右缘，最后一个字离窗框只剩一个 inset。--bar-right-gap 就是这一步，默认 = inset，
+     与左侧的品牌段外留白对称；设成 0 就回到贴边。
 
      代价（明确记下，D92 之前的那条取舍被推翻了）：品牌收回内容宽之后「比较」压在
      目录对左边界上，两件事在数学上不能同时成立（间隙 = inset 要求比较 = 菜单右缘 +
@@ -584,15 +588,29 @@
     display: grid;
     grid-template-columns: var(--dock-w) minmax(0, 1fr) auto auto;
     column-gap: 8px; row-gap: 8px; align-items: center;
-    padding: 12px calc(var(--inset) + var(--main-gutter, 0px)) 12px var(--inset);
+    padding: 12px calc(var(--inset) + var(--main-gutter, 0px) + var(--bar-right-gap, 0px)) 12px var(--inset);
     min-height: 46px; flex: none;
     background: var(--bg); border-bottom: 1px solid var(--line);
   }
-  /* 品牌那一格整宽 = 侧栏宽，内容两端对齐：标题贴侧栏左缘，菜单贴侧栏右缘。
-     这样顶栏左段和下面侧栏是同一个矩形，也不会把 weftsync 从边框边上推开。 */
+  /* 品牌那一格宽 = 侧栏宽，四个文字（weftsync / 文件 / 工具 / 帮助）在这个框内
+     **等间距并整组居中**。
+
+     改之前是两端对齐：weftsync 贴 17，菜单贴 257，于是「weftsync → 文件」是 56px，
+     而「文件 → 工具」「工具 → 帮助」各 22px —— 三个间距两个值，读起来像 weftsync
+     和菜单是两件事。用户 2026-11-17：
+       「weftsync 肯定要再向右移动一些，而且和文件工具帮助等间距吧（我的意思是四个
+         文字都要调整）」
+
+     等间距要按**文字边界**算，不是盒子边界：按钮左右各有 10px 内边距（给 hover 背景
+     用），menutitle 原来只有 padding-right: 4。所以给 menutitle 同样的 4px 10px，
+     三处 `10 + gap + 10` 才是同一个数。
+
+     gap 用 4 而不是 8：整组越宽，居中后左边缘越靠左 —— 要让 weftsync 明显右移，
+     间距必须收窄。实测 240 宽框内 gap=4 → 整组 221、左内边 9.5、weftsync 文字左缘
+     从 17 移到 37（右移 20px），而文字间距从 56/22/22 变成 24/24/24。 */
   .brandbar {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 8px; min-width: 0; width: 100%;
+    display: flex; align-items: center; justify-content: center;
+    gap: 4px; min-width: 0; width: 100%;
     grid-column: 1;
   }
   /* 四格都显式定列，不靠自动排布。
@@ -619,9 +637,13 @@
   }
   .menutitle {
     font-size: 12.5px; font-weight: 700; color: var(--ink);
-    padding-right: 4px; white-space: nowrap; letter-spacing: .2px;
+    /* 内边距与菜单按钮一致（4px 10px），**外加同样的 1px 透明边框**：间距按文字
+       边界算，而按钮的盒子含 border，标题不含 —— 少了这 1px，「weftsync → 文件」
+       就比按钮之间窄 1px，实测 25/26/26。透明框不显示，只参与盒模型。 */
+    padding: 4px 10px; border: 1px solid transparent;
+    white-space: nowrap; letter-spacing: .2px;
   }
-  .menubar nav { display: flex; gap: 0; }
+  .menubar nav { display: flex; gap: 4px; }
   .menubar nav button {
     border: 1px solid transparent; background: none; color: var(--ink-2);
     padding: 4px 10px; font-size: 12.5px; border-radius: var(--r-sm);
@@ -635,6 +657,15 @@
      「停止 → 时钟」挤成 10px（其它三处是 16/16/17）。 */
   #now { font-size: 11px; color: var(--muted); margin: 0; white-space: nowrap; }
   #conn { flex: none; }
+  /* 右侧那一组（停止 / 服务器时间 / 已连接）整体再内收一点。
+
+     2026-11-17 用户：「已连接和服务器时间还要停止按钮是吧，是可以再左移一些啊」。
+     在这之前它们贴满到工作区右缘，最后一个字离窗框只剩一个 inset，看着像要掉出去。
+
+     做法：加一列右内边距，而不是单独给 #conn 加 margin —— 后者只挪「已连接」，
+     停止和时钟原地不动，就成了三件东西三个位置。加了内边距，第 2/3/4 列一起左移，
+     三者保持原有间距整体退一步。 */
+  .menubar { --bar-right-gap: var(--inset); }
   /* The server clock is the first thing to go when space runs out: it is the
      least actionable item in the bar, and keeping it wrapped onto two lines made
      the whole bar taller and pushed 已连接 out of view. */

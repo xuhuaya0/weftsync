@@ -112,12 +112,47 @@
         failures.push(`顶栏品牌段 [${R(b.left)},${R(b.right)}] 与侧栏 [${R(d.left)},${R(d.right)}] 不重合 —— ` +
                       `两段必须是同一个矩形，否则两个框看起来一宽一窄`);
       }
+      // 品牌段里的四个文字（weftsync / 文件 / 工具 / 帮助）必须等间距，且整组
+      // 在框内居中。
+      //
+      // 2026-11-17 用户：「weftsync 肯定要再向右移动一些，而且和文件工具帮助等间距
+      // 吧（我的意思是四个文字都要调整）」。改之前是两端对齐，间距 56/22/22。
+      //
+      // 量的是**文字**的边界（Range），不是元素的盒子：盒子含 padding 和 border，
+      // 而按钮有 1px 透明边框、标题没有 —— 少算这 1px 就会把 25/26/26 当成等间距。
+      const titleEl = mb.querySelector(".menutitle");
+      const navBtns = [...mb.querySelectorAll("nav button")];
+      if (titleEl && navBtns.length) {
+        const textRect = el => {
+          const r = document.createRange();
+          r.selectNodeContents(el);
+          return r.getBoundingClientRect();
+        };
+        const seq = [textRect(titleEl), ...navBtns.map(textRect)];
+        const gaps = [];
+        for (let i = 1; i < seq.length; i++) gaps.push(seq[i].left - seq[i - 1].right);
+        const spread = Math.max(...gaps) - Math.min(...gaps);
+        if (spread >= 1) {
+          failures.push(`品牌段四个文字的间距不等：${gaps.map(g => g.toFixed(1)).join(" / ")}px` +
+                        `（极差 ${spread.toFixed(1)}px）`);
+        }
+        const padL = seq[0].left - b.left;
+        const padR = b.right - seq[seq.length - 1].right;
+        if (Math.abs(padL - padR) > 1) {
+          failures.push(`品牌段没有居中：左 ${padL.toFixed(1)}px、右 ${padR.toFixed(1)}px`);
+        }
+      }
       if (R(t.left) !== R(wk.left)) {
         failures.push(`工具栏左缘 ${R(t.left)}px 与工作区左缘 ${R(wk.left)}px 差 ${R(t.left - wk.left)}px`);
       }
-      if (R(c.right) !== R(wk.right)) {
-        failures.push(`「已连接」右缘 ${R(c.right)}px 与工作区右缘 ${R(wk.right)}px 差 ` +
-                      `${R(c.right - wk.right)}px（含滚动条情形；--main-gutter 没跟上？）`);
+      // 右侧不再「贴满到工作区右缘」，而是内收 --bar-right-gap（2026-11-17：
+      // 「已连接和服务器时间还有停止按钮…是可以再左移一些啊」）。所以断言的是
+      // 「内收量等于那个变量」，而不是「等于 0」—— 否则下次调这个变量就会误报。
+      const barRightGap = parseFloat(getComputedStyle(mb).getPropertyValue("--bar-right-gap")) || 0;
+      const actualRightGap = R(wk.right - c.right);
+      if (Math.abs(actualRightGap - barRightGap) > 1) {
+        failures.push(`「已连接」右缘距工作区右缘 ${actualRightGap}px，应为 --bar-right-gap（${barRightGap}px）；` +
+                      `差 ${actualRightGap - barRightGap}px，说明 --main-gutter 或内收量没跟上`);
       }
     }
 
@@ -178,18 +213,19 @@
         }
       }
       if (oneRow) {
-        // 两边都量到窗框，且右边扣掉工作区滚动条的宽度。
+        // 对称现在指：「窗框 → 顶栏左段」与「顶栏右段 → 工作区右缘」相等。
         //
-        // 不扣会误报：`.main` 出现滚动条时顶栏靠 --main-gutter 让出同样的宽度，
-        // 那是正确行为（顶栏右缘因此落在工作区右缘上），不是不对称。
-        // 也不能拿工作区右缘当基准 —— 左边量的是窗框，两个基准不同就没有意义
-        // （实测那样会报「左 17、右 0」）。
-        const mainEl = document.querySelector(".main");
-        const gutter = mainEl ? Math.max(0, mainEl.offsetWidth - mainEl.clientWidth) : 0;
-        const last = Math.round(appR.right - Math.max(...boxes.map(b => b.right)) - gutter);
-        sideGap = { left: first, right: last, gutter: gutter };
+        // 之前是「窗框 → 顶栏右段」等于同一个数，那时顶栏确实贴到工作区右缘。
+        // 2026-11-17 用户要求右侧那组内收，于是右侧的基准变成工作区右缘：
+        // 左边 16（窗框→品牌框）与右边 16（已连接→内容区）才是现在真正的对称，
+        // 拿窗框当右侧基准会把这个故意的内收报成不对称（实测左 17、右 33）。
+        const workEl = document.querySelector(".work");
+        const rightRef = workEl ? workEl.getBoundingClientRect().right : appR.right;
+        const last = Math.round(rightRef - Math.max(...boxes.map(b => b.right)));
+        sideGap = { left: first, right: last, ref: workEl ? "work" : "frame" };
         if (Math.abs(first - last) > 1) {
-          failures.push(`顶栏左右留白不对称：左 ${first}px、右 ${last}px（右已扣除滚动条 ${gutter}px）`);
+          failures.push(`顶栏左右外留白不对称：左 ${first}px（窗框→品牌）、` +
+                        `右 ${last}px（已连接→内容区右缘）`);
         }
       } else {
         // Wrapped bar: every row starts at the left inset and the rest of each row
