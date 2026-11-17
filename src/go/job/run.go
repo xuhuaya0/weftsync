@@ -17,6 +17,7 @@ import (
 	rsync "github.com/rclone/rclone/fs/sync"
 
 	"weftsync/plan"
+	"weftsync/remedy"
 	"weftsync/split"
 )
 
@@ -86,6 +87,16 @@ func (r PassResult) Destructive() int64 { return r.Deleted + r.DeletedDirs }
 type ConflictError struct {
 	Pair  string
 	Count int
+	// Paths are the conflicting paths, so the console can name them.
+	//
+	// Without this the message could only say "1 conflict(s) … review the report
+	// above" while the report card showed nothing: the user had to guess which
+	// file, and the only way to find out was to open the log. Measured on a real
+	// run where one cloud file had been deleted by hand.
+	Paths []string
+	// Kinds maps each path to its conflict kind, e.g. remote-deleted. The console
+	// translates the kind; joining it here keeps the two lists in step.
+	Kinds map[string]string
 	// KeptBoth marks the policy that handles the conflict instead of reporting
 	// it: the copies were kept, so the message must not claim nothing happened.
 	KeptBoth bool
@@ -112,6 +123,45 @@ func (e *ConflictError) Error() string {
 			"or set conflict = \"overwrite\" / \"keep-both\" for this pair",
 		e.Pair, e.Count)
 }
+
+// Remedy lets the console explain this instead of pasting the paragraph above.
+//
+// Kind and fields only; the wording lives in the console, which is Chinese while
+// this package is English. There are no commands: every action is a button on the
+// conflicts page (以本地为准 / 以云端为准), and inventing a CLI spelling for it
+// would send the user to a terminal for something one click away.
+func (e *ConflictError) Remedy() remedy.Remedy {
+	paths := e.Paths
+	if len(paths) == 0 && e.Count > 0 {
+		// Older callers only set Count. Saying "1 conflict" without a name is still
+		// better than nothing, but do not invent a path.
+		paths = nil
+	}
+	fields := map[string]string{
+		"pair":  e.Pair,
+		"count": fmt.Sprint(e.Count),
+		"paths": strings.Join(paths, "\n"),
+	}
+	// Kinds travel as "path\tkind" lines; the console maps the token to Chinese.
+	if len(e.Kinds) > 0 {
+		var b strings.Builder
+		for _, p := range paths {
+			if k := e.Kinds[p]; k != "" {
+				b.WriteString(p)
+				b.WriteString("\t")
+				b.WriteString(k)
+				b.WriteString("\n")
+			}
+		}
+		fields["kinds"] = strings.TrimRight(b.String(), "\n")
+	}
+	if e.KeptBoth {
+		fields["kept_both"] = "true"
+	}
+	return remedy.Remedy{Kind: "conflict", Fields: fields}
+}
+
+var _ remedy.Carrier = (*ConflictError)(nil)
 
 // PairResult is the outcome for one pair.
 type PairResult struct {
@@ -491,8 +541,17 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 			return res, err
 		}
 		if handled.abort {
+			kinds := make(map[string]string, len(handled.reported))
+			paths := make([]string, 0, len(handled.reported))
+			for _, c := range handled.reported {
+				paths = append(paths, c.Path)
+				if c.Kind != "" {
+					kinds[c.Path] = c.Kind
+				}
+			}
 			return res, &ConflictError{
 				Pair: p.Name, Count: len(handled.reported),
+				Paths: paths, Kinds: kinds,
 				KeptBoth: spec.Conflict == ConflictKeepBoth,
 			}
 		}

@@ -268,6 +268,22 @@
   .remedy .rm-what b { color: var(--ink); }
   .remedy .rm-what code { background: var(--tint); border: 1px solid var(--line); }
   .remedy .rm-fix { margin-top: 10px; font-weight: 700; }
+  /* 冲突清单：一行一个路径，路径用等宽字，类型标签靠后。
+     路径是这条说明里唯一能对账的东西，所以不折行、横向可滚 —— 折成两行的
+     文件名没法复制去搜。 */
+  .remedy .rm-list {
+    margin: 6px 0 0; padding: 0; list-style: none;
+  }
+  .remedy .rm-list li {
+    display: flex; gap: 8px; align-items: baseline;
+    padding: 2px 0; min-width: 0;
+  }
+  .remedy .rm-list code {
+    background: var(--card); border: 1px solid var(--line);
+    overflow-x: auto; white-space: pre; max-width: 62%;
+  }
+  .remedy .rm-kind { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+  .remedy .rm-more { color: var(--muted); font-size: 11.5px; }
   /* 命令一行一条：编号 + 命令 + 复制。命令用等宽字体并允许横向滚动，
      不让它换行成两行 —— 换行后的命令复制出去常常少一个参数。 */
   .remedy .rm-step { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
@@ -2163,7 +2179,12 @@ function finishStatus(job, mode) {
     const plan = job.plan;
     if (jobErr || (plan && plan.error)) {
       st.className = "stat err";
-      st.textContent = "比较失败：" + (jobErr || plan.error);
+      // 冲突停下不是「失败」：它是一次有结论的比较，结论是「这些路径需要你定」。
+      // 而且原文是 400 字的英文，底栏放不下也不该放 —— 细节在上面的说明块里。
+      const n = plan ? conflictAbort(plan) : 0;
+      st.textContent = n
+        ? `比较停下：${n} 个路径和同步记录对不上（见上面的说明）`
+        : "比较失败：" + (jobErr || plan.error);
       return;
     }
     const t = planTotals(plan);
@@ -2187,7 +2208,9 @@ function finishStatus(job, mode) {
     st.className = "stat err";
     // 标题本身已经是一句完整的话（「上次同步没有收尾：…」），再加「同步失败：」
     // 就变成两个冒号接两个判断。
-    st.textContent = rt ? rt.title + "（见上面的说明）" : "同步失败：" + jobErr;
+    st.textContent = rt
+      ? remedyTitle(rt, (job.last_remedy && job.last_remedy.fields) || {}) + "（见上面的说明）"
+      : "同步失败：" + jobErr;
     return;
   }
   const bits = [`传输 ${a.transferred || 0} 项`];
@@ -2221,6 +2244,37 @@ const REMEDY_TEXT = {
       apply: "确认上面列出的就是要删的那条，再执行。飞书的删除不可撤销。",
     },
   },
+  // 冲突：本轮主动停下，什么都没改。
+  //
+  // 这条以前没有类型，界面只能落到下面的兜底文案「这一条还没有对应的处理说明」——
+  // 而我们其实知道全部细节（哪个文件、哪种冲突）。用户实测：在云盘删掉一个文件再
+  // 同步，屏幕上同一段英文出现三次，且**没有一处说清是哪个文件**（D97）。
+  conflict: {
+    title: f => {
+      const n = Number(f.count || 0) || (f.paths ? f.paths.split("\n").length : 0);
+      return `同步停下了：云端有 ${n} 个文件和同步记录对不上`;
+    },
+    what: f => {
+      const kept = f.kept_both === "true";
+      const lines = conflictLines(f);
+      const list = lines.length
+        ? `<ul class="rm-list">` + lines.slice(0, 8).map(x =>
+            `<li><code>${esc(x.path)}</code> <span class="rm-kind">${esc(x.label)}</span></li>`
+          ).join("") +
+          (lines.length > 8 ? `<li class="rm-more">还有 ${lines.length - 8} 个，见「冲突」页</li>` : "") +
+          `</ul>`
+        : "";
+      return `<b>这一轮没有上传、覆盖或删除任何文件。</b>` +
+        (kept
+          ? `冲突策略是「两边都留」：你的版本已经用新文件名传上去了，云端那份没动。`
+          : `同步记录里记着这些路径，而云端的现状已经对不上它 —— ` +
+            `常见原因是你在云盘里删了或换了文件，也可能是别的程序动过。`) +
+        list;
+    },
+    steps: {
+      // 没有命令：处理入口就是「冲突」页上的两个按钮，把人赶去终端反而更远。
+    },
+  },
   // 认不出来的失败也要有去处，否则用户手里只剩一个红字。
   "": {
     title: "上次同步失败了",
@@ -2229,6 +2283,33 @@ const REMEDY_TEXT = {
     steps: {},
   },
 };
+
+// conflictLines turns the remedy's two parallel fields (paths, kinds) into rows
+// the block can print.
+//
+// kinds travels as "path\tkind" lines because Remedy.Fields is a flat string map;
+// a path that is missing from it still gets a row, with no label rather than a
+// wrong one.
+function conflictLines(f) {
+  const paths = (f.paths || "").split("\n").filter(Boolean);
+  const kinds = {};
+  for (const line of (f.kinds || "").split("\n")) {
+    if (!line) continue;
+    const i = line.indexOf("\t");
+    if (i > 0) kinds[line.slice(0, i)] = line.slice(i + 1);
+  }
+  return paths.map(p => ({ path: p, label: CONFLICT_KIND[kinds[p]] || "" }));
+}
+
+// remedyTitle resolves a REMEDY_TEXT title.
+//
+// Some titles need a number from the fields ("云端有 3 个文件…"), so the entry may
+// hold a function. Three places print a title - the failure block, the job table
+// and the status bar - and they must not each reinvent this.
+function remedyTitle(entry, fields) {
+  if (!entry) return "";
+  return typeof entry.title === "function" ? entry.title(fields || {}) : (entry.title || "");
+}
 
 // latestOutcome is the newest thing that finished for this job - a run or a
 // comparison, whichever is later.
@@ -2333,7 +2414,7 @@ function renderRemedy() {
   host.className = "remedy";
   host.innerHTML =
     `<div class="rm-head">
-       <strong>${esc(text.title)}</strong>
+       <strong>${esc(remedyTitle(text, f))}</strong>
        <span class="grow"></span>
        <button class="icon-btn rm-dismiss"
                title="先收起。同一件事不再提示，下次再出问题会重新出现">✕</button>
@@ -2392,7 +2473,8 @@ function renderJobs() {
       const r = j.last_remedy;
       const title = r ? (REMEDY_TEXT[r.kind] || REMEDY_TEXT[""]) : null;
       if (title) {
-        result += `<div class="sub bad" title="${esc(j.last_error || "")}">${esc(title.title)}</div>`;
+        const t = remedyTitle(title, (r && r.fields) || {});
+        result += `<div class="sub bad" title="${esc(j.last_error || "")}">${esc(t)}</div>`;
       } else if (j.last_error) {
         result += `<div class="mono bad">${esc(j.last_error)}</div>`;
       }
@@ -2620,6 +2702,22 @@ function conflictDetail(c) {
   }
 }
 
+// pullButton renders 以云端为准, or a disabled explanation when there is nothing to
+// pull.
+//
+// For `remote-deleted` the cloud copy is gone, so "take the cloud version" has no
+// version to take: the action ends in `read remote "x": object not found`. A button
+// that cannot work is worse than no button - the user clicks it, gets a stack-trace
+// sentence, and concludes the tool is broken. The disabled state says why in the
+// tooltip instead, and 以本地为准 (re-upload) remains the whole answer.
+function pullButton(c) {
+  const attrs = `data-resolve="pull" data-job="${esc(c.job)}" data-pair="${esc(c.pair)}" data-path="${esc(c.path)}"`;
+  if (c.kind === "remote-deleted") {
+    return `<button disabled title="云端那份已经没了，没有可以下载的内容；要用本机那份就点「以本地为准」">以云端为准</button>`;
+  }
+  return `<button ${attrs} title="下载云端那份覆盖本地文件">以云端为准</button>`;
+}
+
 function renderConflicts() {
   const tbody = document.getElementById("conflicts");
   const rows = [];
@@ -2677,8 +2775,7 @@ function renderConflicts() {
     <td class="actions">
       <button data-resolve="push" data-job="${esc(c.job)}" data-pair="${esc(c.pair)}"
               data-path="${esc(c.path)}" title="下次运行用本地版覆盖云端那一份">以本地为准</button>
-      <button data-resolve="pull" data-job="${esc(c.job)}" data-pair="${esc(c.pair)}"
-              data-path="${esc(c.path)}" title="下载云端那份覆盖本地文件">以云端为准</button>
+      ${pullButton(c)}
     </td>
   </tr>`).join("");
 
@@ -2964,8 +3061,28 @@ function planHTML(p) {
   if (p.error) {
     // A failed preview and a clean preview both produce zero counts. Saying
     // "nothing to change" here would be exactly the wrong message.
-    parts.push(`<div class="note err"><strong>预览失败，不能据此判断有没有变更。</strong>` +
-      `<div class="mono" style="margin-top:6px">${esc(p.error)}</div></div>`);
+    //
+    // 2026-11-17: this used to print `p.error` verbatim, which for a conflict abort
+    // is a 400-character English paragraph whose advice ("review the report above")
+    // pointed at a card that showed nothing but the same paragraph. The user hit it
+    // with a deleted cloud file and could not learn WHICH file.
+    //
+    // Now: the failure block above already carries the explanation, the paths and
+    // where to act, so this card only needs to say what state it is in and stay
+    // short. A conflict is the one case where we can name the cause without
+    // guessing, so say it; anything else keeps the raw text, because an
+    // unrecognised failure is better shown than summarised.
+    if (conflictAbort(p)) {
+      const n = conflictAbort(p);
+      parts.push(`<div class="note err"><strong>` +
+        `比较停下：云端有 ${n} 个文件和同步记录对不上，本轮什么都没改。</strong>` +
+        `<div class="hint" style="margin-top:4px">` +
+        `逐条处理在右侧「冲突」页（每个文件可以选以本地为准 / 以云端为准）。` +
+        `上面的红框里列了具体是哪些文件。</div></div>`);
+    } else {
+      parts.push(`<div class="note err"><strong>预览失败，不能据此判断有没有变更。</strong>` +
+        `<div class="mono" style="margin-top:6px">${esc(p.error)}</div></div>`);
+    }
   } else if (p.guard_hit) {
     parts.push(`<div class="note"><strong>这个配置现在真的跑一次会被拒绝。</strong>` +
       `待删除的数量超过 max_delete，保护机制会在任何删除发生之前中止整轮。` +
@@ -3003,6 +3120,20 @@ function planHTML(p) {
   // 逐文件动作表：这是「对比」和「只看数字」的分界。
   parts.push(compareHTML(p));
   return parts.join("");
+}
+
+// conflictAbort returns how many paths conflicted, or 0 when this preview's error
+// is something else.
+//
+// Read from the data rather than from the message: the results carry the conflict
+// list, so "the run stopped because of conflicts" is answerable without matching
+// English prose. String matching here would break the moment the wording changes,
+// and it would silently turn a conflict back into an opaque error.
+function conflictAbort(p) {
+  if (!p) return 0;
+  let n = 0;
+  for (const r of p.results || []) n += (r.conflicts || []).length;
+  return n;
 }
 
 // ---- 对比视图（FreeFileSync 的双栏 + 流程）----

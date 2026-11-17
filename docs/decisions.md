@@ -6113,3 +6113,109 @@ TOML 解析器报 `invalid character at start of key: 茂`（BOM 的 `EF BB BF` 
 或者一开始就用 `[System.IO.File]::WriteAllText(..., UTF8Encoding($false))`。
 这个坑在 windows-terminal 笔记里记着，还是踩了 —— 因为「写临时文件」看起来不像
 「需要小心编码」的操作。
+
+## D97 · 冲突停下时，界面连「哪个文件」都不说（2026-11-17）
+
+用户：
+
+> 我同步了一次之后在云盘删除了一个文件，再次点击同步报错
+
+截图里是同一段 400 字英文出现了 **三遍**：顶部说明块、对比结果卡、底栏。而三处
+**都没有说清是哪个文件**。
+
+### 一、实际数据一直都在
+
+`/api/status` 的 `plan.results[0].conflicts` 里是完整的：
+
+```
+path   = R5_SS103_HV_135_20250331_135012.xlsx
+kind   = remote-deleted
+detail = the file recorded in the snapshot is no longer in the folder
+```
+
+后端检测是对的，`PairResult.Conflicts` 也一直带着它。问题是三处渲染都只用了
+`plan.error` 那句人写的英文，或者干脆落到了「这一条还没有对应的处理说明」的兜底
+（因为 `ConflictError` 没有实现 `remedy.Carrier`）。
+
+### 二、为什么原设计会这样
+
+冲突检测的原始形态只服务两种人：看日志的人和看 CLI 的人，两者都是英文。所以
+`ConflictError.Error()` 写成了一段带建议的长句，并且假定读者能看到 `reportConflicts`
+打印在日志里的清单。加了界面之后，这句话被直接搬到屏幕上，但**清单没有跟着上去**。
+
+### 三、改法：让错误带上事实，界面负责措辞
+
+沿用 D88/D90 的做法：
+
+| 层 | 内容 |
+|---|---|
+| `ConflictError` | 新增 `Paths []string` + `Kinds map[string]string`，并实现 `Remedy()`（kind=`conflict`，fields: pair / count / paths / kinds / kept_both） |
+| 界面 `REMEDY_TEXT.conflict` | 中文标题（带数量）、原因说明、路径清单（每行一个，附中文类型标签） |
+| 结果卡 | 一句话：「比较停下：云端有 N 个文件和同步记录对不上，本轮什么都没改」+ 指到冲突页 |
+| 底栏 | 「比较停下：N 个路径和同步记录对不上（见上面的说明）」 |
+
+字符串匹配被明确避开：`conflictAbort(p)` 数的是 `results[].conflicts` 的长度 ——
+**由数据回答「这次是不是因为冲突停下」**，而不是去正则那句英文。否则后端改一次
+措辞，冲突就会悄悄退回成一个不透明的错误。
+
+三处各自说不同的话（谁负责什么很清楚）：说明块讲原因和文件，结果卡讲状态，
+底栏只够扫一眼。
+
+### 四、顺带修掉一个「能点但必然失败」的按钮
+
+冲突页对 `remote-deleted` 也给了「以云端为准」，而云端那份已经没了 —— 点了必然
+报 `read remote "x": object not found`。现在这一格禁用并在 title 里说明：
+
+> 云端那份已经没了，没有可以下载的内容；要用本机那份就点「以本地为准」
+
+`remote-replaced` 仍然可点（那里确实有东西可下载），检查脚本两边都断言。
+
+### 五、真实链路验证（不是只看单测）
+
+用户的场景原样复现：云盘删掉 `R5_SS103…xlsx` → 点「比较」→
+
+```
+说明块：同步停下了：云端有 1 个文件和同步记录对不上
+        这一轮没有上传、覆盖或删除任何文件。…
+        R5_SS103_HV_135_20250331_135012.xlsx   云端已删除
+结果卡：比较停下：云端有 1 个文件和同步记录对不上，本轮什么都没改。
+底栏：  比较停下：1 个路径和同步记录对不上（见上面的说明）
+```
+
+然后点冲突页的「以本地为准」→ 重新比较：
+
+```
+比较完成：1 项要处理          conflicts = 0
+对比结果表：R5_SS103…xlsx  19.9 KiB  →
+```
+
+也就是这条冲突真的被解决了，下一轮会把那份重新传上去。
+
+### 六、检查
+
+Go（`job/conflict_remedy_test.go`，4 条）：穿过 `errors.Join` 能找到载体；kind、
+pair、count、paths、kinds 都在；**没有 paths 时不编造文件名**；keep-both 有标记；
+`Error()` 文本仍然点名目录对（日志和 CLI 还需要它）。
+
+界面（`scripts/check_conflict_ui.js`，10 条断言）：说明块中文标题/数量/文件名/类型
+标签/无英文；结果卡「比较停下」+「什么都没改」+无英文；底栏中文带数字；以及两个按钮
+在该禁用/该可用的两种情况下都对。
+
+**破坏三次，都被报出**：
+
+| 塞回去 | 报出 |
+|---|---|
+| 删掉 `REMEDY_TEXT.conflict` | 标题变成「上次同步失败了」、不说数量、不列文件名、没有类型标签（4 条） |
+| 去掉 `pullButton` 的 remote-deleted 分支 | 「以云端为准」还能点 + 没有说明原因（2 条） |
+| `planHTML` 改回直接印 `p.error` | 结果卡没有「比较停下」「什么都没改」，且出现英文原文（3 条） |
+
+### 七、写检查脚本时踩的两个坑（都记下来）
+
+1. **`snapshot` / `CONFLICT_KIND` 是 `let`/`const`，不是 window 属性。** 检查脚本想
+   把假数据塞进 `snapshot` 来驱动冲突表，结果塞进去的是 `window.snapshot`，页面读的
+   是脚本作用域的 `snapshot` —— 表一直空着。只有 `function` 声明（`remedySubject`、
+   `renderConflicts`、`pullButton`）能这样替换。所以冲突表本身没法用假数据驱动，
+   脚本改成断言两个按钮的生成函数，表的数据绑定靠上面那次真机验证。
+2. **`latestOutcome()` 在 `last_run` 与 `plan.at` 同秒时取 run。** 我的假数据两个时间
+   戳相同、`last_ok: true`，于是「最近一次结果是成功的」，说明块正确地保持隐藏 ——
+   看起来像说明块坏了。修法是把 `last_run` 调早。这条也写进了脚本注释。
