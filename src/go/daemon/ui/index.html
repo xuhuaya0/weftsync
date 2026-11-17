@@ -4006,15 +4006,56 @@ function renderPairs() {
     el.addEventListener("click", () => openPairDlg(Number(el.dataset.idx)));
   });
   host.querySelectorAll(".p-remove").forEach(el => {
-    el.addEventListener("click", () => {
+    el.addEventListener("click", async () => {
+      if (!sessionCfg) return;
       const i = Number(el.dataset.idx);
       const p = sessionCfg.pairs[i];
-      if (!confirm(`删除目录对「${p.name}」？\n\n这只改配置，不会动任何文件。`)) return;
+      if (!p) return;
+      const st = document.getElementById("s-status");
+
+      // 一个作业至少要有一个目录对，而且空目录对也被拒绝（local.root is required）。
+      // 所以「删最后一个」这件事根本不可能成立：以前的做法是删掉后补一个空行，
+      // 屏幕上看起来什么也没发生（行还在，框全空），却把 dirty 置上了。
+      // 直接拒绝并说明原因，比给一个做不到的按钮诚实。
+      if (sessionCfg.pairs.length < 2) {
+        st.className = "stat err";
+        st.textContent = "这已经是最后一个目录对，不能删除 —— 一个作业至少需要一个目录对。" +
+          "要换目录，直接改上面的两个路径。";
+        return;
+      }
+
+      if (!confirm(`删除目录对「${p.name}」？\n\n` +
+                   `会立即写入配置文件，不会改动任何文件。`)) return;
+
+      // Was something already unsaved? Saving now writes that too, and the user
+      // must be told rather than discovering it later.
+      const alsoSaved = dirty;
       sessionCfg.pairs.splice(i, 1);
-      // The job needs at least one pair to exist; the server rejects an empty job.
-      if (!sessionCfg.pairs.length) sessionCfg.pairs.push(newPair());
-      markDirty();
       renderPairs();
+      try {
+        await saveSession();
+        // 2026-11-17 bug: this handler used to only markDirty(), so the row
+        // disappeared from the screen while the file still had the pair — a page
+        // refresh brought it back. A row vanishing is a claim that it is gone, so
+        // the delete now writes immediately.
+        //
+        // The comparison in the result card was computed for the pair set that no
+        // longer exists; keeping it on screen would show rows for a pair the user
+        // just deleted.
+        clearPlan();
+        updateTitle();
+        const where = sessionCfg.file || "配置文件";
+        st.className = "stat done";
+        st.textContent = `已删除目录对「${p.name}」，已写入 ${where}。` +
+          (alsoSaved ? "其它未保存的改动也一并写入了。" : "") +
+          "比较结果已清空，请重新比较。";
+      } catch (e) {
+        // Put the screen back on what the file actually says. Leaving the row
+        // deleted after a failed save would recreate the very lie this fixes.
+        await loadSession();
+        st.className = "stat err";
+        st.textContent = "删除没有保存，已按磁盘内容恢复：" + e.message;
+      }
     });
   });
   // + sits on each row and inserts below it, the way the pair rows work in FFS:
@@ -6360,6 +6401,17 @@ function bindConfig() {
   }
   document.querySelectorAll("#cfg-body button[data-remove]").forEach(b => {
     b.addEventListener("click", () => {
+      if (!cfgView || !cfgView.pairs) return;
+      // 同一个约束：零个目录对会被 job.Save 拒绝（no [[pair]] defined），
+      // 所以最后一个不给删。这里只提示，不改数据 —— 表单是要点「保存」才生效的。
+      if (cfgView.pairs.length < 2) {
+        const note = document.getElementById("cfg-save-note");
+        if (note) {
+          note.className = "note err save-note";
+          note.textContent = "这已经是最后一个目录对，不能删除 —— 一个作业至少需要一个目录对。";
+        }
+        return;
+      }
       cfgView.pairs.splice(Number(b.dataset.remove), 1);
       renderConfig();
     });
