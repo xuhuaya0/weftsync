@@ -101,6 +101,42 @@ def main() -> int:
     need('row("版本"' in text and 'row("构建"' in text,
          "关于窗口没有把版本号与构建号分成两行")
 
+    # ---- 5. 对话框里不许出现「奇怪的东西」
+    #
+    # 用户划掉了 2026-11-18 那一版里的这句：
+    #   会自动补 .toml。已存在的文件会被拒绝 —— 另存为不该悄悄覆盖。
+    # 它解释的是实现者的顾虑，不是用户要做的事。同类的一起去掉。
+    for gone, why in [
+        ("另存为不该悄悄覆盖", "「另存为不该悄悄覆盖」这种解释设计意图的话又回来了"),
+        ("而不是隐藏", "「…而不是隐藏」这种解释设计意图的话又回来了"),
+        ("说明它压根没传给", "口语化的「压根」又回来了"),
+    ]:
+        need(gone not in text, why)
+
+    # 保存失败必须是可读的中文，且不带整条路径。
+    need("function plainConfigError(" in text,
+         "缺少 plainConfigError：服务端的 toml 措辞会被原样显示")
+    # 注意：JS 里这行是正则字面量，源码中带反斜杠（remote\\.root），
+    # 所以这里要和源码一字不差，否则就是检查工具自己在报假问题。
+    for pat in (r'local\\.root is required', r'remote\\.root is required'):
+        need(re.search(pat, text) is not None,
+             f"plainConfigError 没有处理 {pat}")
+    need("plainConfigError(e.message)" in text,
+         "有地方还在直接显示 e.message")
+
+    # 另存为要先用 incompletePair 拦一次，而不是等服务器拒绝。
+    need(
+        re.search(r"saveas-ok\"\)\.addEventListener[\s\S]{0,900}incompletePair\(\)", text)
+        is not None,
+        "另存为没有在提交前检查目录对是否填全",
+    )
+
+    # 后端要把「the edited config is not valid: <路径>: 」这两层剥掉。
+    need("func saveErrText(" in text or "func saveErrText(" in go,
+         "后端缺少 saveErrText")
+    need("the edited config is not valid: " in go,
+         "saveErrText 没有识别要剥掉的那层包装")
+
     if fails:
         for f in fails:
             print("FAIL:", f)

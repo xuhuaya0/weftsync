@@ -602,7 +602,7 @@ func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 		res, err := a.D.ApplyConfigView(name, in)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeError(w, http.StatusBadRequest, saveErrText(err))
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{

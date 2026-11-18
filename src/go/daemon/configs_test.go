@@ -220,6 +220,87 @@ func TestListConfigFilesErrorIsShortAndPathFree(t *testing.T) {
 	}
 }
 
+// A config that could not be saved must come back as the reason only.
+//
+// job.Save reports validation failures as
+//
+//	the edited config is not valid: <absolute path>: <reason>
+//
+// which, shown verbatim in the save-as dialog, is what the user asked to have
+// removed (「能不能把这类奇怪的东西删掉」, with a screenshot of exactly that string).
+// The path is the client's own and already on screen; the wrapper repeats the
+// heading. Both go; the reason stays.
+func TestSaveAsErrorIsTheReasonOnly(t *testing.T) {
+	dir := t.TempDir()
+	d := mustDaemon(t, dir)
+	api := &API{D: d}
+
+	// A pair with no local root is invalid, and is what a half-filled form sends.
+	in := ConfigView{Name: "bad"}
+	in.Pairs = []PairView{{Name: "pair-1", LocalRoot: "", RemoteRoot: ":local:C:/tmp/dst"}}
+	body, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	target := filepath.Join(dir, "bad.toml")
+	rec := httptest.NewRecorder()
+	api.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/config/save-as?path="+target, strings.NewReader(string(body))))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if strings.Contains(out.Error, "the edited config is not valid") {
+		t.Errorf("the wrapper is still there: %q", out.Error)
+	}
+	if strings.Contains(out.Error, dir) {
+		t.Errorf("the error repeats the path the dialog already shows: %q", out.Error)
+	}
+	if !strings.Contains(out.Error, "local.root is required") {
+		t.Errorf("the reason was lost: %q", out.Error)
+	}
+}
+
+// The "file exists" refusal is about the name, not about what the code declines
+// to do. Kept as a test because the old wording leaked into the dialog as
+// "te.toml already exists; pick another name (its previous content would be
+// overwritten)".
+func TestSaveAsExistingFileSaysItInChinese(t *testing.T) {
+	dir := t.TempDir()
+	taken := oneConfig(t, dir, "taken")
+	d, err := New([]string{taken}, io.Discard)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	api := &API{D: d}
+
+	body, _ := json.Marshal(getConfig(t, api, "taken"))
+	rec := httptest.NewRecorder()
+	api.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/config/save-as?path="+taken, strings.NewReader(string(body))))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if strings.Contains(out.Error, "would be overwritten") {
+		t.Errorf("the policy explanation is still there: %q", out.Error)
+	}
+	if !strings.Contains(out.Error, "已经存在") {
+		t.Errorf("the dialog would show English: %q", out.Error)
+	}
+}
+
 // mustDaemon builds a daemon whose single config lives in dir.
 func mustDaemon(t *testing.T, dir string) *Daemon {
 	t.Helper()

@@ -1508,8 +1508,7 @@
     </div>
     <div id="open-list" class="browse-list" style="max-height:44vh;border:1px solid var(--line);border-radius:var(--r-sm)"></div>
     <div class="filter-hint" style="margin-top:8px">
-      只列出 weftsync 的 <code>.toml</code> 配置<span id="open-skip"></span>。
-      打不开的会标出原因，而不是隐藏。
+      只列出 weftsync 配置<span id="open-skip"></span>。
     </div>
     <span id="open-err" class="sub danger" style="margin:6px 0 0"></span>
   </div>
@@ -1564,9 +1563,6 @@
     <div class="filter-hint" id="saveas-skip" style="margin-top:6px"></div>
     <div class="dlg-sect" style="margin-top:12px">文件名</div>
     <input type="text" id="saveas-name" style="width:100%" placeholder="例如 work-backup">
-    <div class="filter-hint">
-      会自动补 <code>.toml</code>。已存在的文件会被拒绝 —— 另存为不该悄悄覆盖。
-    </div>
     <span id="saveas-err" class="sub danger" style="margin:6px 0 0"></span>
   </div>
   <div class="dlg-foot">
@@ -1989,6 +1985,33 @@ function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   }[c]));
+}
+
+// plainConfigError turns a config-validation failure into one sentence naming the
+// field to fix.
+//
+// The server speaks in toml keys - `pair "pair-1": local.root is required` - which
+// is precise and useless on screen: "local.root" is not the label on any control,
+// and "pair-1" is an internal default the user never typed. The four messages
+// below are the ones a half-filled form actually produces; anything else passes
+// through unchanged rather than being mangled by a clever guess.
+//
+// 2026-11-18, the report was a screenshot of the raw version:
+// 「能不能把这类奇怪的东西删掉」.
+function plainConfigError(msg) {
+  const s = String(msg == null ? "" : msg).trim();
+  let m = s.match(/^pair "([^"]*)":\s*local\.root is required$/);
+  if (m) return `目录对「${m[1]}」的本地目录还没填。`;
+  m = s.match(/^pair "([^"]*)":\s*remote\.root is required$/);
+  if (m) return `目录对「${m[1]}」的云端目录还没填。`;
+  if (s === "no [[pair]] defined") return "至少要有一个目录对。";
+  if (/^the job is running/.test(s)) return "作业正在运行，先停止再保存。";
+  // AddConfig: two files that both call themselves the same job.
+  m = s.match(/^(.+) is already the config named "([^"]*)" \(from (.+?)\)/);
+  if (m) return `「${m[1]}」和「${m[3]}」都叫「${m[2]}」，先改掉其中一个的名字。`;
+  m = s.match(/^(.+): the job has no name/);
+  if (m) return `「${m[1]}」里没有 job.name，界面无法引用它。`;
+  return s;
 }
 
 function fmtTime(iso) {
@@ -5060,7 +5083,7 @@ async function saveNow() {
     updateTitle();
   } catch (e) {
     document.getElementById("s-status").className = "stat err";
-    document.getElementById("s-status").textContent = "保存失败：" + e.message;
+    document.getElementById("s-status").textContent = "保存失败：" + plainConfigError(e.message);
   }
 }
 
@@ -5150,7 +5173,7 @@ document.getElementById("delcfg-ok").addEventListener("click", async () => {
       ? "已从列表移除，但文件没能删除。"
       : (alsoFile ? `已删除配置和文件 ${cur.label}。` : `已从列表移除 ${cur.label}（文件保留）。`);
   } catch (e) {
-    err.textContent = "删除失败：" + e.message;
+    err.textContent = "删除失败：" + plainConfigError(e.message);
   } finally {
     btn.disabled = false;
     btn.textContent = "删除";
@@ -5283,7 +5306,7 @@ async function doOpenConfig(path) {
     document.getElementById("s-status").className = "stat done";
     document.getElementById("s-status").textContent = "已打开 " + (v.file || v.name) + "。";
   } catch (e) {
-    document.getElementById("open-err").textContent = "打开失败：" + e.message;
+    document.getElementById("open-err").textContent = "打开失败：" + plainConfigError(e.message);
   }
 }
 
@@ -5304,6 +5327,10 @@ document.getElementById("saveas-ok").addEventListener("click", async () => {
   const err = document.getElementById("saveas-err");
   if (!name) { err.textContent = "请填一个文件名。"; return; }
   if (!dir) { err.textContent = "请先选一个目录。"; return; }
+  // Same check the save path uses, run before the round trip: the server would
+  // reject an incomplete config anyway, and its wording is about toml keys.
+  const problem = incompletePair();
+  if (problem) { err.textContent = problem; return; }
   const path = dir.replace(/[\\/]$/, "") + "/" + name;
   try {
     const body = await postJSON("/api/config/save-as?path=" + encodeURIComponent(path), sessionCfg);
@@ -5312,7 +5339,7 @@ document.getElementById("saveas-ok").addEventListener("click", async () => {
     document.getElementById("s-status").className = "stat done";
     document.getElementById("s-status").textContent = "已另存为 " + name + ".toml。";
   } catch (e) {
-    err.textContent = "保存失败：" + e.message;
+    err.textContent = "保存失败：" + plainConfigError(e.message);
   }
 });
 
@@ -5389,6 +5416,10 @@ async function saveSession() {
 // user types the new paths.
 function incompletePair() {
   const pairs = (sessionCfg && sessionCfg.pairs) || [];
+  // Zero pairs is its own failure: the file format requires at least one, so
+  // saving here would be rejected as `no [[pair]] defined`. Saying so before the
+  // round trip is the difference between "add a folder pair" and a server error.
+  if (!pairs.length) return "至少要有一个目录对，点「添加一对」填好再保存。";
   for (const p of pairs) {
     if (!String(p.local_root || "").trim()) {
       return `目录对「${p.name}」还没有填本机目录，填好之后再保存。`;
@@ -6251,7 +6282,7 @@ async function loadAbout() {
       ? `<div class="mono" style="line-height:1.9;word-break:break-all">${jobFiles.map(f => esc(f)).join("<br>")}</div>`
       : `<div class="note">一个都没有 —— 这个进程没收到任何作业文件。</div>`}
     <div class="hint" style="margin-top:9px">
-      作业文件没列在这里，说明它压根没传给这个进程。
+      作业文件没列在这里，说明它没有传给这个进程。
     </div>`;
 }
 
@@ -7464,7 +7495,7 @@ document.getElementById("cfg-form-save").addEventListener("click", async () => {
     note.textContent = "已保存" + kept + "；下一轮同步起生效。";
   } catch (e) {
     note.className = "note err save-note";
-    note.textContent = "保存失败：" + e.message;
+    note.textContent = "保存失败：" + plainConfigError(e.message);
   } finally {
     btn.disabled = false;
     btn.textContent = "保存";

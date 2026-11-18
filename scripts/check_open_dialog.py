@@ -67,13 +67,15 @@ def main() -> int:
 
     # 4. 提示语也不再承诺「列出所有 .toml」——现在只列配置。
     need(
-        "只列出 weftsync 的" in text,
+        "只列出 weftsync 配置" in text,
         "打开配置对话框的提示语还在说会列出所有 .toml",
     )
-
-    # 5. 两个对话框共用 loadConfigFiles，所以两边的 skip 元素都要能被取到。
-    for el in ("open-skip", "saveas-skip"):
-        pass  # 由上面两条覆盖
+    # 5. 并且不再附带解释设计意图的那半句。用户把它和别的说教一起划掉了：
+    #    「能不能把这类奇怪的东西删掉」。
+    need(
+        "而不是隐藏" not in text,
+        "提示语又变回「…而不是隐藏」这种解释设计意图的写法了",
+    )
 
     # 6. 服务端必须真的算出了 other。用关键字判断，不依赖具体实现。
     go = (ROOT / "src" / "go" / "daemon" / "configs.go").read_text(encoding="utf-8")

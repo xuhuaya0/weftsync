@@ -7825,3 +7825,144 @@ Linux 一节写明无参数启动等同于双击（`xdg-open` 打开控制台）
 门禁：`gofmt` / `go vet` / `go test ./...` / `GOOS=linux go build` /
 `check_ui_syntax.py` / `check_open_dialog.py` / `check_config_form.py` /
 `check_secrets.py` 全绿。
+
+## D113 · 对话框里那些「奇怪的东西」（2026-11-18）
+
+用户圈出另存为对话框里的一行小字，并附了一张保存失败的截图：
+
+> 能不能把这类奇怪的东西删掉
+
+圈的是这句：
+
+```
+会自动补 .toml。已存在的文件会被拒绝 —— 另存为不该悄悄覆盖。
+```
+
+它下面还有一条更糟的：
+
+```
+保存失败：the edited config is not valid: C:\Users\Jlsemi-62\OneDrive\_PC_Sync\
+Documents\3_workspace\my_folder\weftsync\dist\te.toml: pair "pair-1": local.root
+is required
+```
+
+两处都不是错别字，是同一类问题：**把实现者的顾虑写进界面**。
+
+| 原文 | 问题 |
+|---|---|
+| 「另存为不该悄悄覆盖」 | 在解释我为什么这样实现，不是用户要做的事 |
+| 「the edited config is not valid」 | 说的是程序内部状态，不是用户看到的现象 |
+| 一长串绝对路径 | 用户刚在那个框里选过这个目录 |
+| `local.root is required` | toml 的键名，不是界面上任何一个控件的标签 |
+
+### 一、先把那条报错的来源测出来
+
+不猜。构造四种填了一半的配置，直接打接口：
+
+```
+the edited config is not valid: <整条路径>: no [[pair]] defined
+the edited config is not valid: <整条路径>: pair "pair-1": local.root is required
+the edited config is not valid: <整条路径>: pair "pair-1": remote.root is required
+```
+
+三层包装。第一层来自 `job.Save`：
+
+```go
+return res, fmt.Errorf("the edited config is not valid: %w", err)
+```
+
+第二层来自 `parseBytes` 的 `fmt.Errorf("%s: %w", path, err)`。第三层才是唯一有用的事实。
+
+### 二、剥壳在这里做，翻译在界面做
+
+后端 `saveErrText`（`daemon/configs.go`）：
+
+```go
+const wrapper = "the edited config is not valid: "
+if !strings.HasPrefix(msg, wrapper) { return msg }
+msg = strings.TrimPrefix(msg, wrapper)
+if i := strings.Index(msg, ".toml: "); i >= 0 {
+    return msg[i+len(".toml: "):]
+}
+```
+
+切在 `".toml: "` 而不是去 trim 一个路径 —— 这个函数在 `ApplyConfigView` 那条路上**拿不到
+路径**（那里只有作业名），靠 `TrimPrefix(path)` 的写法在那边是死的。
+
+界面 `plainConfigError` 负责把 toml 键名换成人话。**只覆盖真的会出现的那几条**，
+其余原样透传 —— 猜错比不猜更糟：
+
+| 服务端 | 界面 |
+|---|---|
+| `no [[pair]] defined` | 至少要有一个目录对。 |
+| `pair "pair-1": local.root is required` | 目录对「pair-1」的本地目录还没填。 |
+| `pair "pair-1": remote.root is required` | 目录对「pair-1」的云端目录还没填。 |
+| `the job is running; stop it …` | 作业正在运行，先停止再保存。 |
+| `a.toml is already the config named "x" (from b.toml); …` | 「a.toml」和「b.toml」都叫「x」，先改掉其中一个的名字。 |
+| `x.toml: the job has no name, …` | 「x.toml」里没有 job.name，界面无法引用它。 |
+
+「已存在」那条不走这层：它在后端就改成中文了，因为原话
+`(its previous content would be overwritten)` 描述的是代码拒绝做什么，而不是用户该改什么。
+
+### 三、更根本的一步：在提交前就拦住
+
+文案改好了，但更好的做法是别让它发生。另存为原来只检查「文件名非空」「目录非空」，
+配置本身是否完整交给服务器。现在复用 `savePath` 已经在用的 `incompletePair()`：
+
+```js
+const problem = incompletePair();
+if (problem) { err.textContent = problem; return; }
+```
+
+并给 `incompletePair()` 补上「一个目录对都没有」这一种 —— 它原来只查空路径，而
+`no [[pair]] defined` 正是零目录对的结果。
+
+### 四、还删了什么
+
+同类的三处：
+
+| 位置 | 原来 | 现在 |
+|---|---|---|
+| 另存为 | 「会自动补 .toml。已存在的文件会被拒绝 —— 另存为不该悄悄覆盖。」 | 整行删除 |
+| 打开配置 | 「只列出 weftsync 的 .toml 配置。打不开的会标出原因，而不是隐藏。」 | 「只列出 weftsync 配置。」 |
+| 关于 | 「作业文件没列在这里，说明它压根没传给这个进程。」 | 「…说明它没有传给这个进程。」 |
+
+删掉整行而不是改写，是因为文件名框有 placeholder、目录列表就在上面，
+那句话一个字都不需要。留着它就是「解释为什么我这样设计」——正是用户划掉的东西。
+
+### 五、验证
+
+界面实测三种情况，都是真实点击：
+
+```
+零目录对     至少要有一个目录对，点「添加一对」填好再保存。
+缺本机目录   目录对「pair-1」还没有填本机目录，填好之后再保存。
+文件已存在   保存失败：small.toml 已经存在，换一个名字。
+```
+
+`plainConfigError` 的映射逐条比对过真实服务端字符串（包括不该翻译的那条原样返回）：
+
+```
+"no [[pair]] defined"                      -> 至少要有一个目录对。
+"pair \"pair-1\": local.root is required"   -> 目录对「pair-1」的本地目录还没填。
+"the job is running; stop it before …"     -> 作业正在运行，先停止再保存。
+"probe.toml 已经存在，换一个名字。"          -> 原样
+"something else entirely"                  -> 原样
+```
+
+另存为对话框里已无任何 hint（截图确认）。
+
+两条 Go 测试：`TestSaveAsErrorIsTheReasonOnly`（断言不出现 wrapper、不出现路径、
+理由还在）、`TestSaveAsExistingFileSaysItInChinese`（断言不出现
+`would be overwritten`、出现「已经存在」）。
+
+### 六、检查脚本自己报了两个假问题
+
+`check_config_form.py` 第一次跑报了 `压根` 和 `remote\.root is required` 两处。
+
+- `压根` 命中在 **HTML 注释**里（描述某次修复的一段说明），不是用户可见文字
+- `remote\.root` 在 JS 里是正则字面量，源码中是 `remote\.root`（带反斜杠），
+  而检查写的是 `remote\.root is required`，匹配的是不带反斜杠的形式
+
+**两个都是检查工具的缺陷，代码本身是对的。** 记在这里，因为这类误报很容易让人去
+「修」一段本来正确的代码 —— 先拿具体案例核对，再动手。

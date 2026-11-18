@@ -381,14 +381,12 @@ func (a *API) handleConfigSaveAs(w http.ResponseWriter, r *http.Request) {
 	src := a.D.configNamed(name)
 	cfg := buildConfig(in, src, name)
 	if _, err := os.Stat(abs); err == nil {
-		writeError(w, http.StatusConflict,
-			fmt.Sprintf("%s already exists; pick another name (its previous content "+
-				"would be overwritten)", filepath.Base(abs)))
+		writeError(w, http.StatusConflict, alreadyExistsText(abs))
 		return
 	}
 	res, err := job.Save(cfg, abs, job.SaveOptions{Force: true})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, saveErrText(err))
 		return
 	}
 	if _, err := a.D.AddConfig(abs); err != nil {
@@ -399,6 +397,46 @@ func (a *API) handleConfigSaveAs(w http.ResponseWriter, r *http.Request) {
 		"name": name, "path": abs, "saved": res,
 		"config": a.D.configView(name),
 	})
+}
+
+// saveErrText strips the parts of a Save error that only repeat what the caller
+// already knows.
+//
+// job.Save reports a rejected config as
+//
+//	the edited config is not valid: <absolute path>: <reason>
+//
+// Three layers, and two of them are noise in a dialog: the client chose the path
+// (it is on screen next to the box), and "the edited config is not valid" says
+// nothing that the heading 保存失败 has not already said. What is left is the
+// reason, which the console translates into one sentence naming the field.
+//
+// Measured 2026-11-18, the user's screenshot of the resulting dialog:
+//
+//	保存失败：the edited config is not valid: C:\Users\…\dist\te.toml:
+//	          pair "pair-1": local.root is required
+func saveErrText(err error) string {
+	const wrapper = "the edited config is not valid: "
+	msg := err.Error()
+	if !strings.HasPrefix(msg, wrapper) {
+		return msg
+	}
+	msg = strings.TrimPrefix(msg, wrapper)
+	// The reason always follows "<file>.toml: ". Cutting there rather than
+	// trimming a path this function was never given keeps it usable from callers
+	// that only hold the error (ApplyConfigView works from a job name).
+	if i := strings.Index(msg, ".toml: "); i >= 0 {
+		return msg[i+len(".toml: "):]
+	}
+	return msg
+}
+
+// alreadyExistsText says a file is in the way without explaining the policy.
+//
+// The old wording carried "(its previous content would be overwritten)", which
+// describes what the code refuses to do rather than what the user has to change.
+func alreadyExistsText(path string) string {
+	return filepath.Base(path) + " 已经存在，换一个名字。"
 }
 
 // handleConfigRemove unloads a config, and optionally deletes its file.
