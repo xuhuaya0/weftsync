@@ -1594,6 +1594,18 @@
     <div id="dlg-pair-compare"></div>
     <div class="dlg-sect">同步方式</div>
     <div id="dlg-pair-variant"></div>
+    <!-- 删除上限放在这里，因为「这一对的设置」是用户遇到删除保护时
+         第一个会点的地方。2026-11-18 实测：保护卡让他「到配置表单里把这个
+         目录对的 max_delete 提到 20 以上」，而本对话框只有同步方式，没有上限 ——
+         读者点进来找不到那个字段。 -->
+    <div class="dlg-sect">删除保护</div>
+    <div class="filter-grid">
+      <div class="filter-col">
+        <label>删除上限（一次最多删几项）</label>
+        <input type="number" id="dlg-pair-maxdel" min="0" placeholder="">
+        <div class="dlg-hint" id="dlg-pair-maxdel-hint"></div>
+      </div>
+    </div>
     <div class="dlg-sect">过滤器（叠加在配置级规则之上）</div>
     <div class="filter-grid">
       <div class="filter-col">
@@ -3179,8 +3191,9 @@ function guardNoteHTML(p) {
     `保护机制在任何删除发生之前中止整轮，所以现在点「按此执行」不会删掉任何文件，` +
     `也不会传完一半。下面的数字和动作是「如果允许，会做什么」。` +
     `<br>要继续：先确认本地目录填对了 —— 「镜像」会把云端变成和本地一模一样，` +
-    `本地没有的都会被删。确实要删这么多，就到「配置表单」里把这个目录对的 ` +
-    `max_delete 提到 ${n} 以上，再重新比较。</div></div>`;
+    `本地没有的都会被删。确实要删这么多，就点上面「这一对的独立设置」，` +
+    `把「删除上限」填到 ${n} 以上，再重新比较。` +
+    `（也可以在「配置表单」里改同一个字段。）</div></div>`;
 }
 
 // guardLimit reads the pair's max_delete out of the plan. The pairs of one job can
@@ -4771,6 +4784,15 @@ function openPairDlg(i) {
 
   document.getElementById("dlg-pair-include").value = s.include || "";
   document.getElementById("dlg-pair-exclude").value = s.exclude || "";
+
+  // 上限：空 = 跟配置。占位符只在没设置时显示生效值 —— 设了 30 却把 30 当占位符，
+  // 清空时读者会以为还会用 30，实际回到了配置级的那个数。
+  const md = document.getElementById("dlg-pair-maxdel");
+  md.value = s.max_delete_set ? String(s.max_delete) : "";
+  md.placeholder = s.max_delete_set ? "继承配置" : String(s.max_delete);
+  document.getElementById("dlg-pair-maxdel-hint").textContent = s.max_delete_set
+    ? `这一对单独用 ${s.max_delete}；清空就回到配置级的数。`
+    : `留空 = 跟配置（现在是 ${s.max_delete}）。“镜像”要删的超过这个数时，整轮会被拦下。`;
 }
 
 document.getElementById("dlg-pair-ok").addEventListener("click", () => {
@@ -4784,6 +4806,12 @@ document.getElementById("dlg-pair-ok").addEventListener("click", () => {
     p.variant = checkedValue("dlg-pair-variant", "");
     p.sync.include = document.getElementById("dlg-pair-include").value;
     p.sync.exclude = document.getElementById("dlg-pair-exclude").value;
+    // An empty box means "follow the job default", never "0": 0 means "never
+    // delete anything", and silently choosing that for a cleared field would
+    // turn a mirror pair into a copy pair without saying so.
+    const mdv = document.getElementById("dlg-pair-maxdel").value.trim();
+    p.sync.max_delete = mdv === "" ? 0 : Number(mdv);
+    p.sync.max_delete_set = mdv !== "";
   }
   dlgOk();
 });
@@ -4797,6 +4825,8 @@ document.getElementById("dlg-pair-reset").addEventListener("click", () => {
     p.variant = "";
     p.sync.include = "";
     p.sync.exclude = "";
+    p.sync.max_delete = 0;
+    p.sync.max_delete_set = false;
   }
   dlgOk();
 });
