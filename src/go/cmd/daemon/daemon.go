@@ -86,7 +86,17 @@ same pairs.
 Stop with Ctrl+C; a run in progress is allowed to finish.
 `,
 	Run: func(command *cobra.Command, args []string) {
-		cmd.CheckArgs(1, 1e6, command, args)
+		// Zero job files is a supported start.
+		//
+		// 2026-11-18, the user's objection: 「为什么还要准备文件啊，所有的操作不应该都在
+		// GUI 进行么？不应该是 windows 一键启动，linux 一个命令启动」. They were right:
+		// the console can create, save and schedule configurations, so requiring a
+		// hand-written .toml before the console can be opened is a chicken-and-egg
+		// that only exists because this check said 1.
+		//
+		// With no files the daemon serves the UI only; 新建 in the console asks
+		// /api/config/new for a blank shape and 另存为 turns it into the first file.
+		cmd.CheckArgs(0, 1e6, command, args)
 
 		// Captured before anything slow happens: the settings page shows
 		// uptime, and starting the clock after loading the config would

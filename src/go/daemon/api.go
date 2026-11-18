@@ -78,6 +78,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/api/split/snapshots", a.handleSplitSnapshots)
 	mux.HandleFunc("/api/split/undo", a.handleSplitUndo)
 	mux.HandleFunc("/api/config", a.handleConfig)
+	mux.HandleFunc("/api/config/new", a.handleConfigNew)
 	mux.HandleFunc("/api/config/files", a.handleConfigFiles)
 	mux.HandleFunc("/api/config/open", a.handleConfigOpen)
 	mux.HandleFunc("/api/config/save-as", a.handleConfigSaveAs)

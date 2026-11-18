@@ -7130,3 +7130,133 @@ TestSpecFromOmitsDefaults:
 **托盘图标现在默认出现，但只在有人手工启动 daemon 时才有意义。** 开机自启要另外在
 设置里打开（`autostart`），而且那个条目现在会带 `--no-tray` 当且仅当当初是关着的 ——
 这一条有测试，但整条「重启后图标还在」的链路没有端到端验证过（需要真的重启机器）。
+
+## D107 · 「为什么还要准备文件」——daemon 不能零作业启动（2026-11-18）
+
+用户：
+
+> 为什么还要准备文件啊，所有的操作不应该都在 GUI 进行，么？不应该是 windows 一键
+> 启动，linux 一个命令启动，所有都可以在 gui 配置吗？即使你的说的配置文件不也应该是
+> 程序自己带的或者生成的？而且定时任务不也应该在 gui 配置运行吗
+
+### 一、先分清楚哪些是他误会的，哪些是我确实错了
+
+查过之后，他的四条里有三条**本来就在 GUI 里**：
+
+| 他的要求 | 实际状态 |
+|---|---|
+| 所有操作在 GUI | 新建 / 打开 / 保存 / 另存为 / 比较 / 同步 / 冲突处理 / 拆分 / 日志 / 历史，全在 |
+| GUI 配定时任务 | **是**，`[job.schedule]` 的四个模式六个字段全在「配置表单」里 |
+| 配置文件由程序生成 | **是**，界面的「保存 / 另存为」就是程序写 TOML |
+| Windows 一键 / Linux 一命令启动 | **不是** —— 卡在这里 |
+
+所以真正的问题只有一个，而且比「要不要手写文件」更具体：
+
+```
+$ weftsync daemon --addr 127.0.0.1:5765
+Usage:
+  rclone daemon job.toml [job2.toml...] [flags]
+```
+
+**daemon 必须带至少一个作业文件才能启动。** 而界面是 daemon 提供的 ——
+于是要开界面得先有配置，要造配置得先开界面。**这是鸡生蛋，而且是我自己写死的两道检查**：
+
+```go
+cmd.CheckArgs(1, 1e6, command, args)              // CLI 层
+if len(files) == 0 { return nil, errors.New(...) } // daemon.New 层
+```
+
+### 二、挖下去还有两个连带死路
+
+即使放开启动，界面在零配置时也是走不通的：
+
+1. **「新建」什么都不做** —— `newConfig()` 第一行 `if (!sessionCfg) return;`。
+   它的设计是「复制当前配置的形状、抹掉身份」，而没有当前配置时就没有东西可复制。
+2. **「另存为」对话框是空的** —— `configDirOf("")` 在零作业时返回 `""`，
+   于是 `handleConfigFiles` 返回空目录，对话框里一行都没有。
+3. **零目录对时没有「+」按钮** —— 文案写着「点下面的「+ 添加目录对」」，
+   而 `+` 是渲染在每一行上的，没有行就没有按钮。**句子指向一个不存在的东西。**
+
+### 三、改法
+
+| 位置 | 改动 |
+|---|---|
+| `cmd/daemon` | `CheckArgs(0, 1e6, ...)` —— 零作业是合法启动 |
+| `daemon.New` | 去掉 `len(files) == 0` 的报错 |
+| 新接口 `GET /api/config/new` | 返回一份空白 `ConfigView`（由 `job.NewConfig` 构造），界面的「新建」在没有当前配置时拿它当模板 |
+| `newConfig()` | 无 `sessionCfg` 时先取模板；顺带 `renderConfig()` 让侧栏也刷新 |
+| `configDirOf("")` | 回退到进程工作目录 —— 「打开 / 另存为」有个起始位置，而不是空目录 |
+| `renderPairs` 空状态 | 把 `+ 添加目录对` 按钮渲染出来（`data-idx="-1"` → `addPairAfter(-1)` 插到位置 0） |
+
+空白模板**不落盘**：只有「另存为」才写文件，半填的配置不会留在磁盘上。
+
+### 四、端到端验证（不是只看单测）
+
+一个真正全新的现场：空目录 + 不带任何作业文件的 daemon。
+
+```
+$ cd .scratch/freshstart
+$ ..\weftsync-ui.exe daemon --config ..\rclone-test.conf --addr 127.0.0.1:5766 --no-tray
+weftsync daemon: API listening on http://127.0.0.1:5766
+```
+
+浏览器打开 → 界面显示「还没有配置。用「文件 → 新建」建一个。」→ 点**新建**
+→ 状态栏「新配置（尚未保存）」→ 点 **+ 添加目录对** → 出现一行 → 填本机与云端路径
+→ 点**另存为** → 目录自动落在 `.scratch\freshstart`（就是工作目录）→ 文件名 `myfirst`
+→ 「已另存为 myfirst.toml。」→ 作业列表立刻出现该项。
+
+然后在「配置表单」里选 `myfirst`，把调度设成 `interval / 2h / start_at 08:00 /
+align_to_start`，保存。生成的**文件是程序写的**：
+
+```toml
+[job]
+name = "myfirst"
+variant = "update"
+
+[job.sync]
+deletion = "permanent"
+versioning_dir = "_weftsync_trash"
+versioning_naming = "timestamp-folder"
+conflict = "report"
+compare = "time-size"
+
+[job.schedule]
+mode = "interval"
+interval = "2h"
+start_at = "08:00"
+align_to_start = true
+
+[[pair]]
+name = "pair-1"
+
+[pair.local]
+root = ".../freshstart/src"
+
+[pair.remote]
+root = ":local:.../freshstart/dst"
+```
+
+daemon 立刻接住：
+
+```
+name=myfirst  schedule=every 2h0m0s from 08:00  next_run=2026-11-18T18:00:00+08:00
+```
+
+### 五、检查
+
+`go test ./daemon/`，三条：
+
+- `TestNewAcceptsNoJobFiles` —— 零作业能构造出 daemon，`Status()` 为空；
+- `TestConfigNewTemplateIsSaveable` —— 模板带齐选项（variant / schedule modes），
+  填一对路径后经 `save-as` 真能写成文件、真能进 daemon。这条是**端到端**的：
+  模板不可保存就等于把死路从「起不来」挪到「存不下」；
+- `TestConfigDirOfFallsBackToWorkingDirectory` —— 零作业时给出工作目录。
+
+### 六、还没做到的
+
+**「定时任务」在 GUI 里要等文件先存在。** 实测中发现：新配置还没另存为时，
+切到「配置表单」显示「选择一个作业后可编辑」—— 因为那个页签是按作业名加载的。
+所以首次使用的顺序是：新建 → 填路径 → **另存为** → 再回配置表单设定时。
+
+这不算死路（另存为一步就到），但「先保存才能设调度」这个隐含顺序没有在界面上写出来。
+真要抹平，得让配置表单也能渲染一份未保存的会话配置 —— 那是另一处改动，没有做。

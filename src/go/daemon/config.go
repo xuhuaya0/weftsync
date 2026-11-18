@@ -539,6 +539,28 @@ func (d *Daemon) reload(name string) error {
 	return nil
 }
 
+// handleConfigNew serves a blank configuration for the console's 新建.
+//
+// GET /api/config/new
+//
+// It exists so a fresh daemon is usable from the browser alone. Before 2026-11-18
+// the console could create configurations, but only by copying the shape of one
+// that was already open - so with no jobs loaded 新建 did nothing, and the first
+// configuration had to be a .toml written by hand. The user's objection was that
+// everything should be configurable in the GUI.
+//
+// The body is the same ConfigView shape the form already understands, built from
+// job.NewConfig, so no new format has to be learned by either side. Nothing is
+// written until 另存为, which keeps a half-filled configuration out of disk.
+func (a *API) handleConfigNew(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+	cfg := job.NewConfig("")
+	writeJSON(w, http.StatusOK, ViewConfig(&entry{cfg: cfg}, nil))
+}
+
 // handleConfig serves the editable view and accepts changes.
 func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("job")

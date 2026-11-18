@@ -149,6 +149,16 @@ func (d *Daemon) configDirOf(name string) string {
 	if len(d.entries) > 0 {
 		return filepath.Dir(d.entries[0].file)
 	}
+	// Nothing loaded yet, so there is no "next to the config you have open" to
+	// fall back on. Returning "" left the 打开 and 另存为 dialogs with an empty
+	// directory and no rows to click - a dead end on a fresh daemon, which is
+	// exactly when the first configuration has to be created.
+	//
+	// The working directory is the honest answer: it is where the user started the
+	// daemon, and where a first job.toml most naturally goes.
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
 	return ""
 }
 

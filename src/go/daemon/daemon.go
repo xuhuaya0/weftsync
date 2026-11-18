@@ -286,9 +286,9 @@ func (d *Daemon) LogLen() int {
 
 // New builds a daemon for the given job files.
 func New(files []string, log io.Writer) (*Daemon, error) {
-	if len(files) == 0 {
-		return nil, errors.New("daemon: at least one job file is required")
-	}
+	// An empty list is a valid daemon: it serves the console, which can then
+	// create the first configuration. See the CheckArgs comment in cmd/daemon for
+	// why this used to be an error.
 	d := &Daemon{
 		log:     log,
 		now:     time.Now,

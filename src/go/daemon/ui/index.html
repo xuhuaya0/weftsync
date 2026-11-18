@@ -4313,7 +4313,18 @@ function renderPairs() {
 
   const pairs = sessionCfg.pairs || [];
   if (!pairs.length) {
-    host.innerHTML = '<div class="empty">还没有目录对。点下面的「+ 添加目录对」。</div>';
+    // The + lives on each row, so with no rows there was no way to add the first
+    // one - the message pointed at a button that did not exist. Measured
+    // 2026-11-18 on a fresh daemon: 新建 worked, then the page said 「点下面的「+
+    // 添加目录对」」and there was nothing below to click.
+    host.innerHTML = `<div class="empty">
+      还没有目录对。
+      <button class="p-add" data-idx="-1" title="添加一组目录对"
+              style="margin-left:8px">+ 添加目录对</button>
+    </div>`;
+    host.querySelectorAll(".p-add").forEach(el => {
+      el.addEventListener("click", () => addPairAfter(Number(el.dataset.idx)));
+    });
     return;
   }
 
@@ -4917,15 +4928,32 @@ function addPairAfter(i) {
 // rejects. Starting from the current settings and clearing the name is what makes
 // the next Save a Save As.
 
-function newConfig() {
-  if (!sessionCfg) return;
+async function newConfig() {
+  const status = document.getElementById("s-status");
+  // With no configuration open there is no shape to copy, so the blank one comes
+  // from the daemon (/api/config/new). Before this, 新建 returned immediately on a
+  // fresh daemon: the very first configuration was the one thing that still
+  // needed a .toml written by hand, even though the form can author everything
+  // else.
+  if (!sessionCfg) {
+    try {
+      const blank = await getJSON("/api/config/new");
+      sessionCfg = blank;
+      cfgView = blank;
+    } catch (e) {
+      status.className = "stat err";
+      status.textContent = "新建失败：" + e.message;
+      return;
+    }
+  }
   // Keep the shape, drop the identity: the next Save has to pick a file.
   sessionCfg.name = "";
   sessionCfg.file = "";
   dirty = true;
   renderPairs();
-  document.getElementById("s-status").className = "stat";
-  document.getElementById("s-status").textContent =
+  renderConfig();
+  status.className = "stat";
+  status.textContent =
     "新配置（尚未保存）。用「文件 → 保存」选择保存位置。";
   updateTitle();
 }
