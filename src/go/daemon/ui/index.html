@@ -6073,7 +6073,9 @@ async function loadSettings() {
     <div class="hint" style="margin-top:6px">
       ${available
         ? "成功、预览、手动停止都不通知 —— 每次都弹等于让人关掉通知。"
-        : "这个进程没有托盘图标（不是 Windows 桌面，或启动时没加 <code>--tray</code>），" +
+        : "这个进程没有托盘图标：" +
+          "不是 Windows 桌面（Linux/macOS 没有可用的通知区），" +
+          "或启动时加了 <code>--no-tray</code>。" +
           "所以没有地方弹；日志里仍会记录 <code>notify:</code> 行。"}
     </div>`;
   document.getElementById("set-notify-on").addEventListener("change", saveSettings);
