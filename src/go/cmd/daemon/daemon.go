@@ -18,6 +18,7 @@ import (
 
 	"weftsync/autostart"
 	"weftsync/browser"
+	"weftsync/console"
 	"weftsync/daemon"
 	"weftsync/tray"
 )
@@ -29,13 +30,22 @@ var (
 	trayOn      bool
 	noTray      bool
 	openConsole bool
+	hideConsole bool
 	splitDir    string
 )
+
+// DefaultAddr is where the API listens unless told otherwise.
+//
+// Exported because main() needs the same value: on a double-click it asks this
+// address whether weftsync is already running before starting a second copy.
+// Two literals would drift, and the symptom would be a double-click that starts a
+// doomed second instance instead of opening the console that is already there.
+const DefaultAddr = "127.0.0.1:5572"
 
 func init() {
 	cmd.Root.AddCommand(commandDefinition)
 	flags := commandDefinition.Flags()
-	flags.StringVar(&addr, "addr", "127.0.0.1:5572",
+	flags.StringVar(&addr, "addr", DefaultAddr,
 		"Address for the local HTTP API (loopback only)")
 	flags.StringVar(&logFile, "log-file", "",
 		"Append the daemon log to this file instead of stdout")
@@ -51,11 +61,13 @@ func init() {
 		"Show a notification area icon (default; Windows only)")
 	flags.BoolVar(&noTray, "no-tray", false,
 		"Do not show a notification area icon (for a console-only daemon)")
-	// --open exists for the double-click case. With no arguments main() starts
-	// this command and sets it, so a user who double-clicks the exe gets a
-	// browser window instead of a console that prints nothing and closes.
+	// --open and --hide-console exist for the double-click case. With no arguments
+	// main() starts this command with both set, so double-clicking the exe opens a
+	// browser and gets out of the way instead of flashing a console window.
 	flags.BoolVar(&openConsole, "open", false,
 		"Open the console in a browser once the API is listening")
+	flags.BoolVar(&hideConsole, "hide-console", false,
+		"Hide this process's console window once the API is listening (Windows)")
 	flags.StringVar(&splitDir, "split-dir", "",
 		"Directory for split undo ledgers (default: next to the pair's state file)")
 }
@@ -116,6 +128,7 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 			if logFile != "" {
 				f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 				if err != nil {
+					startupFailure("不能写日志文件：%v\n\n路径：%s", err, logFile)
 					return fmt.Errorf("open log file: %w", err)
 				}
 				w = f
@@ -130,6 +143,7 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 			sink := daemon.NewLogSink(w)
 			d, err := daemon.New(args, sink)
 			if err != nil {
+				startupFailure("配置无法加载：%v", err)
 				return err
 			}
 
@@ -139,6 +153,12 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 			}
 			srv, ln, err := daemon.Listen(addr, api)
 			if err != nil {
+				// The realistic failure is "something already holds the port", and
+				// after --hide-console there is no console left to read it from.
+				if hideConsole {
+					startupFailure("无法在 %s 上启动服务：%v\n\n"+
+						"如果 weftsync 已经在运行，直接打开 http://%s/ 即可。", addr, err, addr)
+				}
 				return err
 			}
 
@@ -165,6 +185,13 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 
 			fmt.Fprintf(w, "weftsync daemon: API listening on http://%s\n", ln.Addr())
 			d.Start(ctx)
+
+			// The server answers now, so the window that was only ever a liability
+			// can go. Later failures show up in the console's 日志 page (the log sink
+			// feeds it) and in --log-file, neither of which needs a console.
+			if hideConsole {
+				console.Hide()
+			}
 
 			// Open the console when asked (which a double-click implies; see
 			// main.go). Done after the listener is up, so the page cannot load
@@ -251,6 +278,20 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 			return nil
 		})
 	},
+}
+
+// startupFailure reports a failure that happened before the server was serving.
+//
+// Only when the console has been asked to hide itself: at that point the error
+// rclone is about to print goes into a window nobody can see, and the process
+// exits, taking the window with it. A message box is the only thing left. In the
+// ordinary terminal case the error is already on screen, so adding a modal box
+// would make every typo a dialog to dismiss.
+func startupFailure(format string, args ...any) {
+	if !hideConsole {
+		return
+	}
+	console.Errorf("weftsync 启动失败", format, args...)
 }
 
 // watchSignals turns the first signal into a graceful stop and the second into

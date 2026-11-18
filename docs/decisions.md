@@ -7339,3 +7339,89 @@ port 5572 -> {"ok":true}                 ← 服务起来了
 要不要做成「双击后控制台自动隐藏、只留托盘」，是一个需要单独决定的改动（Windows 上
 要么用 `-H windowsgui` 编一个无控制台的可执行文件，要么启动后把自己从控制台脱离）。
 **没有做**，因为它会改变进程的可观测性 —— 出问题时连日志窗口都没有了。
+
+## D109 · 双击后不要留窗口：GUI 里已经有日志（2026-11-18）
+
+用户：
+
+> 那你做啊，日志不是有记录地方吗，为啥要一个窗口，我在 gui 的界面中不是可以看到吗
+
+D108 做完之后还有一个我明说「没做」的地方：双击启动的 daemon 把控制台窗口一直留在
+那里。用户这句直接指出了理由 —— **界面里就有「日志」页**，那个窗口是多余的。
+
+### 一、为什么不能简单地把窗口藏掉
+
+藏窗口本身是一行 `ShowWindow(hwnd, SW_HIDE)`。问题在后面：**进程一退出，窗口就没了**。
+所以一旦先藏窗口、后失败，用户看到的就是「双击 → 什么都没有」—— 那正是原来「闪退」
+的观感，只是更难诊断。
+
+而且 rclone 的 `cmd.Main()` 内部走 `log.Fatalf` → `os.Exit(1)`，`defer` 不执行，没有
+机会在退出前把错误补给人看。
+
+所以顺序必须是：**先确认服务真的起来了，再藏窗口**；在服务起来之前的任何失败，都要有
+另一条告诉用户的路径。
+
+### 二、改法
+
+| 位置 | 改动 |
+|---|---|
+| `console` 包（新） | Windows：`GetConsoleWindow` + `ShowWindow(SW_HIDE)`，以及 `MessageBoxW`；其它平台：两个空实现 |
+| `main.go` | 无参数时先探一次 `http://127.0.0.1:5572/api/health` |
+| `cmd/daemon` | 新增 `--hide-console`；`DefaultAddr` 常量导出（main 和 flag 默认值用同一个） |
+| `cmd/daemon` | 三个启动失败点（写日志文件失败 / 配置加载失败 / 端口占用）在 `--hide-console` 时弹消息框 |
+| `cmd/daemon` | `Listen` 成功、`d.Start` 之后才 `console.Hide()` |
+
+`browser` 包不变。
+
+### 三、双击现在有两种走法
+
+```
+健康检查有响应（已经在跑）
+    → 打开浏览器，退出码 0。不再启动第二个实例。
+
+没有响应
+    → daemon --open --hide-console --log-file <APPDATA>\weftsync\daemon.log
+    → 监听成功 → 藏窗口 → 打开浏览器
+```
+
+第一种走法是被「双击打开程序」这个习惯逼出来的：程序常驻之后，再双击它想要的是
+**把界面调到面前**，而不是启动第二份。而第二个 daemon 本来也会因为端口占用失败 ——
+那又变成「双击没反应」。
+
+### 四、日志去哪了
+
+藏窗口之后 stdout 无处可去，所以双击路径默认加 `--log-file`，位置是
+
+```
+%APPDATA%\weftsync\daemon.log
+```
+
+选 per-user 配置目录而不是 exe 旁边：装到 Program Files 时旁边是不可写的。取不到这个
+目录就**不加这个 flag**（少一个日志文件，不该让同步起不来）。
+
+界面「日志」页读的是内存里的环形缓冲（`daemon.NewLogSink` 的 `Recent()`），从来没有
+依赖控制台；文件那份是为了让崩溃后的记录能活过进程。
+
+### 五、验证（真进程，不是单测）
+
+```
+dist\weftsync-windows-amd64.exe            （无参数 = 双击）
+  pid=16276 hasExited=False                ← 不退出
+  http://127.0.0.1:5572/api/health → {"ok":true}
+  %APPDATA%\weftsync\daemon.log 已生成，末两行：
+      weftsync daemon: API listening on http://127.0.0.1:5572
+      tray: icon shown; failures will raise a notification
+
+再双击一次（服务已在跑）
+  第二次实例 退出码=0，用时 1111ms          ← 没有抢端口、没有报错
+  原实例 pid=16276 仍在，health 仍 ok
+```
+
+`go build`（windows）与 `GOOS=linux CGO_ENABLED=0 go build`（走 `console_other.go`）
+都通过；`gofmt` / `vet` / `go test ./...` 全绿。
+
+### 六、没有验证到的
+
+**消息框没有实测。** 要触发它得让 `Listen` 失败，而失败路径的验证需要两台进程抢同一
+个端口 —— 我用「二次双击」覆盖了实际最常见的那条（已经在跑），但「被别的程序占了
+5572」这条路只写了代码，没有跑过。`MessageBoxW` 的参数在没被调用过之前，等于没测过。
