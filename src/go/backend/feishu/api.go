@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -81,6 +82,25 @@ type client struct {
 	limiter *rate.Limiter
 	// moveLimiter spaces move calls, which Feishu caps at 20/minute.
 	moveLimiter *rate.Limiter
+	// serial guarantees one request in flight at a time.
+	//
+	// Rate limiting alone was not enough, and the comment on withLimits below used
+	// to assume it was. rate.Limiter spaces when requests are STARTED; it says
+	// nothing about how many are still waiting for a response. With rclone's default
+	// 8 checkers, eight deletes could be in flight at once, which Feishu rejects:
+	//
+	//   "This API doesn't allow to concurrently call, and supports up to 5 queries
+	//    per second (QPS)" - open.feishu.cn, drive/v1/files/:file_token DELETE
+	//
+	// Measured 2026-11-18 against a real tenant, deleting the same 40 files twice:
+	//
+	//   default concurrency (8 workers)   71s, 4 files failed with 1061001
+	//   --checkers 1 (one at a time)      89s, 0 failures
+	//
+	// The same failure hit the user's real mirror run: 68 planned deletions, 63
+	// done, 5 failed after every retry was spent. Slower and correct beats faster
+	// and randomly incomplete, especially for the operation that cannot be undone.
+	serial sync.Mutex
 
 	// consecutive tracks calls that exhausted their retry budget without a
 	// success in between; it is reset by any successful call. systemic latches
@@ -115,6 +135,10 @@ func newClient(baseURL string, ts *tokenSource, hc *http.Client) *client {
 // support concurrent calls, so a burst would spend the allowance faster than the
 // server is willing to absorb it. Spacing requests costs a little latency and
 // removes the need to recover from 1061045 at all.
+//
+// This is the RATE half of the constraint. The other half - never having two
+// requests in flight at once - is client.serial, because a rate limiter cannot
+// express it.
 func (c *client) withLimits(qps float64, movePerMinute int) {
 	if qps > 0 {
 		c.limiter = rate.NewLimiter(rate.Limit(qps), 1)
@@ -319,15 +343,21 @@ func (c *client) once(ctx context.Context, r request) (*result, error) {
 		req.Header.Set(k, v)
 	}
 
+	// One request at a time, including reading its body: Feishu's drive endpoints
+	// reject concurrent calls (see client.serial). Releasing the lock after Do()
+	// would let the next request start while this response is still arriving, which
+	// is exactly the overlap the server counts as concurrent.
+	c.serial.Lock()
 	resp, err := c.http.Do(req)
 	if err != nil {
+		c.serial.Unlock()
 		// Transport failures are retryable: connection resets are common on
 		// the network this project runs on.
 		return nil, &retryableTransportError{where: r.where, err: err}
 	}
-	defer func() { _ = resp.Body.Close() }()
-
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
+	_ = resp.Body.Close()
+	c.serial.Unlock()
 	if err != nil {
 		return nil, &retryableTransportError{where: r.where, err: fmt.Errorf("read body: %w", err)}
 	}

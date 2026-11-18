@@ -6935,3 +6935,114 @@ toolbarPosts     1             ← 工具栏按钮不再跑表单处理
 D102 里我写「没有复现到稳定步骤，所以没当 bug 修」。当时正确的做法不是放下，而是
 **换一个角度验证**：不是去造那个偶发失败，而是问「点一次保存到底发了几个请求」。
 这个角度一次就命中了。
+
+## D105 · 飞书限流的真因是并发，不是速率；顺便回答「能不能批量」（2026-11-18）
+
+用户两问：
+
+> 飞书限流如果你只限速速度的话你就控制一下啊，而且飞书没有一次删除多个的api?
+>
+> 那我想到，你上传是不是也是被次数限制而不是数量啊，你一次把需要传的都传上去不行吗
+
+### 一、先纠正我自己的判断
+
+D104 之后我说「这是飞书限流，重跑一次就行」。这句话把原因归错了：**限速器已经在
+工作，它并没有超速**。用户那次运行 73 个请求花了 104 秒，平均 0.7 次/秒，而飞书允许
+5 QPS —— 速率只有上限的七分之一。
+
+### 二、真正的约束在官方文档里，而且是两条
+
+`drive/v1/files/:file_token` DELETE 的「Limits」段原文：
+
+> This API doesn't allows to concurrently call, and supports up to 5 queries per
+> second (QPS). Exceeding these limits will result in error code 1061045.
+
+**「不允许并发调用」和「5 QPS」是两条独立的限制。** 我们只实现了第二条：
+
+```go
+c.limiter = rate.NewLimiter(rate.Limit(qps), 1)   // 控制「发起」间隔
+```
+
+`rate.Limiter` 管的是请求**什么时候开始**，完全不管**有几个还在飞**。而 rclone 默认
+8 个 checker 并发删 → 同一时刻最多 8 个删除在途 → 服务端判为并发 → 返回 1061001
+（文档里 1061001 写作 internal error，实际就是这种拒绝）。
+
+`withLimits` 上面那段注释其实写着「the docs say these endpoints do not support
+concurrent calls」——**注释以为限速器解决了并发，但限速器根本表达不了这个约束**。
+
+### 三、对照实验（真实租户，同样 40 个文件，删两遍）
+
+| 方式 | 耗时 | 结果 |
+|---|---|---|
+| 默认并发（checkers=8） | 71s | **4 个失败**，`files.delete: giving up after 5 attempts: code=1061001` |
+| `--checkers 1`（一次一个） | 89s | **0 失败** |
+
+修复后（加了串行锁，仍是默认 8 checker 的配置）：
+
+```
+purge 40 files   90s   0 错误   剩余 0
+```
+
+**90s ≈ 89s** —— 说明串行化之后，实际瓶颈回到「一次一个」的串行语义，而代价只有
+约 20%，不是 5 倍。因为延迟本身（~2s/次）早就把速率压住了。
+
+### 四、改法：加一把串行锁，而不是再调速率
+
+```go
+// client.serial
+c.serial.Lock()
+resp, err := c.http.Do(req)
+...
+raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
+_ = resp.Body.Close()
+c.serial.Unlock()
+```
+
+读 body 也放在锁里：`Do()` 返回时响应体可能还在接收，那时放行下一个请求仍然是并发。
+
+放在 client 层而不是「把 daemon 的 checkers 设成 1」，是因为这条约束属于**后端**：
+CLI、daemon、以及以后任何调用路径都必须遵守，交给调用方去记得设参数迟早会漏。
+
+### 五、用户第二个问题：能不能批量
+
+**不能，删除和上传都没有批量接口。**
+
+删除（`drive/v1/files/:file_token`）：token 在**路径**里，一个请求一个文件。文档的
+query 参数只有 `type` 和 `async`，没有 token 列表。
+
+上传：
+
+| 场景 | 请求数 | 说明 |
+|---|---|---|
+| ≤20MB（`upload_all`） | **1 个/文件** | 单次请求，但仍是一次一个文件 |
+| >20MB（分块） | **3+N 个/文件** | `upload_prepare` → `upload_part` × N → `upload_finish` |
+
+所以「一次把需要传的都传上去」在飞书的 API 上不存在。用户的直觉是对的：
+**限制是按请求次数算的，不是按文件数**，而一个文件至少要一个请求。这也是为什么
+10000 次/天的预算对大批量同步是真的会不够。
+
+（顺带说明：`upload_part` 的块大小由服务端给，4MB 今天，所以一个 100MB 文件是
+3+25=28 个请求。）
+
+### 六、检查
+
+`go test ./backend/feishu/`，两条新测试直接数服务端的在途请求数：
+
+- `TestRequestsNeverOverlap` —— 6 个 goroutine 并发调用，服务端观察到的最大同时在途
+  必须是 1；
+- `TestRequestsNeverOverlapWithoutLimiter` —— `qps=0`（没有限速器）时依然必须是 1，
+  防止有人把串行化实现进限速器里。
+
+反向验证：去掉锁之后两条都红：
+
+```
+6 requests were in flight at the same time; Feishu rejects that with 1061001
+4 requests overlapped with qps=0; the serialisation must not live in the limiter
+```
+
+### 七、教训
+
+**「限速」和「限并发」是两件事，而我只做了前者还以为是后者。** 更糟的是注释里
+写着正确的话（「docs say these endpoints do not support concurrent calls」），
+让我以为已经处理过了 —— 注释描述的是意图，代码实现的是另一回事，而测试没有覆盖，
+所以这个差距活了很久。写「我处理了 X」的时候，必须有一条测试真的去测 X。
