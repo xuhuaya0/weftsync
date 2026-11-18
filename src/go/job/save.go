@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 )
 
 // Saving job files.
@@ -456,11 +457,39 @@ func writeAtomic(path string, data []byte) error {
 		return fmt.Errorf("close %s: %w", tmp, err)
 	}
 
-	if err := os.Rename(tmp, path); err != nil {
+	if err := renameWithRetry(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("replace %s: %w", path, err)
 	}
 	return nil
+}
+
+// renameWithRetry replaces dst with src, tolerating the transient failures a
+// syncing directory produces.
+//
+// Measured 2026-11-18, in this repository's own workspace (which lives under
+// OneDrive): `os.Rename` failed with "The system cannot find the file specified"
+// and, on another attempt, "The process cannot access the file because it is being
+// used by another process". Both are the sync client holding or briefly removing the
+// name, and both succeed on retry milliseconds later. Giving up on the first one
+// meant a save could report failure for a file that a second press would have
+// written correctly - and, worse, the failed press left the form showing values the
+// file did not have.
+//
+// Retries are short and few on purpose: a real problem (a read-only directory, a
+// full disk) must still surface quickly, and the caller's message names the path.
+func renameWithRetry(src, dst string) error {
+	const attempts = 5
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = os.Rename(src, dst); err == nil {
+			return nil
+		}
+		// 10ms, 20ms, 40ms, 80ms: shorter than a sync client's scan, long enough for
+		// the handle to be released.
+		time.Sleep(time.Duration(10<<uint(i)) * time.Millisecond)
+	}
+	return err
 }
 
 // sameStrings compares two string slices element by element.

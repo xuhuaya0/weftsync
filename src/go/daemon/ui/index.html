@@ -1720,7 +1720,14 @@
     <div class="row" style="margin-bottom:12px">
       <strong class="grow">作业配置</strong>
       <select id="cfg-job"><option value="">（选择配置）</option></select>
-      <button id="cfg-save" disabled>保存</button>
+      <!-- 这里**不能**用 id="cfg-save"：上面工具栏已经有一个同名按钮。
+           2026-11-18 实测：两处重复导致 getElementById 只拿到工具栏那个，
+           于是 renderConfig() 在启/禁工具栏按钮，而这个表单自己的保存按钮
+           永远是 disabled；同时两条 click 处理都挂在工具栏按钮上，
+           一次点击发出两个 POST（一条 sessionCfg，一条 collectConfig()
+           从表单重建），两条并发，后者能把前者覆盖成旧值 ——
+           屏幕上写「已保存」，文件里是没打算写的数字。 -->
+      <button id="cfg-form-save" disabled>保存</button>
     </div>
     <div id="cfg-save-note" class="note save-note"></div>
     <div id="cfg-warn" class="hidden"></div>
@@ -6859,7 +6866,10 @@ function renderConfig() {
   const v = cfgView;
   const body = document.getElementById("cfg-body");
   const warn = document.getElementById("cfg-warn");
-  const save = document.getElementById("cfg-save");
+  // The form's own button, not the toolbar's. They used to share an id, so this
+  // line was enabling and disabling the wrong element and the one the user sees
+  // here was permanently disabled (measured 2026-11-18).
+  const save = document.getElementById("cfg-form-save");
   if (!v) {
     body.className = "empty";
     body.textContent = "选择一个作业后可编辑";
@@ -7090,7 +7100,7 @@ async function loadConfig() {
 
 document.getElementById("cfg-job").addEventListener("change", loadConfig);
 
-document.getElementById("cfg-save").addEventListener("click", async () => {
+document.getElementById("cfg-form-save").addEventListener("click", async () => {
   if (!cfgView) return;
   const payload = collectConfig();
 
@@ -7099,7 +7109,7 @@ document.getElementById("cfg-save").addEventListener("click", async () => {
     return;
   }
 
-  const btn = document.getElementById("cfg-save");
+  const btn = document.getElementById("cfg-form-save");
   const note = document.getElementById("cfg-save-note");
   btn.disabled = true;
   btn.textContent = "保存中…";

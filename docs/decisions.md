@@ -6849,3 +6849,89 @@ check_delete_confirm.js  0 failures
 **默认值本身就是一种产品主张。** 我当初把 `max_delete = 50` 设成默认，等于替用户
 决定了「删超过 50 个必须先改配置」——一个他从未同意的策略。数字型护栏看起来像安全，
 实际上是把自己的判断塞进别人的流程里，而且失败方式是「拦下正确的事」。
+
+## D104 · 保存为什么会「提示已保存，文件里却是旧值」——重复 id（2026-11-18）
+
+D102 末尾记着一条我没能复现稳定的现象：保存失败一次之后，再点保存提示「已保存」，
+但文件里是**表单被重画后的旧值**。这轮把它挖到底了，根因不是时序，是一个重复 id。
+
+### 一、根因
+
+```html
+<button id="cfg-save" title="保存当前配置">保存</button>   <!-- 1410 工具栏 -->
+...
+<button id="cfg-save" disabled>保存</button>               <!-- 1723 配置表单 -->
+```
+
+同一个 id 出现两次。`getElementById` 只返回第一个，于是：
+
+1. `renderConfig()` 里的 `document.getElementById("cfg-save")` 拿到的是**工具栏**按钮，
+   它在启/禁工具栏那个；而配置表单自己的「保存」永远保持 HTML 里写死的 `disabled`
+   —— **那个按钮根本点不动**。
+2. 两条 click 处理（`saveNow` 和配置表单的 `collectConfig()` 提交）都挂在**工具栏**
+   按钮上。点一次发出**两个** POST：一条 `sessionCfg`，一条从表单重建的 payload。
+   两个请求并发，后到的覆盖先到的；而第一条成功后会 `loadConfig()` 重画表单，
+   第二条用的正是重画前后的状态。**这就是「已保存」旁边躺着一个旧值。**
+
+破坏性验证（把重复 id 放回去重建）暴露得更彻底：
+
+```
+重复 id：cfg-save×2
+TypeError: Cannot set properties of null (setting 'disabled')
+    at renderConfig
+TypeError: Cannot read properties of null (reading 'addEventListener')
+作业列表：没有可编辑的作业
+```
+
+### 二、改法
+
+配置表单那个按钮改成 `id="cfg-form-save"`，`renderConfig()` 和表单提交处理都指向
+新 id。工具栏按钮只剩 `saveNow`。并在 HTML 里留了注释说明为什么不能共用 id ——
+重复 id 在界面上一声不响，直到它把某个值写坏。
+
+### 三、顺带修掉保存的另一半脆弱点
+
+`writeAtomic` 遇到 `os.Rename` 第一次失败就放弃。这个仓库自己的工作区就在 OneDrive
+下，实测过两种偶发：
+
+```
+replace ...job.toml.bak: rename ...bak.tmp ...bak:
+  The system cannot find the file specified
+  The process cannot access the file because it is being used by another process
+```
+
+两种情况隔几毫秒重试就成功。新增 `renameWithRetry`：最多 5 次，10/20/40/80 ms 退避。
+次数和间隔都刻意短 —— 只治瞬时占用，真问题（只读目录、磁盘满）仍要立刻报出来。
+
+### 四、检查
+
+`go test ./job/`：
+
+- `TestRenameWithRetryMovesTheFile` —— 内容真的搬过去，临时文件不留；
+- `TestRenameWithRetryReplacesExisting` —— 覆盖已有文件（每次保存的正常情形）；
+- `TestRenameWithRetryReportsAMissingSource` —— 真失败仍然失败，不靠重试掩盖。
+
+`scripts/check_save.js`（真实页面 + 一次性 daemon + 一次性作业文件）：
+
+```
+duplicateIds     []            ← 全页面没有重复 id
+formButtonDisabled false       ← 表单的保存按钮可点（原来永远 disabled）
+posts            1             ← 一次点击只发一个 POST（原来 2 个）
+saved            max_delete=17 set=true   ← 值真的进了文件
+formAfterSave    "17"          ← 保存后表单显示的就是刚存的值
+toolbarPosts     1             ← 工具栏按钮不再跑表单处理
+```
+
+反向验证：把 `id="cfg-form-save"` 改回 `cfg-save` 单独构建一份 exe，检查报出
+「重复 id：cfg-save×2」「没有可编辑的作业」，页面同时抛两个 TypeError。随后还原、
+重建、重新验证通过。
+
+### 五、教训
+
+**重复 id 是「看不见的接线错误」。** 它不像异常会立刻报出来，只会在某个特定路径上
+把两个处理接到一起、把渲染写到错的元素上。这次的后果是「保存说成功，文件是旧值」——
+一个用户会归因于「这软件不可靠」而不是「有个 id 重复了」的 bug。
+
+D102 里我写「没有复现到稳定步骤，所以没当 bug 修」。当时正确的做法不是放下，而是
+**换一个角度验证**：不是去造那个偶发失败，而是问「点一次保存到底发了几个请求」。
+这个角度一次就命中了。
