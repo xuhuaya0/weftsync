@@ -1594,12 +1594,15 @@
     <div id="dlg-pair-compare"></div>
     <div class="dlg-sect">同步方式</div>
     <div id="dlg-pair-variant"></div>
-    <!-- 删除上限放在这里，因为「这一对的设置」是用户遇到删除保护时
-         第一个会点的地方。2026-11-18 实测：保护卡让他「到配置表单里把这个
-         目录对的 max_delete 提到 20 以上」，而本对话框只有同步方式，没有上限 ——
-         读者点进来找不到那个字段。 -->
     <div class="dlg-sect">删除保护</div>
     <div class="filter-grid">
+      <div class="filter-col">
+        <label class="row" style="gap:8px;align-items:center">
+          <input type="checkbox" id="dlg-pair-guard">
+          <span>启用删除保护</span>
+        </label>
+        <div class="dlg-hint" id="dlg-pair-guard-hint"></div>
+      </div>
       <div class="filter-col">
         <label>删除上限（一次最多删几项）</label>
         <input type="number" id="dlg-pair-maxdel" min="0" placeholder="">
@@ -3936,11 +3939,12 @@ document.getElementById("plan-run").addEventListener("click", async (e) => {
     alert("没有勾选任何行。先勾上要同步的行，或点表头的全选框。");
     return;
   }
-  const note = only
-    ? `\n\n只同步勾选的 ${only.picked.length} / ${only.all} 项，` +
-      `其余不会被改动（包括不会被删除）。`
-    : "";
-  if (note && !confirm("按当前对比结果执行？" + note)) return;
+  // Same dialogue as the 同步 button, and for the same reason: since D103 the
+  // delete ceiling is off by default, so this confirmation IS the protection. It
+  // used to confirm only when rows were unticked, which meant "all 68 deletions
+  // ticked" ran without asking anything at all.
+  const plan = ((snapshot && snapshot.jobs) || []).find(j => j.name === name)?.plan;
+  if (!confirm(beforeRunConfirm(name, plan, only))) return;
   e.target.disabled = true;
   e.target.textContent = "启动中…";
   try {
@@ -4787,12 +4791,17 @@ function openPairDlg(i) {
 
   // 上限：空 = 跟配置。占位符只在没设置时显示生效值 —— 设了 30 却把 30 当占位符，
   // 清空时读者会以为还会用 30，实际回到了配置级的那个数。
+  const guard = document.getElementById("dlg-pair-guard");
   const md = document.getElementById("dlg-pair-maxdel");
+  guard.checked = !!s.delete_guard;
   md.value = s.max_delete_set ? String(s.max_delete) : "";
   md.placeholder = s.max_delete_set ? "继承配置" : String(s.max_delete);
+  document.getElementById("dlg-pair-guard-hint").textContent = s.delete_guard
+    ? "开着：要删的超过上限时整轮中止，一个文件也不删。"
+    : "关着（默认）：不数也不拦，同步前的确认对话会列出要删多少项、哪些项。";
   document.getElementById("dlg-pair-maxdel-hint").textContent = s.max_delete_set
     ? `这一对单独用 ${s.max_delete}；清空就回到配置级的数。`
-    : `留空 = 跟配置（现在是 ${s.max_delete}）。“镜像”要删的超过这个数时，整轮会被拦下。`;
+    : `留空 = 跟配置（现在是 ${s.max_delete}）。仅删除保护开启时生效。`;
 }
 
 document.getElementById("dlg-pair-ok").addEventListener("click", () => {
@@ -4812,6 +4821,11 @@ document.getElementById("dlg-pair-ok").addEventListener("click", () => {
     const mdv = document.getElementById("dlg-pair-maxdel").value.trim();
     p.sync.max_delete = mdv === "" ? 0 : Number(mdv);
     p.sync.max_delete_set = mdv !== "";
+    // The switch is written explicitly either way: a pair that the user just
+    // turned the guard ON for must not fall back to the job default on the next
+    // save because the box was left untouched.
+    p.sync.delete_guard = document.getElementById("dlg-pair-guard").checked;
+    p.sync.delete_guard_set = true;
   }
   dlgOk();
 });
@@ -4827,6 +4841,8 @@ document.getElementById("dlg-pair-reset").addEventListener("click", () => {
     p.sync.exclude = "";
     p.sync.max_delete = 0;
     p.sync.max_delete_set = false;
+    p.sync.delete_guard = false;
+    p.sync.delete_guard_set = false;
   }
   dlgOk();
 });
@@ -5242,18 +5258,101 @@ document.getElementById("s-sync-btn").addEventListener("click", async e => {
     alert("没有勾选任何行。先勾上要同步的行，或点表头的全选框。");
     return;
   }
-  // Deleting is the one irreversible step, so it gets a confirmation that names
-  // the plan the user just looked at. Without a compare first there is nothing to
-  // confirm against, and the run's own guard is the only protection left.
   const plan = ((snapshot && snapshot.jobs) || []).find(j => j.name === sel.job)?.plan;
-  const s = plan ? planSummaryText(plan) : "";
+  if (!confirm(beforeRunConfirm(sel.job, plan, only))) return;
+  runSession(e.target, false, "同步中…");
+});
+
+// beforeRunConfirm is the sentence the user reads immediately before a run that
+// may destroy data.
+//
+// D103. The user rejected the numeric ceiling as the primary protection - 「删除前
+// 确认 + 这个方案不好吗？」 - so this dialogue is now the protection, which means it
+// has to actually say what will be deleted:
+//
+//   - how many items, per pair;
+//   - WHICH items, by path, up to a readable number;
+//   - whether they can be recovered, which depends on `deletion`;
+//   - and whether the delete ceiling is even switched on, because "the guard did
+//     not stop me" is cold comfort after the fact.
+//
+// It used to say 「开始同步「demo」？上次对比结果：pair：删云端 68」 and nothing else:
+// no paths, no recovery note, and no hint that 68 was about to be permanent.
+function beforeRunConfirm(job, plan, only) {
   const note = only
     ? `\n\n只同步勾选的 ${only.picked.length} / ${only.all} 项，` +
       `其余不会被改动（包括不会被删除）。`
     : "";
-  if (!confirm(`开始同步「${sel.job}」？` + (s ? "\n\n上次对比结果：\n" + s : "") + note)) return;
-  runSession(e.target, false, "同步中…");
-});
+  const del = plan ? deletionDetail(plan) : null;
+
+  if (!del || !del.count) {
+    const s = plan ? planSummaryText(plan) : "";
+    return `开始同步「${job}」？` + (s ? "\n\n上次对比结果：\n" + s : "") + note;
+  }
+
+  // Destructive: lead with it, and show the paths rather than only a count.
+  const lines = [
+    `⚠ 这一步会删除 ${del.count} 项，且不可撤销。`,
+    "",
+    `目标侧：${del.side}`,
+  ];
+  const shown = del.paths.slice(0, 12);
+  for (const p of shown) lines.push("  " + p);
+  if (del.paths.length > shown.length) {
+    lines.push(`  …还有 ${del.paths.length - shown.length} 项（完整清单在对比表里）`);
+  }
+  lines.push("");
+  lines.push(del.recoverable
+    ? "删除方式是「保留版本」：被删的会在目标侧的版本目录里留一份。"
+    : "删除方式是「直接删除」：不进回收站，删了就没了。");
+  lines.push(del.guardOn
+    ? `删除保护开着（上限 ${del.limit} 项），超过会被拦下。`
+    : "删除保护关着：没有任何数量上限会拦住这一次。");
+  if (only) lines.push(note.trim());
+
+  return `开始同步「${job}」？\n\n` + lines.join("\n");
+}
+
+// deletionDetail pulls the destructive part of a plan into one readable object.
+//
+// Only rows the user actually left ticked count: an unticked delete will not
+// happen, and scaring somebody with a number the run will not act on is the same
+// mistake as under-reporting it.
+function deletionDetail(plan) {
+  const sel = r => cmpState.sel[rowKey(r.pair || "", r.path)] !== false;
+  const rows = [];
+  for (const r of (plan && plan.results) || []) {
+    for (const row of (r.plan || [])) {
+      if (row.action !== "delete-remote" && row.action !== "delete-local" &&
+          row.action !== "rmdir") continue;
+      if (!sel({ pair: r.pair, path: row.path })) continue;
+      rows.push({ path: row.path, action: row.action, pair: r.pair });
+    }
+  }
+  if (!rows.length) return { count: 0, paths: [], side: "", recoverable: false, guardOn: false, limit: 0 };
+
+  const results = (plan && plan.results) || [];
+  const hasLocal = rows.some(r => r.action === "delete-local");
+  const hasRemote = rows.some(r => r.action !== "delete-local");
+  const side = hasLocal && hasRemote ? "本机与云端都有"
+    : hasLocal ? "本机" : "云端";
+
+  // The plan carries the pair's resolved settings, so the recovery note and the
+  // guard state come from what will actually run rather than from the form.
+  const first = results[0] || {};
+  const recoverable = rows.some(r => {
+    const res = results.find(x => x.pair === r.pair) || first;
+    return res.deletion === "versioning";
+  });
+  return {
+    count: rows.length,
+    paths: rows.map(r => r.path),
+    side,
+    recoverable,
+    guardOn: results.some(r => r.guard_enabled),
+    limit: (results.find(r => r.guard_enabled) || {}).max_delete || 0,
+  };
+}
 
 // planSummaryText turns the last preview into one line per pair.
 function planSummaryText(plan) {
@@ -6716,14 +6815,24 @@ function syncFields(prefix, s, effectiveVariant) {
     field("版本命名", `<select id="${prefix}-vnaming">${opt(s.namings, s.versioning_naming)}</select>`) +
     field("冲突策略", `<select id="${prefix}-conflict">${opt(s.conflicts, s.conflict)}</select>`,
           "report = 只报告不改动") +
+    // 删除保护：开关默认关（D103）。
+    //
+    // 用户的理由：「删除前确认 + 这个方案不好吗？你还可以保留这个最大删除，但是
+    // 可以加个开关默认关闭吗？我觉得不需要啊」。预先拍一个数字猜不到这轮会删
+    // 多少，而它给「68 项」和「11 项」的回答都一样：停下。所以默认交给确认对话。
+    checkField(prefix + "-guard", "启用删除保护（超过上限就整轮中止）",
+      s.delete_guard,
+      "关着时不数也不拦，同步前的确认对话就是保护。开着时两个上限都生效，" +
+      "一旦超出一个，整轮一个文件也不删") +
     field("删除上限",
           `<input type="number" id="${prefix}-maxdel" min="0" placeholder="${s.max_delete}" ` +
           `value="${s.max_delete_set ? s.max_delete : ""}">`,
-          s.max_delete_set ? "留空 = 继承默认值" : `继承默认值（${s.max_delete}）`) +
+          (s.max_delete_set ? "留空 = 继承默认值" : `继承默认值（${s.max_delete}）`) +
+          "；仅删除保护开启时生效") +
     field("删除体积上限",
           `<input type="text" id="${prefix}-maxdelsize" placeholder="不限" ` +
           `value="${esc(s.max_delete_size || "")}">`,
-          s.max_delete_size_help) +
+          s.max_delete_size_help + "；仅删除保护开启时生效") +
     twoWay;
 }
 
@@ -6904,6 +7013,10 @@ function collectSync(prefix) {
     versioning_dir: val("vdir"),
     versioning_naming: val("vnaming"),
     conflict: val("conflict"),
+    // The switch is state, not a default: it is the same kind of control as the
+    // two-way switches below, and "off" is a real answer rather than "unset".
+    delete_guard: checked("guard"),
+    delete_guard_set: true,
     max_delete: maxdel === "" ? 0 : Number(maxdel),
     max_delete_set: maxdel !== "",
     max_delete_size: val("maxdelsize").trim(),

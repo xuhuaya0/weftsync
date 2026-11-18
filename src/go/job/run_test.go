@@ -57,9 +57,14 @@ func runPair(t *testing.T, cfg *Config) (PairResult, error) {
 
 // The core safety property: when the pending deletions exceed the limit, the run
 // stops and the destination is left completely untouched.
+//
+// delete_guard = true is spelled out because the guard is opt-in since D103: the
+// user asked for a switch that starts off, preferring "confirm before delete" to a
+// number picked in advance.
 func TestGuardAbortsWithoutDeletingAnything(t *testing.T) {
 	cfg, _, remote := localPair(t, VariantMirror, `
 [pair.sync]
+delete_guard = true
 max_delete = 2
 `)
 	for i := 1; i <= 5; i++ {
@@ -93,6 +98,7 @@ max_delete = 2
 func TestGuardAllowsExactlyAtLimit(t *testing.T) {
 	cfg, _, remote := localPair(t, VariantMirror, `
 [pair.sync]
+delete_guard = true
 max_delete = 2
 `)
 	writeFile(t, filepath.Join(remote, "a.txt"), "remote")
@@ -114,6 +120,7 @@ max_delete = 2
 func TestGuardZeroBlocksEveryDeletion(t *testing.T) {
 	cfg, _, remote := localPair(t, VariantMirror, `
 [pair.sync]
+delete_guard = true
 max_delete = 0
 `)
 	writeFile(t, filepath.Join(remote, "only.txt"), "remote")

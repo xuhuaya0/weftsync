@@ -155,6 +155,25 @@ type SyncSpec struct {
 	// Conflict decides what happens when the remote no longer matches the
 	// snapshot. Defaults to report, which changes nothing.
 	Conflict string `toml:"conflict"`
+	// DeleteGuard turns the two deletion ceilings on (max_delete and
+	// max_delete_size).
+	//
+	// 2026-11-18, the user's own words: 「你还可以保留这个最大删除，但是可以加个
+	// 开关默认关闭吗？我觉得不需要啊」. Their argument was right: a number picked in
+	// advance cannot know what this run is about to do, and the guard's answer to
+	// "68 deletions" was the same as its answer to "11 deletions" - stop. They
+	// preferred FreeFileSync's shape, where the tool shows what it will delete and
+	// asks, and the human decides with the list in front of them.
+	//
+	// So this is off unless asked for. When it is off, nothing is counted and
+	// nothing is refused; the confirmation before a run is the protection. When it
+	// is on, both ceilings apply and a run that would exceed either deletes
+	// nothing at all.
+	//
+	// A pointer so "unset" and "off" stay distinguishable: a pair that says
+	// nothing inherits the job's answer instead of forcing false over a job that
+	// turned it on.
+	DeleteGuard *bool `toml:"delete_guard"`
 	// MaxDelete is a pointer so "unset" and "0" stay distinguishable: 0 means
 	// "delete nothing at all", which is a legitimate choice.
 	MaxDelete *int64 `toml:"max_delete"`
@@ -334,6 +353,12 @@ func (p *Pair) EffectiveSync(c *Config) (ResolvedSync, error) {
 		Conflict:         firstNonEmpty(p.Sync.Conflict, c.Job.Sync.Conflict, DefaultConflict),
 		MaxDelete:        DefaultMaxDelete,
 	}
+	// Off unless asked for; see SyncSpec.DeleteGuard.
+	if p.Sync.DeleteGuard != nil {
+		out.DeleteGuard = *p.Sync.DeleteGuard
+	} else if c.Job.Sync.DeleteGuard != nil {
+		out.DeleteGuard = *c.Job.Sync.DeleteGuard
+	}
 	if p.Sync.MaxDelete != nil {
 		out.MaxDelete = *p.Sync.MaxDelete
 	} else if c.Job.Sync.MaxDelete != nil {
@@ -369,7 +394,7 @@ func (p *Pair) EffectiveSync(c *Config) (ResolvedSync, error) {
 	if out.MaxDelete < 0 {
 		return out, fmt.Errorf(
 			"pair %q: max_delete must be >= 0 (0 refuses every deletion); "+
-				"negative values are not a way to disable the guard", p.Name)
+				"to turn the ceiling off entirely, set delete_guard = false", p.Name)
 	}
 
 	// The byte guard is the count guard's sibling: 5000 tiny files and one 40 GiB
@@ -490,6 +515,9 @@ type ResolvedSync struct {
 	VersioningNaming string
 	Conflict         string
 	MaxDelete        int64
+	// DeleteGuard is whether the deletion ceilings apply at all. Off by
+	// default; see SyncSpec.DeleteGuard.
+	DeleteGuard bool
 	// MaxDeleteSize is the byte ceiling for one run, 0 for "no ceiling".
 	MaxDeleteSize int64
 	// MaxDeleteSizeText is the same value as the user wrote it, so the

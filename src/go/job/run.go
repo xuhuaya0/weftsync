@@ -40,7 +40,8 @@ func (e *GuardError) Error() string {
 	return fmt.Sprintf(
 		"pair %q wanted to delete %d file(s) and %d empty director(ies), "+
 			"but max_delete is %d. NOTHING was deleted. "+
-			"If this is expected, raise max_delete for this pair; "+
+			"If this is expected, raise max_delete for this pair or turn the "+
+			"guard off with delete_guard = false; "+
 			"if it is not, check that local.root points at the intended folder",
 		e.Pair, e.Files, e.Dirs, e.Limit)
 }
@@ -176,7 +177,14 @@ type PairResult struct {
 	// MaxDelete is the limit the guard compared against, so the console can say
 	// "deletes 68 items, max_delete is 10" instead of just "over the limit". Zero
 	// means the pair has no limit configured.
-	MaxDelete int64      `json:"max_delete,omitempty"`
+	MaxDelete int64 `json:"max_delete,omitempty"`
+	// GuardEnabled reports whether the deletion ceilings were in effect for this
+	// pair. The console needs it to say "nothing will stop this" instead of
+	// implying a guard that is switched off.
+	GuardEnabled bool `json:"guard_enabled,omitempty"`
+	// Deletion is "permanent" or "versioning", so the confirmation before a run
+	// can say whether the files it is about to delete can be recovered.
+	Deletion  string     `json:"deletion,omitempty"`
 	Conflicts []Conflict `json:"conflicts,omitempty"`
 	// Pulled counts files downloaded because the cloud replaced them (two-way).
 	Pulled int `json:"pulled"`
@@ -337,6 +345,8 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	// it the card can only say "over the limit", which leaves the reader to go
 	// find the value themselves before deciding anything.
 	res.MaxDelete = spec.MaxDelete
+	res.GuardEnabled = spec.DeleteGuard
+	res.Deletion = spec.Deletion
 	// Display form, not the connection string: the options folded into
 	// RemotePath are an implementation detail and would publish a local path
 	// into the web console.
@@ -644,8 +654,15 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	// The byte ceiling is measured on this same pass, by leaving rclone's own
 	// threshold switched on: its check runs before the destructive call and
 	// aborts the pass, so a dry pass that trips it has still deleted nothing.
+	//
+	// Both ceilings are opt-in (delete_guard). With the guard off this is still a
+	// dry pass - it is what measures the deletion count for the console and what
+	// catches "the destination changed between the two passes" - but nothing is
+	// refused.
 	dryOpts := opts
-	dryOpts.maxDeleteSize = spec.MaxDeleteSize
+	if spec.DeleteGuard {
+		dryOpts.maxDeleteSize = spec.MaxDeleteSize
+	}
 	opt.phase(PhaseScan, p.Name)
 	dry, err := runPass(ctx, fdst, fsrc, dryOpts, true, true)
 	res.DryRun = dry
@@ -660,7 +677,7 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 		// about which threshold stopped it. Re-measure with the ceiling off: a
 		// pass that then counts more deletions was stopped by the ceiling, one
 		// that fails again was stopped by something real.
-		if spec.MaxDeleteSize > 0 {
+		if spec.DeleteGuard && spec.MaxDeleteSize > 0 {
 			if again, againErr := runPass(ctx, fdst, fsrc, opts, true, true); againErr == nil &&
 				again.Deleted > dry.Deleted {
 				res.DryRun = again
@@ -678,7 +695,7 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 			"pair %q: the pre-flight pass failed, so nothing was changed: %w", p.Name, err)
 	}
 
-	if dry.Destructive() > spec.MaxDelete {
+	if spec.DeleteGuard && dry.Destructive() > spec.MaxDelete {
 		res.GuardHit = true
 		if opt.DryRun {
 			// A plan should report, not fail: the point is to show what a real
@@ -702,14 +719,21 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	if err != nil {
 		return res, fmt.Errorf("pair %q: %w", p.Name, err)
 	}
-	if actual.Destructive() > spec.MaxDelete {
-		// The plan changed between the two passes (someone else wrote to the
-		// destination). Say so loudly instead of silently over-deleting.
+	// The destination changed between the two passes (someone else wrote to it).
+	//
+	// Compared against what the pre-flight pass MEASURED, not against max_delete.
+	// Before D103 this test read `actual > spec.MaxDelete`, which was both wrong and
+	// blind: with the guard off it fired on every legitimate large mirror (measured:
+	// "it deleted 20 item(s) although max_delete is 2" for a run where 2 was simply
+	// the value in an ignored field), and with the guard on it missed a run that
+	// deleted more than it promised as long as the total stayed under the limit.
+	// What actually matters is "more was deleted than the comparison counted".
+	if actual.Destructive() > dry.Destructive() {
 		return res, fmt.Errorf(
 			"pair %q: the destination changed between the pre-flight pass and the real "+
-				"run: it deleted %d item(s) although max_delete is %d. "+
-				"Raise max_delete or re-run once the destination is quiet",
-			p.Name, actual.Destructive(), spec.MaxDelete)
+				"run: the comparison counted %d item(s) to delete, the run deleted %d. "+
+				"Nothing further was done; re-run once the destination is quiet",
+			p.Name, dry.Destructive(), actual.Destructive())
 	}
 	return res, nil
 }

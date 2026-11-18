@@ -20,6 +20,7 @@ import (
 func TestPreviewPublishesTheGuardLimit(t *testing.T) {
 	cfg, local, remote := localPair(t, VariantMirror, `
 [pair.sync]
+delete_guard = true
 max_delete = 2
 `)
 	// Five files only on the destination: a mirror would delete them all.
@@ -59,6 +60,7 @@ max_delete = 2
 func TestPreviewPublishesTheLimitEvenWhenItDoesNotFire(t *testing.T) {
 	cfg, local, _ := localPair(t, VariantUpdate, `
 [pair.sync]
+delete_guard = true
 max_delete = 7
 `)
 	writeFile(t, filepath.Join(local, "a.txt"), "a")
@@ -76,10 +78,10 @@ max_delete = 7
 	}
 }
 
-// A pair that never mentions max_delete still has one - the documented default -
-// and it must be published too. Assuming "absent means unlimited" would have made
-// the console print "没有配置 max_delete" about a limit of 50 that will absolutely
-// fire.
+// A pair that never mentions max_delete still resolves one - the documented
+// default - so the console can show what turning the guard on would enforce.
+//
+// The switch is what decides whether it applies, and it starts off (D103).
 func TestDefaultLimitIsPublished(t *testing.T) {
 	cfg, local, _ := localPair(t, VariantUpdate, "")
 	writeFile(t, filepath.Join(local, "a.txt"), "a")
@@ -91,5 +93,8 @@ func TestDefaultLimitIsPublished(t *testing.T) {
 	}
 	if res.MaxDelete != DefaultMaxDelete {
 		t.Errorf("max_delete = %d, want the default %d", res.MaxDelete, DefaultMaxDelete)
+	}
+	if res.GuardEnabled {
+		t.Error("the guard must be off unless the pair asks for it")
 	}
 }

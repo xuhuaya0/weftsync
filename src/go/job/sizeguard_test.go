@@ -16,6 +16,7 @@ import (
 func TestSizeGuardBlocksTheRun(t *testing.T) {
 	cfg, _, remote := localPair(t, VariantMirror, `
 [pair.sync]
+delete_guard = true
 max_delete = 50
 max_delete_size = "1k"
 `)
@@ -56,6 +57,7 @@ max_delete_size = "1k"
 func TestSizeGuardAllowsSmallDeletions(t *testing.T) {
 	cfg, _, remote := localPair(t, VariantMirror, `
 [pair.sync]
+delete_guard = true
 max_delete = 50
 max_delete_size = "1M"
 `)
@@ -78,6 +80,7 @@ max_delete_size = "1M"
 func TestSizeGuardIsReportedByPreview(t *testing.T) {
 	cfg, _, remote := localPair(t, VariantMirror, `
 [pair.sync]
+delete_guard = true
 max_delete_size = "1k"
 `)
 	for i := 0; i < 4; i++ {
