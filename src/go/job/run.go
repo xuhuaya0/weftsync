@@ -166,13 +166,17 @@ var _ remedy.Carrier = (*ConflictError)(nil)
 
 // PairResult is the outcome for one pair.
 type PairResult struct {
-	Pair      string     `json:"pair"`
-	Variant   string     `json:"variant"`
-	Local     string     `json:"local"`
-	Remote    string     `json:"remote"`
-	DryRun    PassResult `json:"dry_run"`
-	Actual    PassResult `json:"actual"`
-	GuardHit  bool       `json:"guard_hit"`
+	Pair     string     `json:"pair"`
+	Variant  string     `json:"variant"`
+	Local    string     `json:"local"`
+	Remote   string     `json:"remote"`
+	DryRun   PassResult `json:"dry_run"`
+	Actual   PassResult `json:"actual"`
+	GuardHit bool       `json:"guard_hit"`
+	// MaxDelete is the limit the guard compared against, so the console can say
+	// "deletes 68 items, max_delete is 10" instead of just "over the limit". Zero
+	// means the pair has no limit configured.
+	MaxDelete int64      `json:"max_delete,omitempty"`
 	Conflicts []Conflict `json:"conflicts,omitempty"`
 	// Pulled counts files downloaded because the cloud replaced them (two-way).
 	Pulled int `json:"pulled"`
@@ -329,6 +333,10 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 	}
 	res.Variant = variant
 	res.Local = p.LocalPath()
+	// The guard's limit, published so the console can name both numbers. Without
+	// it the card can only say "over the limit", which leaves the reader to go
+	// find the value themselves before deciding anything.
+	res.MaxDelete = spec.MaxDelete
 	// Display form, not the connection string: the options folded into
 	// RemotePath are an implementation detail and would publish a local path
 	// into the web console.

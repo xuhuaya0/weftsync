@@ -2258,10 +2258,18 @@ function finishStatus(job, mode) {
     st.className = "stat done";
     // Three answers, not two: work to do, nothing to do, and nothing to do but
     // leftovers remain. The third used to be reported as the second.
+    //
+    // A guard trip is a fourth: there is work, and it will be refused. Saying only
+    // "73 项要处理" about a run that cannot start reads as "ready to go".
     const extraNote = t.extra ? `；云端有 ${t.extra} 个本地没有的文件（更新不删除）` : "";
+    const guardNote = plan.guard_hit
+      ? `；其中 ${t.destructive} 项会删除，超过 max_delete` +
+        (guardLimit(plan) ? ` = ${guardLimit(plan)}` : "") + `，跑一次会被拦下`
+      : "";
     st.textContent = t.total
       ? `比较完成：${t.total} 项要处理` +
-        (t.destructive ? `，其中 ${t.destructive} 项会删除` : "") + extraNote
+        (t.destructive && !plan.guard_hit ? `，其中 ${t.destructive} 项会删除` : "") +
+        extraNote + guardNote
       : `比较完成：${t.extra ? "" : "两侧一致，"}没有需要变更的内容` +
         (t.extra ? `，但云端有 ${t.extra} 个本地已经没有的文件（更新不删除）` : "。");
     return;
@@ -3148,21 +3156,67 @@ function extraRemoteCount(p) {
   return n;
 }
 
+// guardNoteHTML explains a preview the delete guard would refuse, with both
+// numbers and what to do about it.
+//
+// 2026-11-18: the user switched a pair to "mirror" while its local root pointed at
+// a folder holding five files and the cloud folder held sixty-eight. The plan was
+// right - a mirror makes the destination an exact copy - and the guard was right to
+// refuse. What the card said was:
+//
+//   这个配置现在真的跑一次会被拒绝。待删除的数量超过 max_delete…
+//
+// without either number, without saying that 按此执行 would do nothing, and without
+// saying where max_delete lives. Their question was 「这是为什么」, which is the
+// question a card like this should have already answered.
+function guardNoteHTML(p) {
+  const n = planTotals(p).destructive;
+  const limit = guardLimit(p);
+  const limitText = limit ? `max_delete = ${limit}` : "没有配置 max_delete";
+  return `<div class="note"><strong>这一轮会被删除保护拦下：要删除 ${n} 项，` +
+    `而 ${esc(limitText)}。</strong>` +
+    `<div class="hint" style="margin-top:4px">` +
+    `保护机制在任何删除发生之前中止整轮，所以现在点「按此执行」不会删掉任何文件，` +
+    `也不会传完一半。下面的数字和动作是「如果允许，会做什么」。` +
+    `<br>要继续：先确认本地目录填对了 —— 「镜像」会把云端变成和本地一模一样，` +
+    `本地没有的都会被删。确实要删这么多，就到「配置表单」里把这个目录对的 ` +
+    `max_delete 提到 ${n} 以上，再重新比较。</div></div>`;
+}
+
+// guardLimit reads the pair's max_delete out of the plan. The pairs of one job can
+// carry different limits, so the smallest one that was hit is the honest answer.
+function guardLimit(p) {
+  let limit = 0;
+  for (const r of (p && p.results) || []) {
+    if (!r.guard_hit) continue;
+    const v = Number(r.max_delete || 0) || 0;
+    if (!v) continue;
+    limit = limit ? Math.min(limit, v) : v;
+  }
+  return limit;
+}
+
 // planRunDisabled says whether 按此执行 may act on this plan.
 //
-// Two different reasons, one answer: a preview that could not be built has no
-// plan to execute, and a preview measured before a run describes a state that no
-// longer exists. Acting on either one would promise something the screen cannot
-// back up.
+// Three different reasons, one answer: a preview that could not be built has no
+// plan to execute, a preview measured before a run describes a state that no
+// longer exists, and one the guard would refuse cannot do anything either. A
+// button that only produces a refusal is not a button.
 function planRunDisabled(p) {
   if (!p) return true;
-  return !!p.error || !!p.stale;
+  return !!p.error || !!p.stale || !!p.guard_hit;
 }
 
 // planRunTitle explains a disabled 按此执行, since the button cannot speak.
 function planRunTitle(p) {
   if (p && p.stale && !p.error) {
     return "这张表是上一次同步之前量的，先重新比较一次。";
+  }
+  if (p && p.guard_hit && !p.error) {
+    const n = planTotals(p).destructive;
+    const limit = guardLimit(p);
+    return `要删除 ${n} 项，超过 max_delete` +
+      (limit ? ` = ${limit}` : "") + `，跑了也会被拦下。先在「配置表单」里调整。`;
   }
   return "";
 }
@@ -3195,9 +3249,7 @@ function planHTML(p) {
         `<div class="mono" style="margin-top:6px">${esc(p.error)}</div></div>`);
     }
   } else if (p.guard_hit) {
-    parts.push(`<div class="note"><strong>这个配置现在真的跑一次会被拒绝。</strong>` +
-      `待删除的数量超过 max_delete，保护机制会在任何删除发生之前中止整轮。` +
-      `下面的数字是「如果允许，会做什么」。</div>`);
+    parts.push(guardNoteHTML(p));
   } else if (p.stale) {
     // Not "nothing to change": that sentence is about the present, and this table
     // is about the past.
@@ -3500,9 +3552,17 @@ function cmpSides(r) {
     return out;
   }
 
+  // A deletion's size is unknown, not zero: rclone's dry-run delete line carries
+  // no size at all (measured — "Skipped delete as --dry-run is set" and nothing
+  // else), so every delete row printed "0 B". Sixty-eight of those next to a
+  // "删除 68 项" total reads as "deleting nothing", which is the opposite of what
+  // is about to happen.
+  const unknownSize = (r.action === "delete-remote" || r.action === "delete-local") &&
+    !r.size;
+
   if (r.hasLeft) {
     out.leftName = r.path;
-    out.leftSize = fmtBytes(r.size);
+    out.leftSize = unknownSize ? "?" : fmtBytes(r.size);
   }
   if (r.hasRight) {
     out.rightName = r.path;
@@ -3511,7 +3571,7 @@ function cmpSides(r) {
       // honest answer when the snapshot has no record.
       out.rightSize = r.rightSize > 0 ? fmtBytes(r.rightSize) : "?";
     } else {
-      out.rightSize = fmtBytes(r.size);
+      out.rightSize = unknownSize ? "?" : fmtBytes(r.size);
     }
   }
   return out;
