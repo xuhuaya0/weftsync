@@ -18,6 +18,7 @@ import (
 	"github.com/rclone/rclone/cmd"
 	_ "github.com/rclone/rclone/cmd/all" // all upstream commands
 	_ "github.com/rclone/rclone/lib/plugin"
+	"github.com/spf13/cobra" // only to disable its Windows mousetrap
 
 	_ "weftsync/backend/feishu"     // our backend
 	"weftsync/browser"              // open the console in a browser
@@ -47,6 +48,19 @@ func main() {
 	// The rewrite goes through os.Args so the daemon command parses exactly the
 	// flags it would from a shell; nothing here reimplements the CLI.
 	if len(os.Args) == 1 {
+		// cobra has a "mousetrap" for Windows: when it notices explorer.exe
+		// started the process it prints "This is a command line tool." and
+		// exits. That check lives inside Execute(), before any command is
+		// dispatched, so rewriting os.Args below would never be reached - the
+		// message was what a double click showed for five seconds before the
+		// window vanished. Blanking the text is cobra's documented way to turn
+		// it off.
+		//
+		// Only here, and only because this branch replaces exactly what the
+		// mousetrap protects against: a double-clicked CLI flashing a usage
+		// screen nobody can read.
+		cobra.MousetrapHelpText = ""
+
 		consoleURL := "http://" + daemoncmd.DefaultAddr + "/"
 		if reachable(consoleURL) {
 			_ = browser.Open(consoleURL)

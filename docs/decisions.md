@@ -7425,3 +7425,104 @@ dist\weftsync-windows-amd64.exe            （无参数 = 双击）
 **消息框没有实测。** 要触发它得让 `Listen` 失败，而失败路径的验证需要两台进程抢同一
 个端口 —— 我用「二次双击」覆盖了实际最常见的那条（已经在跑），但「被别的程序占了
 5572」这条路只写了代码，没有跑过。`MessageBoxW` 的参数在没被调用过之前，等于没测过。
+
+## D110 · 双击出现「This is a command line tool.」是 cobra 的捕鼠夹（2026-11-18）
+
+用户（贴了截图，窗口里就两行字，然后就没了）：
+
+> 现在还是双击后跳出这个然后就没了啊
+
+D108/D109 我以为双击已经修好了。没有。用户测到的是：
+
+```
+This is a command line tool.
+
+You need to open cmd.exe and run it from there.
+```
+
+### 一、这句话不是我们的代码
+
+先在仓库里搜，没有；再在 Go 模块缓存里扫全部 `.go`，命中一处：
+
+`github.com/spf13/cobra@v1.9.1/cobra.go:72`
+
+```go
+// MousetrapHelpText enables an information splash screen on Windows
+// if the CLI is started from explorer.exe.
+// To disable the mousetrap, just set this variable to blank string ("").
+var MousetrapHelpText = `This is a command line tool.
+
+You need to open cmd.exe and run it from there.
+`
+var MousetrapDisplayDuration = 5 * time.Second
+```
+
+cobra 的「捕鼠夹」：检测到进程是 explorer.exe 拉起的（即双击），就打印这段话、
+睡 `MousetrapDisplayDuration`（默认 5 秒）、`os.Exit(1)`。
+
+关键在**它在哪检查**：`Execute()` 内部、任何命令被分发之前。所以 D108 在 `main()`
+里改 `os.Args` 这条路**根本到不了** —— 程序在更早的地方就退出了。这解释了为什么改完
+还是老样子，也解释了为什么窗口停一会儿才消失（5 秒睡眠）。
+
+### 二、为什么我上次「验证通过」却没发现
+
+D109 我是用 PowerShell 的 `Start-Process` 启动的。捕鼠夹判据是「本控制台只有我一个
+进程」（`GetConsoleProcessList` 返回 1）；从已有终端/`Start-Process` 起来的进程不满足
+这个判据，于是捕鼠夹安静通过，我的分支被正常执行 —— 测试全绿，真实的双击全红。
+
+**验证手段本身不对，结论就没有意义。** 这次改成用 `explorer.exe <exe>` 拉起，和双击
+走同一条路径。
+
+### 三、改法
+
+`main()` 的无参分支里，在改写 `os.Args` 之前：
+
+```go
+cobra.MousetrapHelpText = ""
+```
+
+只在这一处关。捕鼠夹存在的理由是「别让双击的 CLI 闪一下用法说明」，而这个分支正是用
+有用行为替代那一下闪烁 —— 关掉它是在履行同一个目的，不是绕过保护。
+
+`cobra` 本来就是直接依赖（`go.mod` 里 v1.9.1），不新增依赖。
+
+### 四、验证（全部用 explorer.exe 拉起，与双击同路径）
+
+**先复现**（改之前）：
+
+```
+appeared: pid=12736 after 1440ms
+RESULT: exited after 7748ms        <- 5 秒睡眠 + 启动开销
+port 5572: not listening
+health: unreachable
+```
+
+**改之后，三条路各自实测：**
+
+| 场景 | 结果 |
+|---|---|
+| 冷启动 | 进程不退出（21 秒后仍在），`/api/health` 回 `{"ok":true}`，命令行是**无参数**，日志两行 |
+| 已在运行再双击 | 第二个实例 1794ms 后退出码 0；实例数仍是 1；原实例 health 仍 ok |
+| 端口被别的程序占 | 弹出标题为「weftsync 启动失败」的消息框并阻塞等待 → **D109 里标为未验证的 MessageBoxW，这次真的跑到了** |
+
+`netstat -ano | findstr :5572` → `LISTENING 19448`，进程命令行只有 exe 路径、没有参数
+—— 说明是双击分支自己在内部补的 `daemon --open --hide-console`。
+
+门禁：`gofmt` 干净、`go vet` 0、`go test ./...` 全 ok、`GOOS=linux go build ./...` 0。
+
+一个小插曲：验证脚本里 `Get-NetTCPConnection -State Listen -LocalPort 5572` 返回空，
+而 `netstat` 明明显示 LISTENING。是**脚本的过滤器写错了**，不是服务没监听 —— 记在这里
+是因为「工具报出来的差异先怀疑工具自己」，这次差一点又去查一个不存在的 bug。
+
+### 五、双击现在到底做什么
+
+```
+双击
+  → 已经有一个在跑？  打开浏览器，退出码 0（实测 1.8 秒）
+  → 没在跑？          起 daemon（无 job 文件、带 --log-file）→ 监听成功 → 藏窗口 → 开浏览器
+  → 起不来？          消息框说明原因
+```
+
+没有 job 文件也能用：界面里 新建 → 填路径 → 另存为 会调 `AddConfig` 把新配置挂到运行中
+的 daemon 上，定时任务当场生效。所以「一键启动 + 全部在 GUI 配」这条链路是通的，不需要
+先手写 `job.toml`。
