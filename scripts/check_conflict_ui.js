@@ -16,7 +16,16 @@
 //   5. in the conflicts table, 以云端为准 is disabled for remote-deleted (there is
 //      no cloud copy left to pull) with a reason in the title, while 以本地为准
 //      stays available;
-//   6. none of the three surfaces contains the backend's English phrasing.
+//   6. none of the three surfaces contains the backend's English phrasing;
+//   7. the wording states facts only - no second person, no guessing why the cloud
+//      changed. The user's complaint was 「为什么会有这种提醒，而且这么口语化」:
+//      the old banner said 「常见原因是你在云盘里删了或换了文件」, which guesses at
+//      something the tool cannot know.
+//
+// Since D98 the engine no longer aborts on remote-deleted for a one-way pair (that
+// is an ordinary upload), so the blocking kinds are remote-replaced and
+// duplicate-name. The fabricated conflict uses remote-replaced for that reason;
+// the engine-side rule is covered by go test (splitRestorable).
 //
 // It drives the page's own renderers with fabricated data rather than arranging a
 // real conflict: the local backend has no `conflicts` command, so a real one needs
@@ -34,11 +43,13 @@
   "use strict";
 
   const ENGLISH = /pair "|conflict\(s\)|NOTHING was uploaded|review the report above/i;
+  // 第二人称 + 猜测原因：工具并不知道云盘为什么变了。
+  const COLLOQUIAL = /你|常见原因|也可能是|对不上/;
 
   const conflict = {
     path: "R5_SS103_HV_135_20250331_135012.xlsx",
-    kind: "remote-deleted",
-    detail: "the file recorded in the snapshot is no longer in the folder",
+    kind: "remote-replaced",
+    detail: "the file at this path is not the one recorded in the snapshot",
   };
 
   // The shape the daemon sends: a job whose last preview aborted on conflicts.
@@ -61,7 +72,7 @@
           'for duplicate copies, or set conflict = "overwrite" / "keep-both" for this pair',
         remedy: {
           kind: "conflict",
-          fields: { pair: "pair-2", count: "1", paths: conflict.path, kinds: conflict.path + "\tremote-deleted" },
+          fields: { pair: "pair-2", count: "1", paths: conflict.path, kinds: conflict.path + "\tremote-replaced" },
         },
         results: [{
           pair: "pair-2", variant: "update", conflicts: [conflict], plan: [],
@@ -96,6 +107,22 @@
     const measured = {};
     const job = fakeJob();
 
+    // Everything this check overwrites, so the page can be put back exactly.
+    //
+    // Measured while writing this: the check rendered a fabricated conflict into
+    // the result card and the status bar and then just stopped, leaving the
+    // screen claiming 「比较停下：1 个路径…」 about a job that had compared fine.
+    // A check that lies to the user afterwards is worse than no check.
+    const st = document.getElementById("s-status");
+    const keep = {
+      statusHTML: st ? st.innerHTML : "",
+      statusClass: st ? st.className : "",
+      // planJob is a script-scoped `let`, not a property of window, so it cannot be
+      // read directly from here. The panel writes the job name onto its own button,
+      // which is the same fact and is readable from outside.
+      planJob: (document.getElementById("plan-run") || { dataset: {} }).dataset.job || "",
+    };
+
     const out = withJob(job, () => {
       window.renderRemedy();
       const remedy = document.getElementById("s-remedy");
@@ -117,36 +144,45 @@
     if (!out.remedyShown) {
       failures.push("冲突失败时说明块没有显示");
     }
-    if (!/同步停下了/.test(out.remedyText)) {
-      failures.push("说明块标题不是中文的「同步停下了」：" + out.remedyText.slice(0, 60));
+    if (!/同步停下/.test(out.remedyText)) {
+      failures.push("说明块标题不是中文的「同步停下」：" + out.remedyText.slice(0, 60));
     }
-    if (!/1 个文件/.test(out.remedyText)) {
-      failures.push("说明块没有说清有几个文件");
+    if (!/1 个路径/.test(out.remedyText)) {
+      failures.push("说明块没有说清有几个路径");
     }
     if (out.remedyText.indexOf(conflict.path) < 0) {
       failures.push("说明块没有列出冲突的文件名（这正是用户最需要的一句）");
     }
-    if (out.remedyText.indexOf("云端已删除") < 0) {
-      failures.push("说明块没有给出中文类型标签「云端已删除」");
+    if (out.remedyText.indexOf("云端已替换") < 0) {
+      failures.push("说明块没有给出中文类型标签「云端已替换」");
     }
     if (ENGLISH.test(out.remedyText)) {
       failures.push("说明块里还有英文原文");
+    }
+    if (COLLOQUIAL.test(out.remedyText)) {
+      failures.push("说明块在猜原因或用第二人称（口语化）：" + out.remedyText.slice(0, 80));
     }
 
     // 3: the result card
     if (!/比较停下/.test(out.planText)) {
       failures.push("结果卡没有说「比较停下」：" + out.planText.slice(0, 60));
     }
-    if (!/什么都没改/.test(out.planText)) {
-      failures.push("结果卡没有说「什么都没改」");
+    if (!/没有改动任何文件/.test(out.planText)) {
+      failures.push("结果卡没有说「本轮没有改动任何文件」");
     }
     if (ENGLISH.test(out.planText)) {
       failures.push("结果卡还在印英文原文");
     }
+    if (COLLOQUIAL.test(out.planText)) {
+      failures.push("结果卡在猜原因或用第二人称：" + out.planText.slice(0, 80));
+    }
 
     // 4: the status bar
     if (!/比较停下/.test(out.status) || !/\d/.test(out.status)) {
-      failures.push("底栏没有「比较停下：N 个…」：" + out.status);
+      failures.push("底栏没有「比较停下：N 个路径…」：" + out.status);
+    }
+    if (COLLOQUIAL.test(out.status)) {
+      failures.push("底栏在猜原因或用第二人称：" + out.status);
     }
     if (ENGLISH.test(out.status)) {
       failures.push("底栏还在印英文原文");
@@ -166,14 +202,38 @@
     if (/disabled/.test(replaced)) {
       failures.push("云端已替换时「以云端为准」被禁用了 —— 那是有东西可下载的正常情况");
     }
-    const detail = window.conflictDetail(conflict);
-    measured.detail = detail;
-    if (!/不在云端/.test(detail)) {
-      failures.push("冲突说明不是中文：" + detail);
+    // The per-kind sentence, checked for each kind so a new kind cannot silently
+    // fall back to the backend's English `detail`.
+    const details = {
+      deleted: window.conflictDetail({ kind: "remote-deleted" }),
+      replaced: window.conflictDetail({ kind: "remote-replaced" }),
+      duplicate: window.conflictDetail({ kind: "duplicate-name", recorded: "tok", found: ["a", "b"] }),
+      unknown: window.conflictDetail({ kind: "something-new", detail: "backend sentence" }),
+    };
+    measured.detail = details;
+    if (!/不在云端/.test(details.deleted)) {
+      failures.push("云端已删除的说明不是中文：" + details.deleted);
+    }
+    if (!/不是同一份/.test(details.replaced)) {
+      failures.push("云端已替换的说明不是中文：" + details.replaced);
+    }
+    if (!/同名/.test(details.duplicate)) {
+      failures.push("云端重名的说明不是中文：" + details.duplicate);
+    }
+    if (details.unknown !== "backend sentence") {
+      failures.push("未知类型的说明没有退回后端原文：" + details.unknown);
     }
 
-    // Restore whatever the page had before this check.
+    // Restore whatever the page had before this check: the explanation block, the
+    // result card (the job's real plan, or the placeholder if it had none) and the
+    // status line's exact markup and class.
     window.renderRemedy();
+    if (keep.planJob && window.openPlanPanel) window.openPlanPanel(keep.planJob);
+    else if (window.clearPlan) window.clearPlan();
+    if (st) {
+      st.className = keep.statusClass;
+      st.innerHTML = keep.statusHTML;
+    }
     return { failures: failures, measured: measured };
   };
 })();

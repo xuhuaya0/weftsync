@@ -2239,7 +2239,7 @@ function finishStatus(job, mode) {
       // 而且原文是 400 字的英文，底栏放不下也不该放 —— 细节在上面的说明块里。
       const n = plan ? conflictAbort(plan) : 0;
       st.textContent = n
-        ? `比较停下：${n} 个路径和同步记录对不上（见上面的说明）`
+        ? `比较停下：${n} 个路径和同步记录不一致（见上面的说明）`
         : "比较失败：" + (jobErr || plan.error);
       return;
     }
@@ -2307,8 +2307,15 @@ const REMEDY_TEXT = {
   // 同步，屏幕上同一段英文出现三次，且**没有一处说清是哪个文件**（D97）。
   conflict: {
     title: f => {
+      // 陈述事实，不猜原因。原来的标题是「云端有 3 个文件和同步记录对不上」，
+      // 正文又猜「常见原因是你在云盘里删了或换了文件」—— 用户在云盘里做了什么
+      // 不需要工具告诉他，而且猜错就是噪音。现在只说：哪些路径、和记录不一致、
+      // 本轮没动任何文件。
+      //
+      // 另外单向同步里「云端那份没了」已经不算冲突（D98），所以这条只剩下两类：
+      // 云端同名被换、云端同名多条。两者都是「再传一次会毁掉东西」。
       const n = Number(f.count || 0) || (f.paths ? f.paths.split("\n").length : 0);
-      return `同步停下了：云端有 ${n} 个文件和同步记录对不上`;
+      return `同步停下：${n} 个路径和同步记录不一致`;
     },
     what: f => {
       const kept = f.kept_both === "true";
@@ -2322,9 +2329,8 @@ const REMEDY_TEXT = {
         : "";
       return `<b>这一轮没有上传、覆盖或删除任何文件。</b>` +
         (kept
-          ? `冲突策略是「两边都留」：你的版本已经用新文件名传上去了，云端那份没动。`
-          : `同步记录里记着这些路径，而云端的现状已经对不上它 —— ` +
-            `常见原因是你在云盘里删了或换了文件，也可能是别的程序动过。`) +
+          ? `冲突策略是「两边都留」：本机版本已用新文件名上传，云端那份没有改动。`
+          : `同步记录里这些路径对应的云端文件已经不是原来那个：`) +
         list;
     },
     steps: {
@@ -3150,10 +3156,10 @@ function planHTML(p) {
     if (conflictAbort(p)) {
       const n = conflictAbort(p);
       parts.push(`<div class="note err"><strong>` +
-        `比较停下：云端有 ${n} 个文件和同步记录对不上，本轮什么都没改。</strong>` +
+        `比较停下：${n} 个路径和同步记录不一致，本轮没有改动任何文件。</strong>` +
         `<div class="hint" style="margin-top:4px">` +
-        `逐条处理在右侧「冲突」页（每个文件可以选以本地为准 / 以云端为准）。` +
-        `上面的红框里列了具体是哪些文件。</div></div>`);
+        `逐条处理在右侧「冲突」页（每个路径可以选以本地为准 / 以云端为准）。` +
+        `上面的说明块列出了具体路径。</div></div>`);
     } else {
       parts.push(`<div class="note err"><strong>预览失败，不能据此判断有没有变更。</strong>` +
         `<div class="mono" style="margin-top:6px">${esc(p.error)}</div></div>`);
