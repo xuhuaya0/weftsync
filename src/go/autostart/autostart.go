@@ -70,7 +70,15 @@ type Invocation struct {
 	LogFile    string
 	ConfigFile string
 	RunNow     bool
-	Tray       bool
+	// NoTray is whether the icon was explicitly turned off.
+	//
+	// Named for the negative on purpose. The icon is on by default (since
+	// 2026-11-18), so the zero value of this field has to mean "say nothing and
+	// get the default". A field called Tray would have made the zero value mean
+	// "turn it off", and any caller that forgot to set it would silence the
+	// only place an unattended failure is reported. Caught by a test that built
+	// an Invocation without touching the field and got --no-tray in the entry.
+	NoTray bool
 	// DefaultAddr is the built-in value of Addr; when Addr equals it, the flag
 	// is not recorded.
 	DefaultAddr string
@@ -117,10 +125,15 @@ func SpecFrom(in Invocation) (Spec, error) {
 	if in.RunNow {
 		spec.Args = append(spec.Args, "--run-now")
 	}
-	// The tray is a flag rather than a default, so it has to be carried over;
-	// otherwise turning on autostart quietly drops the icon the user turned on.
-	if in.Tray {
-		spec.Args = append(spec.Args, "--tray")
+	// The tray is ON by default since 2026-11-18, so what has to survive a reboot
+	// is turning it OFF: an entry that says nothing gets the icon back, which is
+	// what the user just asked not to have.
+	//
+	// (Before that date this branch wrote --tray, because the tray was opt-in.
+	// The flag recorded and the flag defaulted are the same one; only which side
+	// of the default needs recording changed.)
+	if in.NoTray {
+		spec.Args = append(spec.Args, "--no-tray")
 	}
 	return spec, nil
 }

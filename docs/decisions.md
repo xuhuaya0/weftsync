@@ -7046,3 +7046,87 @@ query 参数只有 `type` 和 `async`，没有 token 列表。
 写着正确的话（「docs say these endpoints do not support concurrent calls」），
 让我以为已经处理过了 —— 注释描述的是意图，代码实现的是另一回事，而测试没有覆盖，
 所以这个差距活了很久。写「我处理了 X」的时候，必须有一条测试真的去测 X。
+
+## D106 · 托盘图标改为默认开启（2026-11-18）
+
+用户：
+
+> 默认开吧
+
+### 一、为什么这个默认值值得改
+
+托盘本来就是实现好的（`src/go/tray`，纯 Win32、无 cgo、图标运行时绘制、不留外部
+文件），但一直是 `--tray` 才启用。用户的实际问题不是「有没有」，而是「我怎么知道
+同步失败了」：
+
+- 定时运行没有人在看屏幕；
+- 失败只写进日志文件，而没人会主动去翻日志；
+- **气泡通知只在托盘存在时才安装**（`d.SetNotifier` 在 `tray.Start` 成功之后），
+  所以默认关闭的托盘等于默认关闭了唯一的即时告警渠道。
+
+一个无人值守的同步工具，默认把「出事了」的唯一出口关掉，这个默认值是错的。
+
+### 二、改动
+
+| 位置 | 改动 |
+|---|---|
+| `cmd/daemon` | `--tray` 默认值 `false` → `true`；新增 `--no-tray` |
+| `cmd/daemon` | 新增 `wantsTray()`：`trayOn && !noTray`，两个 flag 的唯一解析点 |
+| `cmd/daemon` | `tray.ErrUnsupported` 不再打印 —— 默认开之后，每个 Linux 启动都会多一行看起来像故障的输出；真故障（拿不到 shell 窗口、`Shell_NotifyIcon` 被拒）照常打印 |
+| `autostart.Invocation` | `Tray bool` → `NoTray bool` |
+| `autostart.SpecFrom` | 开启时**不写**任何 flag；关闭时写 `--no-tray` |
+
+### 三、`Tray` → `NoTray` 不是改名，是修一个隐患
+
+第一版我保留 `Tray bool`，心想 `Tray: trayOn && !noTray` 传进去就行。改完测试立刻红：
+
+```
+TestSpecFromOmitsDefaults:
+  --no-tray should not be recorded when it holds its default:
+  [... --no-tray]
+```
+
+因为**零值是 `false`**，而 `false` 现在意味着「关掉托盘」。任何构造 `Invocation{}`
+却没碰这个字段的调用方（包括测试自己、以及以后新增的调用）都会静默地把图标关掉 ——
+而图标正是失败通知的唯一出口。
+
+把字段名改成表示否定的 `NoTray` 之后，零值等于「什么都没说」，也就是默认行为。
+**零值必须等于默认行为**，这是让结构体字段和它的语义对齐的最低要求。
+
+`--tray` 保留：显式要图标仍然有意义（比如写在脚本里、不想依赖默认值）。
+
+### 四、验证
+
+`go test ./autostart/`：
+
+- `TestSpecFromKeepsTrayOffFlag` —— `NoTray: true` 时条目里必须有 `--no-tray`，
+  且不能出现 `--tray`；
+- `TestSpecFromOmitsTrayWhenOn` —— 零值 `Invocation{}` 产出的条目里不能出现
+  `tray` 字样（默认值不写进条目，否则默认值将来一改，老条目就冻在旧值上）；
+- `TestSpecFromOmitsDefaults` 的「不该出现」清单加上了 `--no-tray`。
+
+真实进程，两条都对：
+
+```
+默认启动（不带任何 tray 参数）
+  weftsync daemon: API listening on http://127.0.0.1:5730
+  job "demo": 2 pair(s), schedule manual
+  tray: icon shown; failures will raise a notification      ← 图标出现
+
+--no-tray 启动
+  weftsync daemon: API listening on http://127.0.0.1:5760
+  job "demo": 2 pair(s), schedule manual                    ← 没有 tray 那一行
+```
+
+`--help` 两个 flag 都在：
+
+```
+--no-tray   Do not show a notification area icon (for a console-only daemon)
+--tray      Show a notification area icon (default; Windows only) (default true)
+```
+
+### 五、没有解决的一件事
+
+**托盘图标现在默认出现，但只在有人手工启动 daemon 时才有意义。** 开机自启要另外在
+设置里打开（`autostart`），而且那个条目现在会带 `--no-tray` 当且仅当当初是关着的 ——
+这一条有测试，但整条「重启后图标还在」的链路没有端到端验证过（需要真的重启机器）。

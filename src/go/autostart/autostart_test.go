@@ -50,7 +50,7 @@ func TestSpecFromOmitsDefaults(t *testing.T) {
 		t.Fatalf("SpecFrom: %v", err)
 	}
 	joined := strings.Join(spec.Args, " ")
-	for _, unwanted := range []string{"--addr", "--log-file", "--config", "--run-now", "--tray"} {
+	for _, unwanted := range []string{"--addr", "--log-file", "--config", "--run-now", "--tray", "--no-tray"} {
 		if strings.Contains(joined, unwanted) {
 			t.Errorf("%s should not be recorded when it holds its default: %v",
 				unwanted, spec.Args)
@@ -74,20 +74,46 @@ func TestSpecFromOmitsDefaults(t *testing.T) {
 	}
 }
 
-// The tray flag has to be carried into the entry.
+// Turning the tray OFF has to be carried into the entry.
 //
-// It is opt-in, so an entry that forgets it starts the daemon headless after a
-// reboot and the user's icon is simply gone with nothing to explain it.
-func TestSpecFromKeepsTrayFlag(t *testing.T) {
+// The icon is on by default since 2026-11-18, so an entry that says nothing gets
+// the icon back at the next login - the opposite of what someone who passed
+// --no-tray asked for. The old version of this test asserted the mirror image
+// (that --tray was recorded); it was correct while the tray was opt-in.
+func TestSpecFromKeepsTrayOffFlag(t *testing.T) {
 	spec, err := SpecFrom(Invocation{
-		Exe: "weftsync", JobFiles: []string{"job.toml"}, Tray: true,
+		Exe: "weftsync", JobFiles: []string{"job.toml"}, NoTray: true,
 		DefaultAddr: "127.0.0.1:5572",
 	})
 	if err != nil {
 		t.Fatalf("SpecFrom: %v", err)
 	}
-	if !strings.Contains(strings.Join(spec.Args, " "), "--tray") {
-		t.Errorf("--tray must be recorded: %v", spec.Args)
+	joined := strings.Join(spec.Args, " ")
+	if !strings.Contains(joined, "--no-tray") {
+		t.Errorf("--no-tray must be recorded when the tray is off: %v", spec.Args)
+	}
+	if strings.Contains(joined, " --tray") {
+		t.Errorf("--tray must not be written when it is already the default: %v", spec.Args)
+	}
+}
+
+// The default (icon on) leaves the entry silent.
+//
+// Recording a default freezes it: a later change to the default would never
+// reach an entry that spelled the old value out. The zero value of NoTray is
+// exactly this case, which is why the field is named for the negative - a zero
+// Invocation must produce the default behaviour, not the opposite.
+func TestSpecFromOmitsTrayWhenOn(t *testing.T) {
+	spec, err := SpecFrom(Invocation{
+		Exe: "weftsync", JobFiles: []string{"job.toml"},
+		DefaultAddr: "127.0.0.1:5572",
+	})
+	if err != nil {
+		t.Fatalf("SpecFrom: %v", err)
+	}
+	joined := strings.Join(spec.Args, " ")
+	if strings.Contains(joined, "tray") {
+		t.Errorf("the tray default must not be written into the entry: %v", spec.Args)
 	}
 }
 

@@ -4,6 +4,7 @@ package daemoncmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,7 @@ var (
 	logFile  string
 	runNow   bool
 	trayOn   bool
+	noTray   bool
 	splitDir string
 )
 
@@ -37,8 +39,16 @@ func init() {
 		"Append the daemon log to this file instead of stdout")
 	flags.BoolVar(&runNow, "run-now", false,
 		"Run every enabled job once at startup, then follow the schedule")
-	flags.BoolVar(&trayOn, "tray", false,
-		"Show a notification area icon (Windows only; ignored elsewhere)")
+	// On by default since 2026-11-18 (the user asked for it: 「默认开吧」).
+	//
+	// The icon is not decoration: it is the only place a scheduled run's failure
+	// shows up while nobody is watching the screen. A daemon that runs unattended
+	// and can only report into a log file nobody opens is the configuration this
+	// default is meant to avoid.
+	flags.BoolVar(&trayOn, "tray", true,
+		"Show a notification area icon (default; Windows only)")
+	flags.BoolVar(&noTray, "no-tray", false,
+		"Do not show a notification area icon (for a console-only daemon)")
 	flags.StringVar(&splitDir, "split-dir", "",
 		"Directory for split undo ledgers (default: next to the pair's state file)")
 }
@@ -139,7 +149,8 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 			fmt.Fprintf(w, "weftsync daemon: API listening on http://%s\n", ln.Addr())
 			d.Start(ctx)
 
-			if trayOn {
+			wantTray := wantsTray()
+			if wantTray {
 				// A tray that will not start is a missing convenience, not a
 				// reason to refuse to sync.
 				tr, trayErr := tray.Start(tray.Config{
@@ -162,7 +173,13 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 					OnError: func(err error) { fmt.Fprintln(w, err) },
 				})
 				if trayErr != nil {
-					fmt.Fprintf(w, "tray: %v (continuing without an icon)\n", trayErr)
+					// "Not supported on this platform" is not a problem to report:
+					// the default is on, so every Linux run would otherwise open
+					// with a line that reads like a fault. Real failures (no shell
+					// window, Shell_NotifyIcon refused) still get printed.
+					if !errors.Is(trayErr, tray.ErrUnsupported) {
+						fmt.Fprintf(w, "tray: %v (continuing without an icon)\n", trayErr)
+					}
 				} else {
 					defer tr.Stop()
 					fmt.Fprintln(w, "tray: icon shown; failures will raise a notification")
@@ -234,6 +251,18 @@ func watchSignals(w io.Writer, d *daemon.Daemon, signals <-chan os.Signal,
 	os.Exit(1)
 }
 
+// wantsTray resolves the two flags into one answer.
+//
+// Two flags for one switch because the default is ON: --no-tray has to be able to
+// turn off what --tray turns on. --no-tray wins when both are given, because the
+// only reason to type both is to be certain the icon stays away.
+//
+// One function rather than the expression written twice: the daemon decides whether
+// to show the icon, and the autostart entry decides whether to record --no-tray, and
+// those two must never disagree - an entry that omits the flag while the icon is
+// off gives the icon back at the next login.
+func wantsTray() bool { return trayOn && !noTray }
+
 // autostartSpec captures how this process was started, so "enable autostart" in
 // the UI reproduces the invocation the user has working rather than asking them
 // to retype it.
@@ -253,13 +282,16 @@ func autostartSpec(jobFiles []string) autostart.Spec {
 	}
 
 	spec, err := autostart.SpecFrom(autostart.Invocation{
-		Exe:         exe,
-		JobFiles:    jobFiles,
-		Addr:        addr,
-		LogFile:     logFile,
+		Exe:      exe,
+		JobFiles: jobFiles,
+		Addr:     addr,
+		LogFile:  logFile,
+		// What has to survive a reboot is the NO (the icon is on by default), so
+		// the field is named for the negative. wantsTray() is the single place
+		// that resolves the two flags, and both the icon and the entry use it.
+		NoTray:      !wantsTray(),
 		ConfigFile:  cfgFile,
 		RunNow:      runNow,
-		Tray:        trayOn,
 		DefaultAddr: "127.0.0.1:5572",
 	})
 	if err != nil {
