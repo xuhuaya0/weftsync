@@ -121,6 +121,17 @@ func TestListConfigFilesReportsBrokenFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	// Valid TOML that is somebody else's file. It used to be listed as a
+	// disabled row whose label was a decoder error cut at 40 characters - the
+	// path at the front, with the reason past the edge:
+	//
+	//   pyproject.toml  (打不开: parse C:\Users\...\my_fc)
+	//
+	// The user's report: 「为什么打不开啊，而且写这么奇怪的标注」.
+	if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"),
+		[]byte("[project]\nname = \"other\"\nrequires-python = \">=3.11\"\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
 
 	rec := httptest.NewRecorder()
 	api := &API{D: mustDaemon(t, dir)}
@@ -131,6 +142,7 @@ func TestListConfigFilesReportsBrokenFiles(t *testing.T) {
 	}
 	var got struct {
 		Files []ConfigFile `json:"files"`
+		Other int          `json:"other"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -148,6 +160,13 @@ func TestListConfigFilesReportsBrokenFiles(t *testing.T) {
 	if _, ok := byFile["notes.txt"]; ok {
 		t.Error("a non-config file was listed; the picker only wants .toml")
 	}
+	if _, ok := byFile["pyproject.toml"]; ok {
+		t.Error("pyproject.toml was listed as a broken config; it is not ours to open")
+	}
+	if got.Other != 1 {
+		t.Errorf("other = %d, want 1 (the dialog says how many .toml files it skipped)",
+			got.Other)
+	}
 	if byFile["good.toml"].Name != "good" {
 		t.Errorf("good.toml name = %q", byFile["good.toml"].Name)
 	}
@@ -156,6 +175,48 @@ func TestListConfigFilesReportsBrokenFiles(t *testing.T) {
 	}
 	if byFile["broken.toml"].Error == "" {
 		t.Error("broken.toml was listed without an error; the picker would offer a file that cannot open")
+	}
+}
+
+// The reason has to fit on one row and be about the file, not about the decoder.
+// A config that really is ours but has a typo still has to say so.
+func TestListConfigFilesErrorIsShortAndPathFree(t *testing.T) {
+	dir := t.TempDir()
+	oneConfig(t, dir, "base")
+	path := filepath.Join(dir, "typo.toml")
+	// A valid config, plus a key weftsync does not have.
+	src, err := os.ReadFile(filepath.Join(dir, "base.toml"))
+	if err != nil {
+		t.Fatalf("read base: %v", err)
+	}
+	if err := os.WriteFile(path, append(src, []byte("\n[typo]\nx = 1\n")...), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	files, _, err := listConfigFiles(dir, dir)
+	if err != nil {
+		t.Fatalf("listConfigFiles: %v", err)
+	}
+	var found *ConfigFile
+	for i := range files {
+		if files[i].File == "typo.toml" {
+			found = &files[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("typo.toml missing from the listing: %+v", files)
+	}
+	if found.Error == "" {
+		t.Fatal("typo.toml loaded; the strict decoder should have refused it")
+	}
+	if strings.Contains(found.Error, path) {
+		t.Errorf("the error repeats the path the row already shows: %q", found.Error)
+	}
+	if strings.Contains(found.Error, "strict mode") {
+		t.Errorf("the error is the decoder's own wording: %q", found.Error)
+	}
+	if n := len([]rune(found.Error)); n > 60 {
+		t.Errorf("the error is %d characters, too long for one row: %q", n, found.Error)
 	}
 }
 

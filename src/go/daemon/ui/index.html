@@ -1480,7 +1480,8 @@
     </div>
     <div id="open-list" class="browse-list" style="max-height:44vh;border:1px solid var(--line);border-radius:var(--r-sm)"></div>
     <div class="filter-hint" style="margin-top:8px">
-      只列出 <code>.toml</code> 配置文件。打不开的文件会标出原因，而不是隐藏。
+      只列出 weftsync 的 <code>.toml</code> 配置<span id="open-skip"></span>。
+      打不开的会标出原因，而不是隐藏。
     </div>
     <span id="open-err" class="sub danger" style="margin:6px 0 0"></span>
   </div>
@@ -1503,6 +1504,7 @@
       <button id="saveas-go" title="跳到输入的目录（也可直接按回车）">转到</button>
     </div>
     <div id="saveas-list" class="browse-list" style="max-height:34vh;border:1px solid var(--line);border-radius:var(--r-sm)"></div>
+    <div class="filter-hint" id="saveas-skip" style="margin-top:6px"></div>
     <div class="dlg-sect" style="margin-top:12px">文件名</div>
     <input type="text" id="saveas-name" style="width:100%" placeholder="例如 work-backup">
     <div class="filter-hint">
@@ -5000,12 +5002,25 @@ async function loadConfigFiles(kind) {
       html += `<button data-dir="${esc(d.path)}">📁 ${esc(d.name)}</button>`;
     }
     for (const f of v.files || []) {
-      const mark = f.error ? ` <span class="bad">（打不开：${esc(f.error.slice(0, 40))}）</span>`
+      // The reason is shown whole. Slicing it at 40 characters cut the path at
+      // the front and left the actual reason past the edge, so the row said
+      // "打不开" followed by a fragment of a path - which is what the user
+      // reported as 「写这么奇怪的标注」. Long reasons wrap instead.
+      const mark = f.error ? ` <span class="bad">（打不开：${esc(f.error)}）</span>`
         : f.name === sessionJob ? ` <span class="badge">当前</span>` : "";
       html += `<button data-file="${esc(f.path)}"${f.error ? " disabled" : ""}>
         🗋 ${esc(f.file)}${mark}</button>`;
     }
     listEl.innerHTML = html || '<div class="none">（这个目录没有 .toml 配置）</div>';
+
+    // Say how many .toml files were skipped for not being ours. Listing them as
+    // broken taught nothing; dropping them without a word would leave someone
+    // whose config is in this folder wondering where it went.
+    const skipEl = document.getElementById(isOpen ? "open-skip" : "saveas-skip");
+    if (skipEl) {
+      skipEl.textContent = v.other
+        ? `（另有 ${v.other} 个 .toml 不是 weftsync 配置，未列出）` : "";
+    }
 
     listEl.querySelectorAll("button[data-dir]").forEach(b => {
       b.addEventListener("click", () => { openDir = b.dataset.dir; loadConfigFiles(kind); });

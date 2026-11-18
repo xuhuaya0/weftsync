@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/pelletier/go-toml/v2"
+
 	"weftsync/job"
 )
 
@@ -37,29 +39,43 @@ type ConfigFile struct {
 	Loaded bool `json:"loaded"`
 	// Error explains why the file cannot be opened, without failing the listing:
 	// one broken file must not hide the rest.
+	//
+	// Short and path-free on purpose: the row already shows the path, and the
+	// dialog used to slice this at 40 characters, which cut the path at the front
+	// and left the actual reason past the edge.
 	Error string `json:"error,omitempty"`
 }
 
-// listConfigFiles returns the .toml files in dir, with their job names.
+// listConfigFiles returns the weftsync configs in dir, with their job names.
 //
-// A file that does not parse is still listed, with the reason attached. Hiding it
-// would leave the user staring at a directory that "has no configs" while the
-// file sits right there.
-func listConfigFiles(dir, loadedDir string) ([]ConfigFile, error) {
+// A file that is a config but does not load is still listed, with the reason
+// attached: hiding it would leave the user staring at a directory that "has no
+// configs" while the file sits right there.
+//
+// A .toml file that is not a config at all (pyproject.toml, Cargo.toml) is not
+// listed. It did not fail to open - it was never openable - and a greyed-out row
+// carrying a Go error only teaches the user that the dialog is broken. The count
+// of skipped files is returned so the dialog can say so instead of hiding them
+// without a word.
+func listConfigFiles(dir, loadedDir string) (files []ConfigFile, other int, err error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	out := make([]ConfigFile, 0, len(entries))
+	files = make([]ConfigFile, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".toml") {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
+		if raw, readErr := os.ReadFile(path); readErr == nil && !looksLikeConfig(raw) {
+			other++
+			continue
+		}
 		cf := ConfigFile{Path: path, File: e.Name()}
 		cfg, loadErr := job.Load(path)
 		if loadErr != nil {
-			cf.Error = loadErr.Error()
+			cf.Error = shortLoadError(path, loadErr)
 		} else {
 			cf.Name = cfg.Job.Name
 			if cf.Name == "" {
@@ -67,12 +83,51 @@ func listConfigFiles(dir, loadedDir string) ([]ConfigFile, error) {
 			}
 			cf.Loaded = samePath(filepath.Dir(path), loadedDir)
 		}
-		out = append(out, cf)
+		files = append(files, cf)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return strings.ToLower(out[i].File) < strings.ToLower(out[j].File)
+	sort.Slice(files, func(i, j int) bool {
+		return strings.ToLower(files[i].File) < strings.ToLower(files[j].File)
 	})
-	return out, nil
+	return files, other, nil
+}
+
+// looksLikeConfig reports whether a .toml file is a weftsync job file at all.
+//
+// The test is "has one of our two top-level keys", and it has to run on an
+// untyped map: the real decoder is strict (DisallowUnknownFields), so on somebody
+// else's file it fails before anything can be inspected. That is exactly how a
+// pyproject.toml ended up in the picker labelled with a decoder error instead of
+// being recognised as not ours.
+//
+// A file that will not parse at all counts as a config: "line 3 is not valid
+// TOML" is a reason worth showing when the user was editing one.
+func looksLikeConfig(raw []byte) bool {
+	var doc map[string]any
+	if err := toml.Unmarshal(raw, &doc); err != nil {
+		return true
+	}
+	if _, ok := doc["job"]; ok {
+		return true
+	}
+	_, ok := doc["pair"]
+	return ok
+}
+
+// shortLoadError turns a load error into one row-sized sentence.
+//
+// Two things come out. The path, because the row already shows it. And the toml
+// library's "strict mode: fields in the document are missing in the target
+// struct", which describes the decoder rather than the file - what the user needs
+// to know is that they typed a key weftsync does not have.
+func shortLoadError(path string, err error) string {
+	msg := err.Error()
+	msg = strings.TrimPrefix(msg, "parse "+path+": ")
+	msg = strings.TrimPrefix(msg, path+": ")
+	msg = strings.TrimPrefix(msg, "read job file: ")
+	if strings.Contains(msg, "fields in the document are missing in the target struct") {
+		return "有 weftsync 不认识的键（拼错了，或来自别的版本）"
+	}
+	return msg
 }
 
 // samePath compares two directories without caring about separators or case.
@@ -199,7 +254,7 @@ func (a *API) handleConfigFiles(w http.ResponseWriter, r *http.Request) {
 	view.Roots = browseRoots()
 
 	loadedDir := a.D.configDirOf(r.URL.Query().Get("job"))
-	files, listErr := listConfigFiles(abs, loadedDir)
+	files, other, listErr := listConfigFiles(abs, loadedDir)
 	if listErr != nil {
 		// The directory itself is unusable; still return the navigation so the
 		// dialog can go elsewhere instead of dead-ending.
@@ -212,8 +267,12 @@ func (a *API) handleConfigFiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		Dir   string       `json:"dir"`
 		Files []ConfigFile `json:"files"`
-		View  BrowseView   `json:"view"`
-	}{Dir: abs, Files: files, View: view})
+		// Other counts the .toml files here that are not weftsync configs.
+		// Reported instead of silently dropped: someone whose own config sits in
+		// this folder and does not appear needs to know why.
+		Other int        `json:"other"`
+		View  BrowseView `json:"view"`
+	}{Dir: abs, Files: files, Other: other, View: view})
 }
 
 // handleConfigOpen loads a config file into the daemon.

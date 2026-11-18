@@ -7526,3 +7526,118 @@ health: unreachable
 没有 job 文件也能用：界面里 新建 → 填路径 → 另存为 会调 `AddConfig` 把新配置挂到运行中
 的 daemon 上，定时任务当场生效。所以「一键启动 + 全部在 GUI 配」这条链路是通的，不需要
 先手写 `job.toml`。
+
+## D111 · 打开配置：「打不开」的那一行根本不是配置（2026-11-18）
+
+用户（截图：打开配置对话框里 `pyproject.toml` 灰着，后面一段被切成半个路径的红字）：
+
+> 为什么打不开啊，而且写这么奇怪的标注
+
+那一行原文是：
+
+```
+pyproject.toml  （打不开：parse C:\Users\Jlsemi-62\OneDrive\_PC_Sy）
+```
+
+两个独立的错，叠在一行里。
+
+### 一、pyproject.toml 没有「打不开」，它是别人的文件
+
+对话框列的是「目录里所有 `.toml`」。这是个偷懒的定义：`.toml` 只是扩展名，
+`pyproject.toml`、`Cargo.toml`、`rust-toolchain.toml` 都是 `.toml`，都不是 weftsync 配置。
+
+后端拿 `job.Load` 去解析它们，严格解码器（`DisallowUnknownFields`）立刻失败，于是这个
+文件被当成「一个坏掉的配置」列出来、灰掉、配一段错误。用户看到的是「我的文件坏了」，
+而事实是「这个文件不是给你这个程序用的」。
+
+**修法**：列之前先判断这是不是我们的文件。
+
+```go
+func looksLikeConfig(raw []byte) bool {
+	var doc map[string]any
+	if err := toml.Unmarshal(raw, &doc); err != nil {
+		return true // 解析不了的算配置：如果是手改坏了，理由值得显示
+	}
+	if _, ok := doc["job"]; ok { return true }
+	_, ok := doc["pair"]
+	return ok
+}
+```
+
+必须用无类型的 map 先解一遍：严格解码器遇到别人的文件时**在能看内容之前**就报错，
+这也是为什么原来只能拿到一句解码器的自述。weftsync 配置的顶层键只有 `job` 和 `pair`，
+两个都没有就不是。
+
+不列出来也不能无声：接口多返回一个 `other` 计数，对话框写「另有 N 个 .toml 不是
+weftsync 配置，未列出」。自己把配置放这个目录却没看到的人，需要一个解释。
+
+### 二、「奇怪的标注」是被切过的错误信息
+
+```js
+const mark = f.error ? `（打不开：${esc(f.error.slice(0, 40))}）` : ...
+```
+
+`slice(0, 40)` 从**开头**切。而 Go 错误的结构是
+
+```
+parse <完整路径>: <真正的理由>
+```
+
+开头正好是路径 —— 于是被切掉的是路径（已经显示在别处），留下的**前半截**是路径碎片，
+真正的理由在 40 字符之外。截图里那句 `parse C:\Users\...\_PC_Sy` 就是切口。
+
+两处都改：
+
+1. 后端 `shortLoadError` 把路径前缀去掉（行里已经有路径了）。
+2. 界面整句显示，长就换行 —— 这个列表没有 `nowrap`，能换行。
+
+另外把解码器那句行话翻成人话：
+
+| 原来 | 现在 |
+|---|---|
+| `strict mode: fields in the document are missing in the target struct` | `有 weftsync 不认识的键（拼错了，或来自别的版本）` |
+
+这句是**描述解码器**的，不是描述文件的。用户要做的事只有一件：找出那个键。
+
+其余错误保持原样，因为它们本来就具体：`toml: expected character =`、
+`pair "x": local.root is required`、`no [[pair]] defined`。
+
+### 三、验证
+
+构造一个目录，放四种文件，直接问接口：
+
+```
+other=1                                        <- pyproject.toml 被跳过
+broken.toml   err=toml: expected character =
+ok.toml       err=
+typo.toml     err=有 weftsync 不认识的键（拼错了，或来自别的版本）
+```
+
+再在真界面里打开这个目录（截图确认）：
+
+```
+🗋 broken.toml （打不开：toml: expected character =）
+🗋 ok.toml
+🗋 typo.toml   （打不开：有 weftsync 不认识的键（拼错了，或来自别的版本））
+只列出 weftsync 的 .toml 配置（另有 1 个 .toml 不是 weftsync 配置，未列出）。
+```
+
+用户实际那个目录（仓库根，`pyproject.toml` 就在里面）：配置行一条都没有，
+提示语写着「另有 1 个 .toml 不是 weftsync 配置，未列出」。另存为对话框同样有这条。
+
+测试两道：
+
+- `TestListConfigFilesReportsBrokenFiles` 加了 pyproject.toml 一例，并断言
+  `other == 1`、它不在列表里。
+- `TestListConfigFilesErrorIsShortAndPathFree` 断言真配置的报错**不含路径**、
+  **不含 `strict mode`**、**不超过 60 字符**。
+
+另有 `scripts/check_open_dialog.py` 守界面侧：不许再出现 `f.error.slice(`、
+跳过数必须有地方显示、提示语不许再承诺「列出所有 .toml」。
+
+门禁：`gofmt` / `vet` / `go test ./...` / `GOOS=linux go build` /
+`check_ui_syntax.py` / `check_secrets.py` 全绿。
+
+### 四、一句话总结这行的错在哪
+
+它把「这不是我的文件」表达成了「你的文件坏了」，还只把这句话说了一半。
