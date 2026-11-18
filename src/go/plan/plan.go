@@ -54,6 +54,22 @@ const (
 	// action because it is neither "no change" nor a transfer, and lumping it in
 	// with Other would leave the user unable to filter the noise out.
 	Touch Action = "touch"
+	// ExtraRemote is a path the destination holds and the source does not, in a
+	// variant that does not delete.
+	//
+	// 2026-11-18: the user deleted six files locally, pressed 比较, and saw nothing.
+	// Their question was 「当我在本地删除了几个文件之后对比没有对比出新的东西啊。
+	// 这是预期的吗」 - and half of it was: `update` runs rclone's CopyDir, which
+	// never removes anything on the destination, so there is no action to plan.
+	// But the comparison is supposed to show the two sides, and it showed one: the
+	// six leftover cloud files were invisible, so "nothing to do" and "six files
+	// you forgot about" looked identical.
+	//
+	// This action exists to make that visible and nothing more: the row is not
+	// actionable, it is not counted as work, and it never deletes. A mirror pair
+	// does not produce it - there the same file is DeleteRemote, which is a real
+	// action.
+	ExtraRemote Action = "extra-remote"
 	// Other is something rclone plans that this package does not classify, such as
 	// a modification-time update. Kept rather than dropped: a row that shows up as
 	// "other" is a prompt to classify it, whereas a silently dropped row makes the
@@ -89,16 +105,19 @@ type Row struct {
 
 // Summary counts the rows by action.
 type Summary struct {
-	Create       int   `json:"create"`
-	Update       int   `json:"update"`
-	Download     int   `json:"download"`
-	DeleteRemote int   `json:"delete_remote"`
-	DeleteLocal  int   `json:"delete_local"`
-	Mkdir        int   `json:"mkdir"`
-	Rmdir        int   `json:"rmdir"`
-	Touch        int   `json:"touch"`
-	Other        int   `json:"other"`
-	Bytes        int64 `json:"bytes"`
+	Create       int `json:"create"`
+	Update       int `json:"update"`
+	Download     int `json:"download"`
+	DeleteRemote int `json:"delete_remote"`
+	DeleteLocal  int `json:"delete_local"`
+	Mkdir        int `json:"mkdir"`
+	Rmdir        int `json:"rmdir"`
+	Touch        int `json:"touch"`
+	Other        int `json:"other"`
+	// ExtraRemote counts destination-only paths. They are listed, not acted on,
+	// so they are deliberately excluded from Empty() and from Bytes.
+	ExtraRemote int   `json:"extra_remote,omitempty"`
+	Bytes       int64 `json:"bytes"`
 }
 
 // Summarise counts a row list.
@@ -122,11 +141,14 @@ func Summarise(rows []Row) Summary {
 			s.Rmdir++
 		case Touch:
 			s.Touch++
+		case ExtraRemote:
+			s.ExtraRemote++
 		default:
 			s.Other++
 		}
 		if r.Action != DeleteRemote && r.Action != DeleteLocal &&
-			r.Action != Mkdir && r.Action != Rmdir && r.Action != Touch {
+			r.Action != Mkdir && r.Action != Rmdir && r.Action != Touch &&
+			r.Action != ExtraRemote {
 			s.Bytes += r.Size
 		}
 	}
@@ -139,6 +161,10 @@ func Summarise(rows []Row) Summary {
 // the answer the user needs, and a timestamp difference would otherwise make an
 // already-synced pair never look synced. The count is still available for the UI
 // to show.
+//
+// ExtraRemote is ignored for the same reason and one more: those paths are the
+// destination's leftovers in a variant that does not delete. Saying "there is work
+// to do" about a row nothing will touch would be false.
 func (s Summary) Empty() bool {
 	return s.Create == 0 && s.Update == 0 && s.Download == 0 &&
 		s.DeleteRemote == 0 && s.DeleteLocal == 0 && s.Mkdir == 0 && s.Rmdir == 0

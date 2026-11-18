@@ -460,6 +460,12 @@
   .ffs-a.left .ffs-act { color: var(--ok); }
   .ffs-a.deletes .ffs-act { color: var(--bad); }
   .ffs-a.equal .ffs-act, .ffs-a.conflict .ffs-act { color: var(--muted); }
+  /* 云端多余用中性色，不用红：这一轮不会删除它，红色会让人以为要动手。
+     虚线边让它与「内容相同」也能一眼分开。 */
+  .ffs-a.extra .ffs-act {
+    color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+  }
   .ffs-bar {
     display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
     padding: 8px 12px; border-top: 1px solid var(--line);
@@ -482,6 +488,7 @@
   .ffs-cat[aria-pressed="true"].downloads { border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); color: var(--ok); }
   .ffs-cat[aria-pressed="true"].equal { border-color: color-mix(in srgb, var(--muted) 50%, var(--line)); color: var(--ink-2); }
   .ffs-cat[aria-pressed="true"].deletes { border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); color: var(--bad); }
+  .ffs-cat[aria-pressed="true"].extra { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); color: var(--warn); }
   .ffs-cat[aria-pressed="false"] { text-decoration: line-through; opacity: .5; }
   .ffs-cat.disabled { opacity: .35; cursor: default; text-decoration: none; }
   .ffs-cat .sym { font-family: ui-monospace, monospace; font-weight: 700; }
@@ -2135,6 +2142,10 @@ function planTotals(plan) {
     total: c.create + c.update + c.download + c["delete-remote"] +
            c["delete-local"] + c.mkdir + c.rmdir,
     destructive: c["delete-remote"] + c["delete-local"] + c.rmdir,
+    // Leftovers are not work, so they are kept beside total rather than in it: the
+    // status line has to be able to say both "nothing to do" and "six files are
+    // still up there", which are two different facts.
+    extra: c["extra-remote"] || 0,
   };
 }
 
@@ -2245,10 +2256,14 @@ function finishStatus(job, mode) {
     }
     const t = planTotals(plan);
     st.className = "stat done";
+    // Three answers, not two: work to do, nothing to do, and nothing to do but
+    // leftovers remain. The third used to be reported as the second.
+    const extraNote = t.extra ? `；云端有 ${t.extra} 个本地没有的文件（更新不删除）` : "";
     st.textContent = t.total
       ? `比较完成：${t.total} 项要处理` +
-        (t.destructive ? `，其中 ${t.destructive} 项会删除` : "")
-      : "比较完成：两侧一致，没有需要变更的内容。";
+        (t.destructive ? `，其中 ${t.destructive} 项会删除` : "") + extraNote
+      : `比较完成：${t.extra ? "" : "两侧一致，"}没有需要变更的内容` +
+        (t.extra ? `，但云端有 ${t.extra} 个本地已经没有的文件（更新不删除）` : "。");
     return;
   }
 
@@ -3118,6 +3133,21 @@ function clearPlan() {
                sel: {}, sort: { key: "", dir: 0 }, on: {} };
 }
 
+// extraRemoteCount returns how many destination-only paths this plan lists.
+//
+// Read from the rows rather than from a server-side total: the rows are what the
+// table shows, and a count that disagrees with the table underneath it is worse
+// than no count.
+function extraRemoteCount(p) {
+  let n = 0;
+  for (const r of (p && p.results) || []) {
+    for (const row of (r.plan || [])) {
+      if (row.action === "extra-remote") n++;
+    }
+  }
+  return n;
+}
+
 // planRunDisabled says whether 按此执行 may act on this plan.
 //
 // Two different reasons, one answer: a preview that could not be built has no
@@ -3181,7 +3211,16 @@ function planHTML(p) {
       `下面的数字和逐文件动作是那时量的，现在两侧已经变了，不足以据此执行。` +
       `点右上角「比较」重新量一遍。</div></div>`);
   } else if (!p.transferred && !p.deleted && !p.conflicts) {
-    parts.push(`<div class="note ok">没有需要变更的内容。</div>`);
+    // "Nothing to change" and "nothing to change, but the cloud still holds files
+    // you deleted" are not the same answer, and printing the first for the second
+    // is what made the user ask whether the comparison was even working.
+    const extra = extraRemoteCount(p);
+    parts.push(extra
+      ? `<div class="note"><strong>没有要同步的内容。</strong>` +
+        `<div class="hint" style="margin-top:4px">` +
+        `云端有 ${extra} 个文件本地已经没有。当前是「更新」，只从本地往云端写，` +
+        `不会删除云端文件；要清掉它们得用「镜像」。下面列了具体是哪些。</div></div>`
+      : `<div class="note ok">没有需要变更的内容。</div>`);
   }
 
   for (const r of p.results || []) {
@@ -3249,7 +3288,10 @@ let cmpState = {
   // is what "the plan you just looked at" means, and only deviations are stored.
   sel: {},
   // 底部分类的显示开关。关掉只影响这张表看得见什么，不影响执行。
-  on: { right: true, left: true, same: false, del: true },
+  //
+  // extra 默认打开：这些行的存在本身就是用户需要知道的事，默认藏起来等于回到
+  // 「删了本地文件之后对比什么都没变」那个状态。
+  on: { right: true, left: true, same: false, del: true, extra: true },
 };
 
 // 中间那一列用的是 FreeFileSync 自己的符号，而不是我造的「新建/更新/下载」。
@@ -3269,9 +3311,28 @@ const CMP_META = {
   "delete-remote": { sym: "✗", label: "删除云端那一份",   cls: "deletes",  cat: "del" },
   "delete-local":  { sym: "✗", label: "删除本地那一份",   cls: "deletes",  cat: "del" },
   rmdir:           { sym: "✗", label: "删除目录",         cls: "deletes",  cat: "del" },
+  // 云端有、本地已经没有的文件，在「更新」里不会被删。
+  //
+  // 用户的原文：「当我在本地删除了几个文件之后对比没有对比出新的东西啊」。
+  // 更新语义确实不删云端，但对比表连这几个文件都不列 —— 于是「没东西要做」和
+  // 「你有 6 个忘了的文件」在屏幕上长得一模一样。
+  //
+  // 符号用中性的 ·，不用 ✗：这一轮不会删除任何东西，用删除符号就是在骗人。
+  "extra-remote":  { sym: "·", label: "云端多余（本轮不处理）", cls: "extra", cat: "extra" },
   touch:           { sym: "=", label: "内容相同，只改修改时间", cls: "equal", cat: "same" },
   other:           { sym: "≠", label: "未归类",             cls: "conflict", cat: "same" },
 };
+
+// isActionable says whether ticking a row can mean anything to a run.
+//
+// Touch/other describe the two sides rather than work to do, and extra-remote is
+// the same: it is a leftover in a variant that does not delete, so passing its
+// path as an include filter would ask the run to act on a file the source does not
+// have. One predicate so a new action cannot be actionable in one place and not in
+// another - which is exactly how the row menu and the master checkbox disagree.
+function isActionable(action) {
+  return !(action === "touch" || action === "other" || action === "extra-remote");
+}
 
 function cmpRows(p) {
   const rows = [];
@@ -3302,7 +3363,7 @@ function compareHTML(p) {
     rows: [], pairs: 0, q: "", shown: 400, left: "", right: "",
     sel: {},
     sort: { key: "", dir: 0 },
-    on: { right: true, left: true, same: false, del: true },
+    on: { right: true, left: true, same: false, del: true, extra: true },
   };
 
   if (p.error) return "";  // 预览失败时不该假装有对比结果
@@ -3368,11 +3429,14 @@ function compareHTML(p) {
 // in the tests rather than trusted.
 function cmpCounts(rows) {
   const c = { create: 0, update: 0, download: 0, "delete-remote": 0,
-              "delete-local": 0, mkdir: 0, rmdir: 0, touch: 0, other: 0, bytes: 0 };
+              "delete-local": 0, mkdir: 0, rmdir: 0, touch: 0, other: 0,
+              "extra-remote": 0, bytes: 0 };
   for (const r of rows) {
     if (c[r.action] === undefined) c.other++;
     else c[r.action]++;
-    if (!/^(delete-|mkdir$|rmdir$|touch$)/.test(r.action)) c.bytes += r.size;
+    // Bytes is the size of what would move. A leftover moves nothing, so
+    // counting it would inflate the total next to "共 N 个文件".
+    if (!/^(delete-|mkdir$|rmdir$|touch$|extra-remote$)/.test(r.action)) c.bytes += r.size;
   }
   return c;
 }
@@ -3463,9 +3527,9 @@ function cmpRender() {
     const s = cmpSides(r);
     const cls = (r.action === "touch" || r.action === "other") ? " meta" : "";
     // The checkbox is the whole point of an editable comparison: unticking a row
-    // keeps it out of the run. Touch/other rows carry no action, so ticking them
-    // would mean nothing and they get a dash instead.
-    const actionable = !(r.action === "touch" || r.action === "other");
+    // keeps it out of the run. Rows that describe the two sides rather than work
+    // carry no action, so ticking them would mean nothing and they get a dash.
+    const actionable = isActionable(r.action);
     const key = rowKey(r.pair, r.path);
     const on = cmpState.sel[key] !== false;
     const box = actionable
@@ -3497,7 +3561,7 @@ function cmpRender() {
   if (master) {
     master.addEventListener("change", () => {
       for (const r of cmpFiltered()) {
-        if (r.action === "touch" || r.action === "other") continue;
+        if (!isActionable(r.action)) continue;
         cmpState.sel[rowKey(r.pair, r.path)] = master.checked;
       }
       cmpRender();
@@ -3545,6 +3609,7 @@ function cmpRender() {
     box("left", "downloads", "←", "复制到左侧", c.download) +
     box("same", "equal", "=", "内容相同（只改时间）", c.touch + c.other) +
     box("del", "deletes", "✗", "删除", destructive) +
+    box("extra", "extra", "·", "云端多余（本轮不处理）", c["extra-remote"] || 0) +
     `<span class="grow"></span>` +
     `<span class="ffs-total">共 <b>${c.create + c.update + c.download}</b> 个文件` +
     ` · ${fmtBytes(c.bytes)}</span>` +
@@ -3571,8 +3636,7 @@ function cmpRender() {
 function syncMasterBox() {
   const master = document.getElementById("cmp-all-box");
   if (!master) return;
-  const rows = cmpFiltered().filter(
-    r => !(r.action === "touch" || r.action === "other"));
+  const rows = cmpFiltered().filter(r => isActionable(r.action));
   if (!rows.length) {
     master.checked = false;
     master.indeterminate = false;
@@ -3590,7 +3654,7 @@ function cmpRenderFoot() {
   const list = cmpFiltered();
   const more = document.getElementById("cmp-more");
   const picked = cmpSelectedPaths().length;
-  const total = cmpState.rows.filter(r => !(r.action === "touch" || r.action === "other")).length;
+  const total = cmpState.rows.filter(r => isActionable(r.action)).length;
 
   let html = "";
   // The selection hint is the sentence that decides whether 同步 does what the
@@ -3630,7 +3694,7 @@ function cmpSelectedPaths() {
   const seen = new Set();
   const out = [];
   for (const r of cmpState.rows) {
-    if (r.action === "touch" || r.action === "other") continue;
+    if (!isActionable(r.action)) continue;
     if (cmpState.sel[rowKey(r.pair, r.path)] === false) continue;
     if (seen.has(r.path)) continue;
     seen.add(r.path);
@@ -3649,8 +3713,7 @@ function cmpSelectedPaths() {
 function syncOnly(job) {
   if (!cmpState.rows.length) return null;
   if (planJob !== job) return null;             // the panel belongs to another job
-  const all = cmpState.rows.filter(
-    r => !(r.action === "touch" || r.action === "other")).length;
+  const all = cmpState.rows.filter(r => isActionable(r.action)).length;
   if (!all) return null;
   const picked = cmpSelectedPaths();
   if (picked.length === all) return null;
@@ -3697,7 +3760,7 @@ function openRowMenu(ev, key) {
   closeRowMenu();
   const row = cmpState.rows.find(r => rowKey(r.pair, r.path) === key);
   if (!row) return;
-  const actionable = !(row.action === "touch" || row.action === "other");
+  const actionable = isActionable(row.action);
   const ticked = cmpState.sel[key] !== false;
   const meta = CMP_META[row.action] || CMP_META.other;
 
@@ -4058,7 +4121,10 @@ function renderOverview() {
   for (const r of (plan && plan.results) || []) {
     let items = 0, bytes = 0;
     for (const row of (r.plan || [])) {
-      if (row.action === "touch" || row.action === "other") continue;
+      // The column is 变更: what a run would do. A destination-only file is not a
+      // change, and counting it here made the dock say "10" about a table where
+      // only four rows had an action.
+      if (!isActionable(row.action)) continue;
       items++;
       if (!/^(delete-|mkdir$|rmdir$)/.test(row.action)) bytes += row.size || 0;
     }

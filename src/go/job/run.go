@@ -15,6 +15,7 @@ import (
 	"github.com/rclone/rclone/fs/filter"
 	"github.com/rclone/rclone/fs/operations"
 	rsync "github.com/rclone/rclone/fs/sync"
+	"github.com/rclone/rclone/fs/walk"
 
 	"weftsync/plan"
 	"weftsync/remedy"
@@ -421,6 +422,17 @@ func RunPair(ctx context.Context, cfg *Config, p *Pair, w io.Writer, opt Options
 				rows = markExistingAsUpdates(ctx, fdst, rows, func(done, total int) {
 					opt.phaseN(PhaseVerify, p.Name, done, total)
 				})
+				// Mirror's dry run already logs those paths as deletions, so the
+				// leftovers are in `rows` for that variant. Only the variants that
+				// never delete need them added from a listing.
+				if variant != VariantMirror {
+					rows = addDestinationExtras(ctx, fsrc, fdst, rows,
+						append(append([]string{}, spec.Include...), onlyInclude(opt.OnlyPaths)...),
+						append(append([]string{}, spec.Exclude...), opt.Exclude...),
+						func(done, total int) {
+							opt.phaseN(PhaseVerify, p.Name, done, total)
+						})
+				}
 				res.Plan = rows
 				res.PlanSummary = plan.Summarise(rows)
 			}()
@@ -984,6 +996,135 @@ func verifyIdenticalPaths(ctx context.Context, fdst, fsrc fs.Fs, opts passOption
 	}
 	_ = dry
 	return identical, nil
+}
+
+// addDestinationExtras appends one row per path the destination holds and the
+// source does not.
+//
+// 2026-11-18: the user deleted six files locally, pressed 比较, and the table did
+// not change. Half of that is by design - `update` runs rclone's CopyDir, which
+// never removes anything on the destination - but the other half is not: the six
+// leftover cloud files were not shown at all, so "nothing to do" and "six files
+// you forgot about" rendered identically. Their words were 「当我在本地删除了几个
+// 文件之后对比没有对比出新的东西啊」.
+//
+// The rows carry plan.ExtraRemote, which is deliberately not actionable: they are
+// a statement about the two sides, not work to be done. A mirror pair never gets
+// here - its dry run already logs those paths as real deletions.
+//
+// Cost is one walk of the destination and one of the source. They are the cheap
+// direction of the trade: the alternative (one existence check per leftover) needs
+// the same listing anyway, plus a call per file.
+func addDestinationExtras(ctx context.Context, fsrc, fdst fs.Fs, rows []plan.Row,
+	include, exclude []string, report func(done, total int),
+) []plan.Row {
+	// Everything this pair already knows about, so a path the pass is going to act
+	// on cannot also be reported as a leftover.
+	known := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		known[r.Path] = true
+	}
+
+	// The walk context carries the same filter the pass used, so a path the job
+	// excludes is not reported as a leftover on either side. Building it here
+	// rather than in runPass is deliberate: runPass scopes its filter to its own
+	// context, and the deferred collection runs after it has returned.
+	wctx, fi := filter.AddConfig(ctx)
+	for _, pattern := range include {
+		if err := fi.Add(true, pattern); err != nil {
+			return rows
+		}
+	}
+	for _, pattern := range exclude {
+		if err := fi.Add(false, pattern); err != nil {
+			return rows
+		}
+	}
+	if len(include) > 0 {
+		if err := fi.Add(false, "/**"); err != nil {
+			return rows
+		}
+	}
+
+	// Progress here has no denominator - a walk does not know how many objects are
+	// coming - so it reports a running count as both done and total. The earlier
+	// version passed (n, 0), which satisfied nobody: PhaseVerify's contract is that
+	// the last report has done == total, and a total of 0 reads as "nothing to do"
+	// in the middle of the longest part of a preview. Measured as a failing
+	// TestVerifyPhaseCountsItsWork.
+	ticks := 0
+	bump := func() {
+		ticks++
+		if report != nil && (ticks%200 == 0) {
+			report(ticks, ticks)
+		}
+	}
+	defer func() {
+		if report != nil && ticks > 0 {
+			report(ticks, ticks)
+		}
+	}()
+
+	srcSet := make(map[string]bool)
+	if err := walkObjects(wctx, fsrc, func(path string, _ int64) error {
+		srcSet[path] = true
+		bump()
+		return nil
+	}); err != nil {
+		// Not being able to list one side is not a preview failure: the rows the
+		// pass produced are still true, and inventing leftovers out of a partial
+		// walk would be worse than saying nothing.
+		return rows
+	}
+
+	var added []plan.Row
+	if err := walkObjects(wctx, fdst, func(path string, size int64) error {
+		bump()
+		if known[path] || srcSet[path] {
+			return nil
+		}
+		known[path] = true
+		added = append(added, plan.Row{
+			Path:   path,
+			Action: plan.ExtraRemote,
+			Size:   size,
+			// The destination is the only side holding it, which is what puts the
+			// name and the size in the right-hand pane.
+			HasRight:  true,
+			RightSize: size,
+		})
+		return nil
+	}); err != nil {
+		// Same reasoning: a half-listed destination would under-report, and an
+		// under-reported list of leftovers is worse than none - it reads complete.
+		return rows
+	}
+	if len(added) == 0 {
+		return rows
+	}
+	return append(rows, added...)
+}
+
+// walkObjects calls fn for every object under f that this run's filter keeps.
+//
+// includeAll is false on purpose: true means "list everything the backend has",
+// which silently drops the filter and reported excluded paths as leftovers -
+// measured as `_keep.txt` appearing in the table although the job excludes `_*`.
+// An empty filter turns it back into an unfiltered walk by itself (walk.listR
+// sets includeAll from fi.InActive()).
+func walkObjects(ctx context.Context, f fs.Fs, fn func(path string, size int64) error) error {
+	return walk.ListR(ctx, f, "", false, -1, walk.ListObjects, func(entries fs.DirEntries) error {
+		for _, entry := range entries {
+			obj, ok := entry.(fs.Object)
+			if !ok {
+				continue
+			}
+			if err := fn(obj.Remote(), obj.Size()); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // markExistingAsUpdates relabels plan rows the destination already holds.

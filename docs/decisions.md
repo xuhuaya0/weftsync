@@ -6443,3 +6443,113 @@ class。恢复后与运行前逐项一致（`rows: 3 → 3`，底栏同为「比
 Get-CimInstance Win32_Process -Filter "ProcessId = 31180" | Select-Object CommandLine
 Get-Item .scratch\weftsync-ui.exe | Select-Object LastWriteTime
 ```
+
+## D100 · 本地删了文件，对比却什么都没变 —— 一半是语义，一半是看不见（2026-11-18）
+
+用户：
+
+> 当我在本地删除了几个文件之后对比没有对比出新的东西啊。这是预期的吗
+
+### 一、先量两侧，再说结论
+
+```
+本地 66 个，云端 68 个
+
+只在云端（本地已删除）：
+  R5_FF105_HV_-50_20250414_110626.xlsx     R5_FF105_NV_30_20250414_101547.xlsx
+  R5_FF105_HV_135_20250414_112243.xlsx     R5_SS105_HV_-50_20250409_184752.xlsx
+  R5_FF105_LV_-50_20250414_103227.xlsx
+  R5_FF105_LV_135_20250414_104903.xlsx
+
+只在本地（待上传，对比表里有这 4 行）：
+  R5_TT102_* 四个
+```
+
+`plan` 里只有 4 行 `update`，那 6 个一个都没有。
+
+### 二、一半是预期的
+
+作业是 `variant = "update"`，代码里 update 走 `rsync.CopyDir`，mirror 才走
+`rsync.Sync`：
+
+```go
+if deleteExtras {
+    err = rsync.Sync(ctx, fdst, fsrc, true)     // mirror: 让目标成为精确副本
+} else {
+    err = rsync.CopyDir(ctx, fdst, fsrc, true)  // update: 只新增和覆盖
+}
+```
+
+「更新」从不删除云端文件，所以这 6 个路径确实没有可执行的动作。D98 也已经写明过
+这一点（`a one-way sync never removes cloud files`）。
+
+### 三、另一半不是
+
+对比表号称「逐文件看动作」，但它只显示了**动作**，没有显示**两侧的差异**。数据来源
+决定了这一点：行是从 rclone dry-run 的 `skipped` 日志读回来的，而 `CopyDir` 根本
+不去碰目标侧多余的文件，日志里自然没有它们。
+
+后果很具体：**「没东西要做」和「你有 6 个忘了的文件」在屏幕上完全一样**。用户问的
+就是这件事，而他能看到的证据只有一张 4 行的表。
+
+### 四、改法：列出来，但不当成动作
+
+新增一个动作 `plan.ExtraRemote`（`"extra-remote"`），语义是「目标侧有、源侧没有」。
+
+| 位置 | 行为 |
+|---|---|
+| `plan.Summary` | 单独计数 `extra_remote`；**不计入** `Empty()`、**不计入** `Bytes` |
+| `job.addDestinationExtras` | 预览时 walk 两侧各一次，把目标侧多出来的路径追加成行；`mirror` 不调用它（那边同一个文件是真正的 `delete-remote`） |
+| 界面符号 | 中性 `·`，不是删除的 `✗` —— 这一轮不会删任何东西，用叉就是在骗人 |
+| 界面可勾选 | 不可。勾中会变成同步的 `include` 过滤条件，而源侧根本没有这个文件 |
+| 底部分类 | 单独一个 `· N` 按钮，默认**显示**（藏起来就等于回到「什么都看不见」） |
+| 底栏 | 「比较完成：4 项要处理；云端有 6 个本地没有的文件（更新不删除）」 |
+| 概览 / 「共 N 个文件」 | 只算真正要动的行（原来会把不处理的也算进去） |
+
+同一套过滤规则必须套在这次 walk 上，否则被 `exclude`/`include` 挡掉的文件会被报成
+「多余」——实测抓到过：`_*` 被排除，`_keep.txt` 仍然出现在表里。原因是
+`walk.ListR` 的 `includeAll` 参数传了 `true`，含义是「不要过滤」：
+
+```go
+// 修正前：includeAll=true → filter 被跳过
+walk.ListR(ctx, f, "", true, -1, ...)
+// 修正后：空 filter 时 listR 自己会把 includeAll 变成 true
+walk.ListR(ctx, f, "", false, -1, ...)
+```
+
+### 五、代价
+
+预览多一次目标侧 walk（云端一次完整列目录）。实测同一份 68 文件的飞书目录：
+预览 2.3s → 2.5s。进度借用 `PhaseVerify`，`done == total` 语义保持不变 —— 第一版
+传了 `(n, 0)`，直接把 `TestVerifyPhaseCountsItsWork` 打红，因为那条测试断言的是
+「最后一次报告的 done 必须等于 total」。
+
+### 六、检查
+
+- `go test ./job/`：4 条新测试 —— 多余文件被列出且只占右栏、只有多余时 `Empty()`
+  仍为真、被 exclude 的不出现、mirror 不会同时出现 extra 和 delete。
+- `scripts/check_plan_extras.js`（真实页面 + 真实飞书目录）：0 failures。
+  ```
+  totalRows 10  extraRows 6
+  bar    "→ 4  ← 0  = 0  ✗ 0  · 6   共 4 个文件 · 55.1 KiB"
+  status "比较完成：4 项要处理；云端有 6 个本地没有的文件（更新不删除）"
+  overview "ADC 4 55.1 KiB"
+  ```
+- 反向验证：把 `if variant != VariantMirror {` 改成 `if false && …` 单独构建一份 exe，
+  检查报出 ——
+  > 对比表里没有任何「云端多余」的行 —— 本地删除过的文件在界面上仍然看不见
+
+  正是用户看到的那张 4 行的表（`totalRows: 4, extraRows: 0`）。
+
+### 七、顺带修掉检查脚本的副作用
+
+`check_plan_extras.js` 第一版为了验证「全选不会选中多余行」，结束时把全选框取消了，
+于是页面上留下「已勾选 0 / 4 项，只处理勾选的」——一句真话，描述的是检查自己造成的
+状态。现在结束前恢复成全选，并断言 `cmp-more` 里不再出现 `已勾选 0 /`。
+
+### 八、没有做的事（以及为什么）
+
+**没有**给「更新」加上删除云端的能力。那会让 `variant = "update"` 的含义从「只增不删」
+变成「有条件删」，而这个语义是整个删除保护（`max_delete`、`GuardError`、镜像的
+dry-pass 预检）的基础。想让云端也删掉，答案是 `variant = "mirror"`：它本来就会删，
+并且有完整的护栏。界面上现在把话说到了这一步 ——「要清掉它们得用「镜像」」。
