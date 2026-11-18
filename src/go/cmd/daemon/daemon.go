@@ -17,17 +17,19 @@ import (
 	"github.com/spf13/cobra"
 
 	"weftsync/autostart"
+	"weftsync/browser"
 	"weftsync/daemon"
 	"weftsync/tray"
 )
 
 var (
-	addr     string
-	logFile  string
-	runNow   bool
-	trayOn   bool
-	noTray   bool
-	splitDir string
+	addr        string
+	logFile     string
+	runNow      bool
+	trayOn      bool
+	noTray      bool
+	openConsole bool
+	splitDir    string
 )
 
 func init() {
@@ -49,6 +51,11 @@ func init() {
 		"Show a notification area icon (default; Windows only)")
 	flags.BoolVar(&noTray, "no-tray", false,
 		"Do not show a notification area icon (for a console-only daemon)")
+	// --open exists for the double-click case. With no arguments main() starts
+	// this command and sets it, so a user who double-clicks the exe gets a
+	// browser window instead of a console that prints nothing and closes.
+	flags.BoolVar(&openConsole, "open", false,
+		"Open the console in a browser once the API is listening")
 	flags.StringVar(&splitDir, "split-dir", "",
 		"Directory for split undo ledgers (default: next to the pair's state file)")
 }
@@ -158,6 +165,21 @@ Stop with Ctrl+C; a run in progress is allowed to finish.
 
 			fmt.Fprintf(w, "weftsync daemon: API listening on http://%s\n", ln.Addr())
 			d.Start(ctx)
+
+			// Open the console when asked (which a double-click implies; see
+			// main.go). Done after the listener is up, so the page cannot load
+			// before there is something to answer it - opening first produced a
+			// browser error page that the user had to reload by hand.
+			//
+			// A failure here is reported and ignored: the URL is printed above,
+			// and a headless machine has no browser to open.
+			if openConsole {
+				consoleURL := "http://" + ln.Addr().String() + "/"
+				if err := browser.Open(consoleURL); err != nil {
+					fmt.Fprintf(w, "weftsync: could not open a browser (%v); "+
+						"the console is at %s\n", err, consoleURL)
+				}
+			}
 
 			wantTray := wantsTray()
 			if wantTray {
