@@ -109,6 +109,19 @@
     transition: border-color .12s, color .12s, background .12s, box-shadow .12s;
   }
   td.actions { width: 1%; white-space: nowrap; }
+  /* 作业列表的三处约束，都是为了让 880px 的抽屉装得下七列。
+     实测：不加时表格要 1071px，「配置」一列独占 607px（整条 job 文件路径写在
+     里面），于是「下次 / 上次 / 上次结果」被挤到 28~30px —— 日期显示成一个字
+     符，按钮被推出可视区。用户的原话是「作业列表这里显示不全」。
+
+     办法是把最占地方的那段换成短的：名字留下，路径收进 tooltip。时间列不许
+     折行，宁可让详情列去换行 —— 一个少了半截的日期没有任何用处。 */
+  #tab-jobs .jt-file {
+    display: block; max-width: 210px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #tab-jobs td.jt-when { white-space: nowrap; }
+  #tab-jobs .jt-result { max-width: 260px; overflow-wrap: anywhere; }
   button:hover { border-color: var(--blue); color: var(--blue); }
   button:active { transform: translateY(.5px); }
   button:disabled { opacity: .45; cursor: not-allowed; }
@@ -666,6 +679,13 @@
     padding: 4px 10px; border: 1px solid transparent;
     white-space: nowrap; letter-spacing: .2px;
   }
+  /* 版本号贴在品牌后面，字号更小、颜色更淡：它要在截图里读得到，但不该和菜单
+     抢注意力。空的时候不占位（脚本取到之前页面不该先抖一下）。 */
+  .brandver {
+    font-size: 11px; color: var(--muted); font-weight: 400;
+    padding: 4px 0 4px 2px; white-space: nowrap;
+  }
+  .brandver:empty { display: none; }
   .menubar nav { display: flex; gap: 4px; }
   .menubar nav button {
     border: 1px solid transparent; background: none; color: var(--ink-2);
@@ -841,7 +861,7 @@
   }
   /* 一行四个，不是 2x2。2x2 加内部格线看起来就像数字键盘，而且白占一行高。 */
   .panel-tools {
-    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px;
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px;
     padding: 3px; border-bottom: 1px solid var(--line);
   }
   .panel-tools button {
@@ -854,8 +874,7 @@
   .panel-tools button:hover svg { opacity: 1; }
   .panel-tools .ic { font-size: 14px; line-height: 1; }
 
-  .cfg-list { max-height: 168px; overflow: auto; }
-  .cfg-list .row {
+  .cfg-list { max-height: 168px; overflow: auto; }  .cfg-list .row {
     display: grid; grid-template-columns: 1fr 16px; gap: 4px;
     padding: 4px 8px 4px 9px; font-size: 12px; cursor: pointer;
     border-bottom: 1px solid var(--line-2); border-left: 2px solid transparent;
@@ -1332,6 +1351,7 @@
 <div class="menubar">
   <div class="brandbar">
     <span class="menutitle">weftsync</span>
+    <span class="brandver" id="brand-ver" title="版本"></span>
     <nav>
       <button data-menu="file">文件</button>
       <button data-menu="tools">工具</button>
@@ -1422,6 +1442,14 @@
                   stroke-width="1.3" fill="none"/>
             <path d="M11 9.5v4.5M8.8 11.8h4.4" stroke="currentColor" stroke-width="1.4"/>
           </svg>另存为</button>
+        <button id="cfg-delete" title="删除当前配置（可选是否同时删除文件）">
+          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+            <path d="M2.8 4.5h10.4M6.2 4.5V3.2A1.2 1.2 0 0 1 7.4 2h1.2a1.2 1.2 0 0 1 1.2 1.2v1.3"
+                  stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/>
+            <path d="M4.2 4.5l.7 8.2A1.2 1.2 0 0 0 6.1 14h3.8a1.2 1.2 0 0 0 1.2-1.1l.7-8.4"
+                  stroke="currentColor" stroke-width="1.3" fill="none" stroke-linejoin="round"/>
+            <path d="M6.6 7v4M9.4 7v4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>删除</button>
       </div>
       <div class="cfg-list" id="cfg-list"></div>
     </section>
@@ -1488,6 +1516,35 @@
   <div class="dlg-foot">
     <span class="grow"></span>
     <button data-dlg-close>取消</button>
+  </div>
+</div>
+
+<!-- ============ 删除配置 对话框 ============
+     两件事分开了：从列表移除（可逆，文件还在，以后还能「打开」）和删掉文件
+     （不可逆）。用一个勾选框而不是两个按钮，是因为它们回答的是同一个问题
+     「删除这个配置」，差别只在要不要连文件一起 —— 摆成两个平级按钮会让人以为
+     是两个不同的操作。
+     勾选框默认不勾：删除文件是唯一一个在这里不可撤销的动作。 -->
+<div id="dlg-delcfg" class="dlg hidden">
+  <div class="dlg-head"><strong>删除配置</strong><span class="grow"></span>
+    <button class="icon-btn" data-dlg-close title="关闭">✕</button></div>
+  <div class="dlg-body">
+    <div class="field"><label>配置</label><span id="delcfg-name"></span></div>
+    <div class="field"><label>文件</label><span class="mono" id="delcfg-path"
+         style="overflow-wrap:anywhere"></span></div>
+    <label class="row" style="gap:8px;align-items:center;margin:12px 0 0">
+      <input type="checkbox" id="delcfg-file">
+      <span>同时删除磁盘上的这个文件</span>
+    </label>
+    <div class="filter-hint" id="delcfg-hint">
+      不勾选 = 只从列表移除，文件留在原处，以后还能用「打开」载入。
+    </div>
+    <span id="delcfg-err" class="sub danger" style="margin:6px 0 0"></span>
+  </div>
+  <div class="dlg-foot">
+    <span class="grow"></span>
+    <button data-dlg-close>取消</button>
+    <button class="danger-btn" id="delcfg-ok">删除</button>
   </div>
 </div>
 
@@ -1941,6 +1998,18 @@ function fmtTime(iso) {
   const p = n => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
          `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// baseName is the last path component of either separator style.
+//
+// The job list used to print the whole job-file path in a sub-line, which made one
+// column 607px wide and pushed four others out of the drawer. The full path is
+// still available as the row's tooltip; what belongs on screen is the file name,
+// because that is what tells two configurations apart.
+function baseName(p) {
+  const s = String(p || "");
+  const cut = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+  return cut >= 0 ? s.slice(cut + 1) : s;
 }
 
 function duration(a, b) {
@@ -2613,12 +2682,13 @@ function renderJobs() {
 
     return `<tr>
       <td><strong>${esc(j.name)}</strong>
-          <div class="sub mono" style="margin:0">${esc(j.pairs)} 对 · ${esc(j.file)}</div></td>
-      <td style="min-width:170px">${stateCell}</td>
+          <span class="sub mono jt-file" style="margin:0"
+                title="${esc(j.file)}">${esc(j.pairs)} 对 · ${esc(baseName(j.file))}</span></td>
+      <td style="min-width:130px">${stateCell}</td>
       <td class="mono">${esc(j.schedule)}</td>
-      <td class="mono">${esc(fmtTime(j.next_run))}</td>
-      <td class="mono">${esc(fmtTime(j.last_run))}</td>
-      <td>${result}</td>
+      <td class="mono jt-when">${esc(fmtTime(j.next_run))}</td>
+      <td class="mono jt-when">${esc(fmtTime(j.last_run))}</td>
+      <td class="jt-result">${result}</td>
       <td class="actions">${actions}</td>
     </tr>`;
   }).join("");
@@ -4130,6 +4200,26 @@ document.addEventListener("keydown", e => {
 });
 buildDrawerNav();
 
+// The version sits next to the brand name, because "which build am I running?" is
+// asked while looking at the screen, usually to compare against a release note.
+// Fetched once: a restart of the daemon reloads the page anyway, so there is
+// nothing to poll for.
+async function loadBrandVersion() {
+  try {
+    const v = await getJSON("/api/info");
+    const el = document.getElementById("brand-ver");
+    if (el && v.product_version) {
+      el.textContent = "v" + v.product_version;
+      el.title = "版本 " + v.product_version +
+        (v.version ? "（构建 " + v.version + "）" : "");
+    }
+  } catch (e) {
+    // A missing version is not worth an error on screen: the console works, and
+    // 关于 shows the reason if the endpoint is the thing that broke.
+  }
+}
+loadBrandVersion();
+
 // ------------------------------------------------------------------ session
 //
 // The main page is one job, shown the way FreeFileSync shows a session: a list of
@@ -4974,6 +5064,101 @@ async function saveNow() {
   }
 }
 
+// ---- Delete dialog
+
+// deleteConfigDlg asks before acting, and names both halves of the operation.
+//
+// The config list only ever grew: 新建 / 打开 / 保存 / 另存为, with no way to take
+// one back off the list. The user's report was 「好像没有能删除配置的地方呢」.
+//
+// Nothing is preselected and the file checkbox is off, so the destructive half
+// needs a second, deliberate click.
+function deleteConfigDlg() {
+  const cur = (sessionList() || []).find(s => s.key === sessionJob);
+  const err = document.getElementById("delcfg-err");
+  err.textContent = "";
+
+  if (!cur || !cur.file) {
+    // A brand-new config has no file yet, so there is nothing to delete: 新建
+    // discards it by simply not saving. Saying so is better than an enabled
+    // button that does nothing.
+    document.getElementById("delcfg-name").textContent = cur ? cur.label : "（没有配置）";
+    document.getElementById("delcfg-path").textContent = "（尚未保存，没有文件）";
+    document.getElementById("delcfg-file").checked = false;
+    document.getElementById("delcfg-file").disabled = true;
+    document.getElementById("delcfg-ok").disabled = true;
+    document.getElementById("delcfg-hint").textContent =
+      "这个配置还没保存过，没有文件可删。用「另存为」保存，或者直接「新建」丢弃它。";
+    dlgOpen("dlg-delcfg");
+    return;
+  }
+
+  document.getElementById("delcfg-name").textContent = cur.label;
+  document.getElementById("delcfg-path").textContent = cur.file;
+  const box = document.getElementById("delcfg-file");
+  box.checked = false;
+  box.disabled = false;
+  document.getElementById("delcfg-ok").disabled = false;
+  document.getElementById("delcfg-hint").textContent =
+    "不勾选 = 只从列表移除，文件留在原处，以后还能用「打开」载入。";
+  dlgOpen("dlg-delcfg");
+}
+
+document.getElementById("delcfg-ok").addEventListener("click", async () => {
+  const cur = (sessionList() || []).find(s => s.key === sessionJob);
+  const err = document.getElementById("delcfg-err");
+  if (!cur || !cur.file) return;
+
+  const btn = document.getElementById("delcfg-ok");
+  const alsoFile = document.getElementById("delcfg-file").checked;
+  btn.disabled = true;
+  btn.textContent = "删除中…";
+  try {
+    const url = "/api/config/remove?path=" + encodeURIComponent(cur.file) +
+      (alsoFile ? "&delete_file=true" : "");
+    const r = await fetch(url, { method: "POST" });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((data && data.error) || ("HTTP " + r.status));
+    if (data.error) {
+      // Unloaded but the file is still there. The list is correct; saying
+      // "deleted" would be the one thing that is not.
+      err.textContent = data.error;
+    }
+
+    // The daemon no longer has it, so the panel and the drawers have to be told;
+    // otherwise the row stays on screen until the next poll and the user clicks a
+    // config that is gone.
+    //
+    // loadSession rather than renderPairs: it re-picks the active configuration
+    // (syncSessionPicker falls back to the first remaining one) and loads it. Doing
+    // it by hand left the main pane saying 「没有配置」 while the list still had
+    // entries - measured after removing the selected config.
+    sessionCfg = null;
+    cfgView = null;
+    dirty = false;
+    sessionJob = "";
+    localStorage.removeItem("weftsync.session");
+    await refresh();
+    await loadSession();
+    cfgView = null;
+    renderConfig();
+    dlgClose();
+
+    const status = document.getElementById("s-status");
+    status.className = "stat" + (data.error ? " err" : " done");
+    status.textContent = data.error
+      ? "已从列表移除，但文件没能删除。"
+      : (alsoFile ? `已删除配置和文件 ${cur.label}。` : `已从列表移除 ${cur.label}（文件保留）。`);
+  } catch (e) {
+    err.textContent = "删除失败：" + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "删除";
+  }
+});
+
+
+
 // ---- Open dialog
 
 let openDir = "";
@@ -5135,6 +5320,7 @@ document.getElementById("cfg-new").addEventListener("click", newConfig);
 document.getElementById("cfg-open").addEventListener("click", openConfigDlg);
 document.getElementById("cfg-save").addEventListener("click", saveNow);
 document.getElementById("cfg-saveas").addEventListener("click", saveAsDlg);
+document.getElementById("cfg-delete").addEventListener("click", deleteConfigDlg);
 
 // The three toolbar entry points into the one settings window. The ▼ next to 比较
 // and the ▼ next to 同步 are not "quick switches" and not a second set of settings:
@@ -6052,7 +6238,8 @@ async function loadAbout() {
   };
   const jobFiles = v.job_files || [];
   body.innerHTML = `<div class="about-grid">
-      ${row("版本", v.version)}
+      ${row("版本", v.product_version ? "v" + v.product_version : "")}
+      ${row("构建", v.version)}
       ${row("进程", v.goos + " / " + v.goarch + " · " + v.go_version)}
       ${row("监听地址", v.addr)}
       ${row("已运行", fmtDuration(v.uptime_seconds))}
@@ -6826,18 +7013,68 @@ function field(label, inner, hint) {
          (hint ? `<span class="hint">${esc(hint)}</span>` : "") + `</div>`;
 }
 
+// syncFields renders the settings that belong to one sync target.
+//
+// Which of them apply depends on the variant, and that is not cosmetic: the
+// engine's branches differ. Reading src/go/job/run.go:
+//
+//	update    never deletes. runPass is called with delete=false, so
+//	          deletion / versioning_dir / versioning_naming / delete_guard /
+//	          max_delete / max_delete_size are never consulted.
+//	mirror    deletes, and it does consult all of them (backupDirFor, the two
+//	          ceilings, the trash folder).
+//	two-way   only downloads cloud-side changes in this stage. The one deletion
+//	          it can do is deleteCloudCopy, which removes the object outright -
+//	          it does not go through backupDirFor and it is not counted by
+//	          delete_guard. So the deletion settings do not describe it either.
+//
+// Showing all of them for every variant, which is what this did, offered controls
+// the server ignores. The user's report was 「配置表单的这个部分选不同的为什么下面
+// 都不动，下面应该是根据不同的同步方式变化的吧？」 - and it should, but the
+// authority is the engine, not a guess.
 function syncFields(prefix, s, effectiveVariant) {
+  const v = effectiveVariant || "update";
+
+  // Deletion settings: mirror only. For the other two the honest text is a
+  // sentence, not a greyed-out control - a disabled select still reads as "this
+  // applies, just not right now".
+  const deletionFields = v === "mirror"
+    ? field("删除方式", `<select id="${prefix}-deletion">${opt(s.deletions, s.deletion)}</select>`,
+            "permanent = 直接删掉；versioning = 先移进回收目录") +
+      field("版本目录", `<input type="text" id="${prefix}-vdir" value="${esc(s.versioning_dir)}">`,
+            "仅 versioning 生效") +
+      field("版本命名", `<select id="${prefix}-vnaming">${opt(s.namings, s.versioning_naming)}</select>`) +
+      // 删除保护：开关默认关（D103）。
+      //
+      // 用户的理由：「删除前确认 + 这个方案不好吗？你还可以保留这个最大删除，但是
+      // 可以加个开关默认关闭吗？我觉得不需要啊」。预先拍一个数字猜不到这轮会删
+      // 多少，而它给「68 项」和「11 项」的回答都一样：停下。所以默认交给确认对话。
+      checkField(prefix + "-guard", "启用删除保护（超过上限就整轮中止）",
+        s.delete_guard,
+        "关着时不数也不拦，同步前的确认对话就是保护。开着时两个上限都生效，" +
+        "一旦超出一个，整轮一个文件也不删") +
+      field("删除上限",
+            `<input type="number" id="${prefix}-maxdel" min="0" placeholder="${s.max_delete}" ` +
+            `value="${s.max_delete_set ? s.max_delete : ""}">`,
+            (s.max_delete_set ? "留空 = 继承默认值" : `继承默认值（${s.max_delete}）`) +
+            "；仅删除保护开启时生效") +
+      field("删除体积上限",
+            `<input type="text" id="${prefix}-maxdelsize" placeholder="不限" ` +
+            `value="${esc(s.max_delete_size || "")}">`,
+            s.max_delete_size_help + "；仅删除保护开启时生效")
+    : `<div class="note info" style="margin:0 0 10px">${esc(DELETION_WHY[v] || DELETION_WHY.update)}</div>`;
+
   // The two-way switches are only rendered for a two-way pair. Showing them
   // elsewhere would offer a control the server refuses, and a deletion switch
   // that looks on but does nothing is the worst state this feature can be in.
-  const twoWay = effectiveVariant === "two-way"
+  const twoWay = v === "two-way"
     ? `<div class="note" style="margin:12px 0 8px">
         <strong>双向传播</strong>——三个开关默认全关，各自独立。
         「删本地」不可恢复（直接删除，不进回收站）。
       </div>` +
       checkField(prefix + "-prop-local-del", "本地删除 → 删除云端那份",
         s.propagate_local_delete,
-        "你只是把文件挪走（或外接盘没挂）时，云端也会没。versioning 时可撤销") +
+        "你只是把文件挪走（或外接盘没挂）时，云端也会没。不可撤销") +
       checkField(prefix + "-prop-remote-del", "云端删除 → 删除本地那份",
         s.propagate_remote_delete,
         "不可恢复。只在本地文件自上次同步未变过时才删，改过则保留") +
@@ -6861,32 +7098,22 @@ function syncFields(prefix, s, effectiveVariant) {
       `<textarea id="${prefix}-exclude" rows="3" placeholder="*.tmp&#10;_*&#10;_*/**">` +
       `${esc(s.exclude || "")}</textarea>`,
       s.filter_help) +
-    field("删除方式", `<select id="${prefix}-deletion">${opt(s.deletions, s.deletion)}</select>`) +
-    field("版本目录", `<input type="text" id="${prefix}-vdir" value="${esc(s.versioning_dir)}">`,
-          "仅 versioning 生效") +
-    field("版本命名", `<select id="${prefix}-vnaming">${opt(s.namings, s.versioning_naming)}</select>`) +
     field("冲突策略", `<select id="${prefix}-conflict">${opt(s.conflicts, s.conflict)}</select>`,
           "report = 只报告不改动") +
-    // 删除保护：开关默认关（D103）。
-    //
-    // 用户的理由：「删除前确认 + 这个方案不好吗？你还可以保留这个最大删除，但是
-    // 可以加个开关默认关闭吗？我觉得不需要啊」。预先拍一个数字猜不到这轮会删
-    // 多少，而它给「68 项」和「11 项」的回答都一样：停下。所以默认交给确认对话。
-    checkField(prefix + "-guard", "启用删除保护（超过上限就整轮中止）",
-      s.delete_guard,
-      "关着时不数也不拦，同步前的确认对话就是保护。开着时两个上限都生效，" +
-      "一旦超出一个，整轮一个文件也不删") +
-    field("删除上限",
-          `<input type="number" id="${prefix}-maxdel" min="0" placeholder="${s.max_delete}" ` +
-          `value="${s.max_delete_set ? s.max_delete : ""}">`,
-          (s.max_delete_set ? "留空 = 继承默认值" : `继承默认值（${s.max_delete}）`) +
-          "；仅删除保护开启时生效") +
-    field("删除体积上限",
-          `<input type="text" id="${prefix}-maxdelsize" placeholder="不限" ` +
-          `value="${esc(s.max_delete_size || "")}">`,
-          s.max_delete_size_help + "；仅删除保护开启时生效") +
+    deletionFields +
     twoWay;
 }
+
+// DELETION_WHY says why the deletion block is missing, per variant.
+//
+// A vanished section with no explanation is its own bug report. These are the
+// engine's actual reasons (src/go/job/run.go), not a UI preference.
+const DELETION_WHY = {
+  update: "「更新」从不删除任何文件，所以没有删除方式和删除保护可设。" +
+          "要删除请用「镜像」（会让云端成为本地的精确副本）。",
+  "two-way": "双向的删除是直接删除：不进回收站，也不计入删除上限。" +
+             "删哪一侧由下面的开关决定，默认两侧都不删。",
+};
 
 // COMPARE_LABEL is how each strategy reads in the dropdown. The values are the
 // job-file tokens; a raw "time-size" in a form would make the user translate.
@@ -6960,16 +7187,19 @@ function renderConfig() {
        <strong class="grow">文件夹对</strong>
        <button id="cfg-add">添加一对</button>
      </div>` +
-    `<div id="cfg-pairs">` + (v.pairs || []).map((p, i) => pairCard(p, i)).join("") + `</div>`;
+    `<div id="cfg-pairs">` +
+      (v.pairs || []).map((p, i) => pairCard(p, i, p.variant || v.variant || "update")).join("") +
+    `</div>`;
 
   bindConfig();
 }
 
-function pairCard(p, i) {
+function pairCard(p, i, variant) {
+  const effective = variant || "update";
   return `<div class="pair-card" data-idx="${i}">
     <div class="head">
       <strong class="grow">#${i + 1} ${esc(p.name)}</strong>
-      <span class="hint">实际变体：${esc(p.effective_variant)}</span>
+      <span class="hint">实际变体：${esc(effective)}</span>
       <button data-remove="${i}">删除</button>
     </div>
     ${field("名称", `<input type="text" class="p-name" value="${esc(p.name)}">`)}
@@ -6978,8 +7208,9 @@ function pairCard(p, i) {
     ${field("远端目录", `<input type="text" class="p-remote" value="${esc(p.remote_root)}">`)}
     ${field("state_file", `<input type="text" class="p-state" value="${esc(p.state_file)}">`,
       stateFileHint(p))}
-    ${field("变体覆盖", `<input type="text" class="p-variant" value="${esc(p.variant)}">`, "留空 = 用作业默认")}
-    ${syncFields("p" + i + "-sync", p.sync, p.effective_variant)}
+    ${field("变体覆盖", `<input type="text" class="p-variant" value="${esc(p.variant)}">`,
+      "留空 = 用作业默认（当前 " + (variant || "update") + "）")}
+    ${syncFields("p" + i + "-sync", p.sync, effective)}
   </div>`;
 }
 
@@ -7000,6 +7231,35 @@ function stateFileHint(p) {
 }
 
 function bindConfig() {
+  // Changing the variant changes which settings exist (see syncFields), so the
+  // block has to be redrawn. What is on screen is collected first, otherwise the
+  // re-render would silently discard edits made before the change.
+  //
+  // The pair overrides do the same thing for their own row: a pair that inherits
+  // the job's variant has to follow it, which is why the re-render recomputes the
+  // effective variant instead of reading the one the server sent.
+  const variantSel = document.getElementById("cfg-variant");
+  if (variantSel) {
+    variantSel.addEventListener("change", () => {
+      if (!cfgView) return;
+      cfgView = collectConfig();
+      cfgView.variant = variantSel.value;
+      // effective_variant was blanked by collectConfig; the row labels read it.
+      cfgView.pairs.forEach(p => { p.effective_variant = p.variant || cfgView.variant; });
+      dirty = true;
+      renderConfig();
+    });
+  }
+  document.querySelectorAll("#cfg-pairs .p-variant").forEach(inp => {
+    inp.addEventListener("change", () => {
+      if (!cfgView) return;
+      cfgView = collectConfig();
+      cfgView.pairs.forEach(p => { p.effective_variant = p.variant || cfgView.variant; });
+      dirty = true;
+      renderConfig();
+    });
+  });
+
   const add = document.getElementById("cfg-add");
   if (add) {
     add.addEventListener("click", () => {
@@ -7057,73 +7317,100 @@ function bindConfig() {
   });
 }
 
-function collectSync(prefix) {
+// collectSync reads one block of sync settings off the form.
+//
+// prev is what the config already said. Fields that this variant does not show
+// are absent from the DOM, and returning "" for them would erase a value the user
+// set under a different variant - switch mirror -> update -> mirror and the trash
+// folder name would be gone. Inheriting prev keeps a hidden field exactly as it
+// was, which is the only reading of "not shown" that does not lose data.
+function collectSync(prefix, prev) {
   const g = id => document.getElementById(id);
-  const val = (id) => (g(prefix + "-" + id) ? g(prefix + "-" + id).value : "");
-  const checked = (id) => !!(g(prefix + "-" + id) && g(prefix + "-" + id).checked);
+  const val = (id, key) => {
+    const el = g(prefix + "-" + id);
+    return el ? el.value : ((prev && prev[key]) ?? "");
+  };
+  const checked = (id, key) => {
+    const el = g(prefix + "-" + id);
+    return el ? !!el.checked : !!(prev && prev[key]);
+  };
   // An empty box means "inherit the default"; only a typed number is explicit.
-  const maxdel = val("maxdel");
+  const maxdel = val("maxdel", "max_delete");
+  const hasMaxDel = !!g(prefix + "-maxdel");
   return {
-    deletion: val("deletion"),
-    versioning_dir: val("vdir"),
-    versioning_naming: val("vnaming"),
-    conflict: val("conflict"),
+    deletion: val("deletion", "deletion"),
+    versioning_dir: val("vdir", "versioning_dir"),
+    versioning_naming: val("vnaming", "versioning_naming"),
+    conflict: val("conflict", "conflict"),
     // The switch is state, not a default: it is the same kind of control as the
     // two-way switches below, and "off" is a real answer rather than "unset".
-    delete_guard: checked("guard"),
+    delete_guard: checked("guard", "delete_guard"),
     delete_guard_set: true,
     max_delete: maxdel === "" ? 0 : Number(maxdel),
-    max_delete_set: maxdel !== "",
-    max_delete_size: val("maxdelsize").trim(),
+    max_delete_set: hasMaxDel ? maxdel !== "" : !!(prev && prev.max_delete_set),
+    max_delete_size: val("maxdelsize", "max_delete_size").trim(),
     // Absent when the pair is not two-way; false is the right default either way,
     // because the switch being off is what "not rendered" means.
-    propagate_local_delete: checked("prop-local-del"),
-    propagate_remote_delete: checked("prop-remote-del"),
-    pull_new_files: checked("pull-new"),
-    max_pull_size: val("maxpull").trim(),
+    propagate_local_delete: checked("prop-local-del", "propagate_local_delete"),
+    propagate_remote_delete: checked("prop-remote-del", "propagate_remote_delete"),
+    pull_new_files: checked("pull-new", "pull_new_files"),
+    max_pull_size: val("maxpull", "max_pull_size").trim(),
     // Filters travel as raw text; the server splits lines, so a trailing blank
     // line is not an edit.
-    compare: val("compare"),
-    include: val("include"),
-    exclude: val("exclude"),
+    compare: val("compare", "compare"),
+    include: val("include", "include"),
+    exclude: val("exclude", "exclude"),
   };
 }
 
+// collectConfig reads the whole form into the same shape /api/config returns.
+//
+// It merges over cfgView instead of building a fresh object, because the view
+// carries things the form does not author: the variant/mode/compare/deletion
+// lists the <select>s are built from, the help sentences, and the derived
+// state_file fields. Rebuilding from scratch dropped them, and the next
+// renderConfig threw "Cannot read properties of undefined (reading 'map')" on
+// v.variants - so changing the variant emptied the form instead of redrawing it.
 function collectConfig() {
   const g = id => document.getElementById(id);
   const pairs = [];
   document.querySelectorAll("#cfg-pairs .pair-card").forEach(card => {
     const i = card.dataset.idx;
-    pairs.push({
+    const prevPair = (cfgView && cfgView.pairs && cfgView.pairs[Number(i)]) || {};
+    pairs.push(Object.assign({}, prevPair, {
       name: card.querySelector(".p-name").value,
       variant: card.querySelector(".p-variant").value,
-      effective_variant: "",
+      effective_variant: card.querySelector(".p-variant").value || (cfgView && cfgView.variant) || "",
       local_root: card.querySelector(".p-local").value,
       remote_backend: card.querySelector(".p-backend").value,
       remote_root: card.querySelector(".p-remote").value,
       state_file: card.querySelector(".p-state").value,
-      sync: collectSync("p" + i + "-sync"),
-    });
+      // Merged over the previous pair's sync for the same reason collectConfig
+      // merges over cfgView: the value lists the <select>s are built from
+      // (deletions / namings / conflicts / compares) live there, and dropping them
+      // made renderConfig throw on the next redraw.
+      sync: Object.assign({}, prevPair.sync, collectSync("p" + i + "-sync", prevPair.sync)),
+    }));
   });
 
-  return {
+  return Object.assign({}, cfgView, {
     name: cfgView.name,
     file: cfgView.file,
     enabled: g("cfg-enabled").checked,
     variant: g("cfg-variant").value,
-    schedule: {
+    schedule: Object.assign({}, cfgView.schedule, {
       mode: g("cfg-sched-mode").value,
       interval: g("cfg-sched-interval").value,
       start_at: g("cfg-sched-start").value,
       align_to_start: g("cfg-sched-align").checked,
       daily_time: g("cfg-sched-daily").value,
       cron: g("cfg-sched-cron").value,
-    },
-    sync: collectSync("cfg-sync"),
+    }),
+    sync: Object.assign({}, cfgView.sync, collectSync("cfg-sync", cfgView.sync)),
     pairs,
     has_comments: cfgView.has_comments,
     backup_exists: cfgView.backup_exists,
-  };
+  });
 }
 
 async function loadConfig() {

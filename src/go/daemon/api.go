@@ -82,6 +82,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/api/config/files", a.handleConfigFiles)
 	mux.HandleFunc("/api/config/open", a.handleConfigOpen)
 	mux.HandleFunc("/api/config/save-as", a.handleConfigSaveAs)
+	mux.HandleFunc("/api/config/remove", a.handleConfigRemove)
 	mux.HandleFunc("/api/browse", a.handleBrowse)
 	mux.HandleFunc("/api/autostart", a.handleAutostart)
 	mux.HandleFunc("/api/info", a.handleInfo)

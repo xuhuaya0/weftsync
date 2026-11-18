@@ -191,6 +191,42 @@ func (d *Daemon) AddConfig(path string) (string, error) {
 	return name, nil
 }
 
+// RemoveConfig unloads the config that came from path and returns its name.
+//
+// Unloading and deleting are separate on purpose. Removing an entry is what "close
+// this configuration" means and is always safe; deleting the file is a decision
+// the user has to make explicitly, so it stays in the handler.
+//
+// A running job is refused rather than waited for: the run holds the entry and its
+// tracker, and pulling that out from under it would lose the result of a transfer
+// that is already moving bytes.
+func (d *Daemon) RemoveConfig(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i, e := range d.entries {
+		if !samePath(e.file, abs) {
+			continue
+		}
+		if e.running {
+			return "", fmt.Errorf("%s is running; stop it before removing it",
+				filepath.Base(abs))
+		}
+		name := e.name
+		d.entries = append(d.entries[:i], d.entries[i+1:]...)
+		// The split lock is keyed by name, so it would outlive the config and
+		// make a re-opened config of the same name look like it had a split in
+		// flight.
+		delete(d.splitting, name)
+		return name, nil
+	}
+	return "", fmt.Errorf("%s is not open in this daemon", filepath.Base(abs))
+}
+
 // configDirOf returns the directory holding a loaded config, which is where the
 // file dialogs start and where a new config is written by default.
 func (d *Daemon) configDirOf(name string) string {
@@ -363,6 +399,57 @@ func (a *API) handleConfigSaveAs(w http.ResponseWriter, r *http.Request) {
 		"name": name, "path": abs, "saved": res,
 		"config": a.D.configView(name),
 	})
+}
+
+// handleConfigRemove unloads a config, and optionally deletes its file.
+//
+// POST /api/config/remove?path=<file>&delete_file=true
+//
+// Two operations behind one endpoint because they answer the same user action
+// ("delete this configuration") and the difference is a checkbox, not a workflow.
+// The order is deliberate: unload first, delete second. A failed unlink then
+// leaves a file that is simply no longer open, which the user can re-open; the
+// reverse order could delete a file whose entry is still scheduled.
+//
+// delete_file defaults to false. Unloading a config is reversible, deleting the
+// file is not, and a default that destroys a file on a stray request is not one
+// worth having.
+func (a *API) handleConfigRemove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	if path == "" {
+		writeError(w, http.StatusBadRequest, "the path query parameter is required")
+		return
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	name, err := a.D.RemoveConfig(abs)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	out := map[string]any{"name": name, "path": abs, "deleted": false}
+	if r.URL.Query().Get("delete_file") == "true" {
+		if rmErr := os.Remove(abs); rmErr != nil && !os.IsNotExist(rmErr) {
+			// The config is already unloaded, so this is not a failure of the
+			// whole operation - it is "it is gone from the list but the file is
+			// still there", which the caller has to be able to say.
+			out["error"] = "removed from the list, but the file could not be deleted: " +
+				rmErr.Error()
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+		out["deleted"] = true
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // configNamed returns the loaded config with this name, or nil.

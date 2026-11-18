@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/rclone/rclone/fs/config"
+
+	"weftsync/version"
 )
 
 // Runtime information for the About window (Help -> About weftsync).
@@ -23,6 +25,9 @@ import (
 // not something anyone acts on) and the wall-clock start time (the same fact as
 // the uptime row, written twice).
 type InfoView struct {
+	// ProductVersion is the release number from the version package. It is what
+	// the console header and 关于 call "版本"; the field below is the build.
+	ProductVersion string `json:"product_version"`
 	// Version comes from the build metadata, so it is the revision that was
 	// compiled rather than a number somebody remembered to bump.
 	Version string `json:"version"`
@@ -55,13 +60,14 @@ func (a *API) handleInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	view := InfoView{
-		Version:    buildVersion(),
-		GoVersion:  runtime.Version(),
-		GOOS:       runtime.GOOS,
-		GOARCH:     runtime.GOARCH,
-		Addr:       a.Addr,
-		ConfigFile: config.GetConfigPath(),
-		SplitDir:   a.SplitDir,
+		ProductVersion: version.Version,
+		Version:        buildVersion(),
+		GoVersion:      runtime.Version(),
+		GOOS:           runtime.GOOS,
+		GOARCH:         runtime.GOARCH,
+		Addr:           a.Addr,
+		ConfigFile:     config.GetConfigPath(),
+		SplitDir:       a.SplitDir,
 	}
 	view.StartedAt = a.startedAt()
 	view.UptimeSeconds = int64(time.Since(view.StartedAt).Seconds())

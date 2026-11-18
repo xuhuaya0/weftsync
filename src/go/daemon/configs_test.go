@@ -312,3 +312,103 @@ func TestSaveAsAddsTheTomlExtension(t *testing.T) {
 		t.Fatalf("expected noext.toml: %v", err)
 	}
 }
+
+// Removing a config from the list must not touch the file unless it was asked to.
+//
+// The two halves of "delete this configuration" are a checkbox apart: unload the
+// entry (reversible, the file is still there to re-open) versus unlink the file
+// (not reversible). Getting the default wrong here would make a stray POST destroy
+// somebody's settings.
+func TestRemoveConfigUnloadsWithoutDeletingTheFile(t *testing.T) {
+	dir := t.TempDir()
+	base := oneConfig(t, dir, "base")
+	other := oneConfig(t, dir, "other")
+	d, err := New([]string{base, other}, io.Discard)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	api := &API{D: d}
+
+	rec := httptest.NewRecorder()
+	api.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/config/remove?path="+base, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("remove: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Name    string `json:"name"`
+		Deleted bool   `json:"deleted"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Name != "base" {
+		t.Errorf("name = %q, want %q", out.Name, "base")
+	}
+	if out.Deleted {
+		t.Error("deleted = true; removing from the list must not unlink the file")
+	}
+	if _, err := os.Stat(base); err != nil {
+		t.Fatalf("the file was deleted without being asked: %v", err)
+	}
+	if n := len(d.Status()); n != 1 {
+		t.Errorf("configs = %d, want 1 (the other one is untouched)", n)
+	}
+	for _, st := range d.Status() {
+		if st.Name == "base" {
+			t.Error("base is still loaded")
+		}
+	}
+}
+
+// And with delete_file it really does remove the file.
+func TestRemoveConfigDeletesTheFileWhenAsked(t *testing.T) {
+	dir := t.TempDir()
+	base := oneConfig(t, dir, "base")
+	d, err := New([]string{base}, io.Discard)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	api := &API{D: d}
+
+	rec := httptest.NewRecorder()
+	api.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/config/remove?path="+base+"&delete_file=true", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("remove: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Deleted bool   `json:"deleted"`
+		Error   string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Deleted || out.Error != "" {
+		t.Errorf("deleted = %v, error = %q; want true and no error", out.Deleted, out.Error)
+	}
+	if _, err := os.Stat(base); !os.IsNotExist(err) {
+		t.Fatalf("the file is still there: %v", err)
+	}
+	if n := len(d.Status()); n != 0 {
+		t.Errorf("configs = %d, want 0", n)
+	}
+}
+
+// A path that is not loaded is refused rather than silently succeeding: the
+// console hides the button when nothing is open, so reaching this means the view
+// and the daemon disagree, which is worth surfacing.
+func TestRemoveConfigRefusesAnUnknownPath(t *testing.T) {
+	dir := t.TempDir()
+	d := mustDaemon(t, dir)
+	rec := httptest.NewRecorder()
+	api := &API{D: d}
+	api.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/config/remove?path="+filepath.Join(dir, "nope.toml"), nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if n := len(d.Status()); n != 1 {
+		t.Errorf("configs = %d, want 1 (nothing was removed)", n)
+	}
+}
